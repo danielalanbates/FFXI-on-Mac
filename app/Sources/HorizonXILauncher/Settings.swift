@@ -176,11 +176,14 @@ struct PerfSettings: Codable {
         }
         // Frame-rate log, on demand: FFXI_ON_MAC_FPSLOG=1 in the launcher's own environment
         // makes the vendored DXVK write one CSV row per second (fps, draws, passes, barriers,
-        // submits) next to the client. This is how a launch on the *shipped* path gets measured
+        // submits) next to the client. Set FFXI_ON_MAC_FPSLOG_PATH to override the destination,
+        // for example to a Z: path in Downloads when preserving an older in-prefix fps.csv.
+        // This is how a launch on the *shipped* path gets measured
         // rather than a hand-built shell run -- which is how a 19x x87 regression went unnoticed:
         // every fps number came from a shell that did not match what Play actually did.
         if ProcessInfo.processInfo.environment["FFXI_ON_MAC_FPSLOG"] == "1" {
-            env["DXVK_FPS_LOG"] = "C:\\" + install.gameDir.lastPathComponent + "\\fps.csv"
+            env["DXVK_FPS_LOG"] = ProcessInfo.processInfo.environment["FFXI_ON_MAC_FPSLOG_PATH"]
+                ?? ("C:\\" + install.gameDir.lastPathComponent + "\\fps.csv")
         }
         // Sound-output following. Only set when the dylib is really there and really has the
         // slice this Mac will run wine as — a DYLD_INSERT_LIBRARIES pointing at a missing or
@@ -197,6 +200,10 @@ struct PerfSettings: Codable {
         if disableAppNap { env["LSAppNapIsDisabled"] = "1" }
         if largeAddressAware { env["WINE_LARGE_ADDRESS_AWARE"] = "1" }
         for (k, v) in renderer.environment { env[k] = v }
+        // DXVK 1.10.3 never wrote its state cache beside horizon-loader.exe (none existed on
+        // 2026-09-26), so every session recompiled every pipeline: turning the camera stalled.
+        // An explicit C:\ path is written; a lap on local LSB went 7.5 -> 13.2 fps as it filled.
+        if env["DXVK_STATE_CACHE_PATH"] == nil { env["DXVK_STATE_CACHE_PATH"] = #"C:\dxvk-cache"# }
         for line in extraEnv.split(separator: "\n") {
             let parts = line.split(separator: "=", maxSplits: 1).map(String.init)
             if parts.count == 2 {

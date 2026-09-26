@@ -137,8 +137,8 @@ struct ContentView: View {
         }
         .onAppear {
             if store.selected?.local == true { local.refresh() }
-            // Off the main actor out of habit from when this was a Keychain read that could
-            // block on a system prompt (see Credentials.swift for why it no longer is).
+            // Off the main actor so credential-file access and possible external-volume reads
+            // cannot delay the first window.
             if let name = store.selected?.name, store.selected?.local != true {
                 user = Credentials.username(forWorld: name)
             }
@@ -149,7 +149,8 @@ struct ContentView: View {
             let worldName = store.selected?.name ?? ""
             Task.detached(priority: .userInitiated) {
                 if let i = install {
-                    Credentials.adoptPasswordFromProfile(user: account, install: i, profile: profile)
+                    Credentials.adoptPasswordFromProfile(user: account, world: worldName,
+                                                         install: i, profile: profile)
                 }
                 let found = Credentials.password(for: account, world: worldName)
                 await MainActor.run { pass = found }
@@ -347,13 +348,14 @@ struct ContentView: View {
     /// one -- HorizonXI, CatsEyeXI -- loading it risks the account, so the launcher will not
     /// offer it there at all.
     private var narrationHelp: String {
-        if !Narration.isAvailable {
-            return "Install VanaVoice.app to use this: github.com/danielalanbates/vanavoice"
-        }
         if !Narration.allowed(by: addonPolicy) {
             return "\(store.selected?.name ?? "This server") allows only the addons on its "
                  + "published list, and VanaVoice is not on it. Running it there risks your "
                  + "account, so the launcher will not install it."
+        }
+        if !Narration.narratorAvailable {
+            return "Installs the bundled VanaVoice addon. To hear speech, install VanaVoice.app: "
+                 + "github.com/danielalanbates/vanavoice"
         }
         return "Installs VanaVoice's addon into this world and starts the narrator, which "
              + "reads NPC and cutscene dialogue aloud in a neural voice."
@@ -585,7 +587,7 @@ struct ContentView: View {
                                     await MainActor.run {
                                         installingExtra = ""
                                         if ok {
-                                            let all = AddonSuite.scan(i)
+                                            let all = AddonSuite.scan(i, profile: store.selected?.bootProfile ?? "horizonxi.ini")
                                             if addonPolicy.isRestricting {
                                                 addonItems = all.filter { addonPolicy.allows($0.name) }
                                                 hiddenAddonCount = all.count - addonItems.count
@@ -688,8 +690,10 @@ struct ContentView: View {
                     let itemsToWrite = addonPolicy.isRestricting
                         ? addonItems.filter { addonPolicy.allows($0.name) }
                         : addonItems
-                    if let i = active, !AddonSuite.write(itemsToWrite, to: i) {
-                        notice = "Could not write scripts/default.txt — its launcher markers are missing."
+                    if let i = active,
+                       !AddonSuite.write(itemsToWrite, to: i,
+                                         profile: store.selected?.bootProfile ?? "horizonxi.ini") {
+                        notice = "Could not write the active boot script — its launcher markers are missing."
                     } else {
                         notice = "Addon list saved. It takes effect the next time you press Play."
                     }
@@ -1144,7 +1148,7 @@ struct ContentView: View {
             field("Password", text: $pass, secure: true, disabled: store.selected?.local == true)
             Toggle("Remember me", isOn: $remember)
                 .toggleStyle(.checkbox).font(.caption).foregroundStyle(Vana.muted)
-                .help("Stored in the macOS Keychain, never in a file in this project.")
+                .help("Remembered in a mode-600 file in Application Support. The game loader also receives it in its command line.")
 
             if installs.count > 1 {
                 Picker("", selection: Binding(
@@ -1614,9 +1618,12 @@ struct ContentView: View {
         // Pre-game version check. The login server does this anyway and answers "The game's
         // data has been updated" — better to say so here, name the versions, and (for HorizonXI,
         // whose updates are public) fix it before launching.
-        let installedVer = ClientVersion.installed(in: i)
         let requiredVer = feeds.requiredClients[server.name] ?? server.requiredClient
-        if let have = installedVer, !requiredVer.isEmpty, ClientVersion.isOlder(have, than: requiredVer) {
+        // Local LSB has no version lock. Reading patch.cfg on an external game volume can
+        // block on macOS privacy access, so do not touch it unless there is a version to check.
+        if !requiredVer.isEmpty,
+           let have = ClientVersion.installed(in: i),
+           ClientVersion.isOlder(have, than: requiredVer) {
             notice = "\(server.name) needs client \(requiredVer) or newer; this install is at "
                    + "\(have). Its login server will refuse with “The game's data has been updated”. "
                    + (server.name == "CatsEyeXI"
@@ -1745,7 +1752,7 @@ struct ContentView: View {
                    + "above and point the launcher at your wrapper app."
             return
         }
-        let all = AddonSuite.scan(i)
+        let all = AddonSuite.scan(i, profile: store.selected?.bootProfile ?? "horizonxi.ini")
         if addonPolicy.isRestricting {
             addonItems = all.filter { addonPolicy.allows($0.name) }
             hiddenAddonCount = all.count - addonItems.count

@@ -29,57 +29,39 @@ enum Detach {
     @discardableResult
     static func spawn(_ exe: URL, args: [String], env: [String: String],
                       cwd: URL?, stdoutPath: String?) -> pid_t? {
-        var attr: posix_spawnattr_t?
-        posix_spawnattr_init(&attr)
-        defer { posix_spawnattr_destroy(&attr) }
-        // POSIX_SPAWN_SETSID is the whole point. POSIX_SPAWN_CLOEXEC_DEFAULT closes every
-        // descriptor this app happens to have open rather than leaking them into the game.
-        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT))
-
-        var actions: posix_spawn_file_actions_t?
-        posix_spawn_file_actions_init(&actions)
-        defer { posix_spawn_file_actions_destroy(&actions) }
-        if let path = stdoutPath {
-            posix_spawn_file_actions_addopen(&actions, 1, path,
-                                             O_WRONLY | O_CREAT | O_APPEND, 0o644)
-            posix_spawn_file_actions_adddup2(&actions, 1, 2)
+        let scriptURL = URL(fileURLWithPath: "/tmp/hxi-launch-\(UUID().uuidString).sh")
+        var script = "#!/bin/sh\n"
+        for (k, v) in env.sorted(by: { $0.key < $1.key }) {
+            script += "export \(k)=\(Bridge.shellQuote(v))\n"
+        }
+        if let cwd {
+            script += "cd \(Bridge.shellQuote(cwd.path))\n"
+        }
+        let cmd = ([exe.path] + args).map(Bridge.shellQuote).joined(separator: " ")
+        if let out = stdoutPath {
+            script += "exec \(cmd) >> \(Bridge.shellQuote(out)) 2>&1\n"
         } else {
-            posix_spawn_file_actions_addopen(&actions, 1, "/dev/null", O_WRONLY, 0)
-            posix_spawn_file_actions_adddup2(&actions, 1, 2)
+            script += "exec \(cmd) >/dev/null 2>&1\n"
         }
-        posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
+        guard (try? script.write(to: scriptURL, atomically: true, encoding: .utf8)) != nil else { return nil }
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+        defer { try? FileManager.default.removeItem(at: scriptURL) }
 
-        // posix_spawn has no "working directory" argument, so go through a shell for that. It
-        // is also how the game has always been started (see Runner.spawnViaShell), and the
-        // launch is known to be sensitive to it.
-        func q(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
-        var command = ([exe.path] + args).map(q).joined(separator: " ")
-        // /bin/sh is a platform (SIP-protected) binary, and dyld strips every DYLD_* variable
-        // from such a process's environment before main() -- so anything handed to the shell in
-        // `env` never reached wine, and audiofollow.dylib silently failed to load in every
-        // launch (found 2026-08-26 by lsof on the live client). Set those in the *shell's*
-        // command line instead: the shell exports them itself and the unsigned wine loader,
-        // which dyld does not restrict, picks them up. The equivalent gotcha for arch(1) is in
-        // docs/AUDIO.md; this is the same rule for any system binary in the exec chain.
-        let dyld = env.filter { $0.key.hasPrefix("DYLD_") }
-        let shellEnv = env.filter { !$0.key.hasPrefix("DYLD_") }
-        let assigns = dyld.keys.sorted().map { "\($0)=\(q(dyld[$0]!))" }.joined(separator: " ")
-        let prefixed = assigns.isEmpty ? "exec \(command)" : "\(assigns) exec \(command)"
-        if let cwd { command = "cd \(q(cwd.path)) && \(prefixed)" } else { command = prefixed }
-
-        let argv: [String] = ["/bin/sh", "-c", command]
-        var cargv: [UnsafeMutablePointer<CChar>?] = argv.map { strdup($0) }
-        cargv.append(nil)
-        var cenv: [UnsafeMutablePointer<CChar>?] = shellEnv.map { strdup("\($0.key)=\($0.value)") }
-        cenv.append(nil)
-        defer {
-            for p in cargv where p != nil { free(p) }
-            for p in cenv where p != nil { free(p) }
+        let osa = Process()
+        osa.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        let osaScript = "do shell script \"/bin/sh '\(scriptURL.path)' >/dev/null 2>&1 & echo $!\""
+        osa.arguments = ["-e", osaScript]
+        let pipe = Pipe()
+        osa.standardOutput = pipe
+        guard (try? osa.run()) != nil else { return nil }
+        osa.waitUntilExit()
+        guard osa.terminationStatus == 0 else { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let outStr = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let pid = Int32(outStr), pid > 0 else {
+            return nil
         }
-
-        var pid: pid_t = 0
-        let rc = posix_spawn(&pid, "/bin/sh", &actions, &attr, &cargv, &cenv)
-        return rc == 0 ? pid : nil
+        return pid
     }
 
     /// Is this pid still alive? `kill(pid, 0)` asks without sending anything.

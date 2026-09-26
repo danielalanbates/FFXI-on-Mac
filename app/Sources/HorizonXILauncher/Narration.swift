@@ -28,7 +28,7 @@ enum Narration {
     static func scriptName(in install: Install, profile: String) -> String {
         let name = install.bootProfileName(profile)
         let url = install.gameDir.appendingPathComponent("config/boot/\(name)")
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return "default.txt" }
+        guard let text = Credentials.readFile(at: url) else { return "default.txt" }
 
         if name.hasSuffix(".xml") {
             let v = Credentials.xmlSetting("boot_script", in: text) ?? ""
@@ -44,8 +44,11 @@ enum Narration {
         return "default.txt"
     }
 
-    /// Is the narrator app installed on this Mac?
-    static var isAvailable: Bool { FileManager.default.fileExists(atPath: appPath) }
+    /// Is the bundled or development Lua addon available to install?
+    static var isAvailable: Bool { addonSource != nil }
+
+    /// Is the separate speech engine installed on this Mac?
+    static var narratorAvailable: Bool { FileManager.default.fileExists(atPath: appPath) }
 
     /// May this world run it at all?
     ///
@@ -55,21 +58,39 @@ enum Narration {
     /// Balloon is approved on HorizonXI and does the same dialogue capture on screen; that is
     /// the route to ask them about, not this one.
     static func allowed(by policy: AddonPolicy) -> Bool {
-        !policy.isRestricting || policy.allows("vanavoice")
+        if case .unrestricted = policy { return true }
+        return false
     }
 
     static var addonSource: URL? {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let gdrive = home.appendingPathComponent("Library/CloudStorage/GoogleDrive-danielalanbates@gmail.com/My Drive/Code/GitHub/vanavoice/addon/vanavoice")
-        if FileManager.default.fileExists(atPath: gdrive.path) { return gdrive }
+        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("vanavoice", isDirectory: true),
+           isCompleteAddon(at: bundled) {
+            return bundled
+        }
+        for root in CodeFolders.googleDriveCodeRoots {
+            let gdrive = root.appendingPathComponent("GitHub/vanavoice/addon/vanavoice", isDirectory: true)
+            if isCompleteAddon(at: gdrive) {
+                return gdrive
+            }
+        }
         let u = URL(fileURLWithPath: appPath).appendingPathComponent("Contents/Resources/vanavoice")
-        return FileManager.default.fileExists(atPath: u.path) ? u : nil
+        return isCompleteAddon(at: u) ? u : nil
+    }
+
+    static func isCompleteAddon(at source: URL) -> Bool {
+        let required = ["vanavoice.lua"]
+        return required.allSatisfy {
+            FileManager.default.fileExists(atPath: source.appendingPathComponent($0).path)
+        }
     }
 
     /// Called on every launch. Never fatal: if any part of this fails the game still starts,
     /// silent, exactly as it did before.
     static func prepare(_ install: Install, enabled: Bool, policy: AddonPolicy,
-                        profile: String = "horizonxi.ini", log: (String) -> Void) {
+                        profile: String = "horizonxi.ini",
+                        temporaryDirectory: URL = URL(fileURLWithPath: "/tmp/vanavoice", isDirectory: true),
+                        launch: (() -> Void)? = nil,
+                        log: (String) -> Void) {
         let fm = FileManager.default
         let script = scriptName(in: install, profile: profile)
         let scripts = install.gameDir.appendingPathComponent("scripts/\(script)")
@@ -88,29 +109,34 @@ enum Narration {
         }
 
         guard enabled else {
-            if removeLoadLine(from: scripts) { log("==> narration: off") }
+            let dest = install.gameDir.appendingPathComponent("addons/vanavoice", isDirectory: true)
+            let removedAddon = fm.fileExists(atPath: dest.path)
+            if removedAddon { try? fm.removeItem(at: dest) }
+            if removeLoadLine(from: scripts) || removedAddon { log("==> narration: off") }
             return
         }
-        guard isAvailable, let src = addonSource else {
-            log("==> narration: VanaVoice.app is not installed; skipping")
+        guard let src = addonSource else {
+            log("==> narration: VanaVoice addon source is missing; skipping")
             return
         }
 
         // The addon and the app meet in /tmp/vanavoice. Create it before the game starts so the
         // addon's first write lands there rather than in the game folder.
-        try? fm.createDirectory(atPath: "/tmp/vanavoice", withIntermediateDirectories: true,
+        try? fm.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true,
                                 attributes: [.posixPermissions: 0o777])
 
         let dest = install.gameDir.appendingPathComponent("addons/vanavoice", isDirectory: true)
-        // Copy every launch: the app updates, and a stale addon beside a new app is the kind of
-        // mismatch nobody thinks to check.
-        if fm.fileExists(atPath: dest.path) { try? fm.removeItem(at: dest) }
-        do { try fm.copyItem(at: src, to: dest) }
+        // Stage before replacing so a failed copy leaves the prior playable addon intact.
+        do { try AddonInstaller.replaceDirectory(at: dest, with: src, fileManager: fm) }
         catch { log("==> narration: could not install the addon — \(error.localizedDescription)"); return }
 
         addLoadLine(to: scripts)
-        launchNarrator(log: log)
-        log("==> narration: on (VanaVoice, via scripts/\(script))")
+        if narratorAvailable {
+            if let launch { launch() } else { Self.launchNarrator(log: log) }
+            log("==> narration: on (VanaVoice, via scripts/\(script))")
+        } else {
+            log("==> narration: addon loaded, speech off — install VanaVoice.app to hear dialogue")
+        }
     }
 
     /// Append the load line after everything AddonSuite manages, so rewriting that block never
@@ -120,7 +146,7 @@ enum Narration {
         guard !text.contains(loadLine) else { return }
         if !text.hasSuffix("\n") { text += "\n" }
         text += "\n\(marker)\n\(loadLine)\n"
-        try? text.write(to: scripts, atomically: true, encoding: .utf8)
+        Credentials.writeFile(text, to: scripts)
     }
 
     @discardableResult
@@ -131,7 +157,7 @@ enum Narration {
             let t = $0.trimmingCharacters(in: .whitespaces)
             return t != loadLine && t != marker
         }
-        try? kept.joined(separator: "\n").write(to: scripts, atomically: true, encoding: .utf8)
+        Credentials.writeFile(kept.joined(separator: "\n"), to: scripts)
         return true
     }
 

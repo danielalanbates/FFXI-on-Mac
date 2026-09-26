@@ -60,6 +60,6 @@ enum LuaJITGuard {
         var bom = ""
         if body.hasPrefix("\u{FEFF}") { bom = "\u{FEFF}"; body.removeFirst() }
         let out = bom + shim + body
-        return (try? out.write(to: url, atomically: true, encoding: .utf8)) != nil
+        return Credentials.writeFile(out, to: url)
     }
 }

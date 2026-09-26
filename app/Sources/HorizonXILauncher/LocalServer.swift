@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import Darwin
 
 /// The "Local server (LandSandBoat)" world: a complete FFXI server built from source on this Mac,
 /// with the client connecting to 127.0.0.1.
@@ -77,11 +78,72 @@ final class LocalServer: ObservableObject {
     func refreshAsync() async {
         // Appearing and selecting the local world both ask for a refresh, and on launch they
         // happen together — without this the app runs the status script twice over.
-        guard !refreshing, let script = Self.script() else { return }
+        guard !refreshing else { return }
         refreshing = true
+        // If the local login socket is already accepting connections, the server has completed
+        // startup and is usable. Check this before invoking lsb-server.sh: the checkout can be
+        // on a mounted volume that this app cannot inspect, and an unreadable pid/password file
+        // can otherwise leave status waiting forever even though all server processes are live.
+        if await Self.localLoginPortResponds() {
+            var active = Status()
+            active.root = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Games/lsb", isDirectory: true).path
+            if let attrs = try? FileManager.default.attributesOfFileSystem(forPath: active.root),
+               let bytes = attrs[.systemFreeSize] as? NSNumber {
+                active.freeGB = bytes.doubleValue / 1_000_000_000
+            }
+            active.spaceOK = active.freeGB >= active.needGB
+            active.brew = true
+            active.commandLineTools = true
+            active.source = true
+            active.built = true
+            active.dbRunning = true
+            active.dbReady = true
+            active.running = true
+            active.up = ["xi_connect"]
+            self.status = active
+            refreshing = false
+            return
+        }
+        guard let script = Self.script() else {
+            refreshing = false
+            return
+        }
         let text = await Self.capture(script: script, arg: "status")
-        self.status = Self.parse(text)
+        var refreshed = Self.parse(text)
+        // The LSB checkout may live on an external volume that macOS has not
+        // authorized this app to inspect. If its status script cannot read the
+        // pid files, use the loopback login port to avoid starting a duplicate
+        // server that is already accepting local connections.
+        if !refreshed.running, await Self.localLoginPortResponds() {
+            refreshed.built = true
+            refreshed.dbRunning = true
+            refreshed.dbReady = true
+            refreshed.running = true
+            refreshed.up.append("xi_connect")
+        }
+        self.status = refreshed
         self.refreshing = false
+    }
+
+    private static func localLoginPortResponds() async -> Bool {
+        await Task.detached(priority: .utility) {
+            let fd = Darwin.socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
+            guard fd >= 0 else { return false }
+            defer { Darwin.close(fd) }
+
+            var address = sockaddr_in()
+            address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            address.sin_family = sa_family_t(AF_INET)
+            address.sin_port = in_port_t(54231).bigEndian
+            address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+            let result = withUnsafePointer(to: &address) { pointer in
+                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                }
+            }
+            return result == 0
+        }.value
     }
 
     private static func parse(_ text: String) -> Status {

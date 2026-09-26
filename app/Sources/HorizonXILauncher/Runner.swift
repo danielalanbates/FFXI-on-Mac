@@ -554,6 +554,9 @@ final class Runner: ObservableObject {
         // allowlist worlds. Never fatal.
         Guide.prepare(install, enabled: perf.enableVanaguide, policy: addonPolicy,
                       profile: profile) { [weak self] in self?.appendLine($0) }
+        CursorFix.prepare(install, policy: addonPolicy, profile: profile) { [weak self] in
+            self?.appendLine($0)
+        }
         // Every launch: make sure no allowed addon can take the LuaJIT trace-patch fault that Ashita 4.3
         // hits on this Mac (see LuaJITGuard). Idempotent, so this is cheap after the first run.
         LuaJITGuard.apply(install, policy: addonPolicy) { [weak self] in self?.appendLine($0) }
@@ -734,11 +737,7 @@ final class Runner: ObservableObject {
     func stop(_ install: Install) {
         if let pid = gamePID, Detach.isAlive(pid) { kill(pid, SIGTERM) }
         proc?.terminate()
-        let k = Process()
-        k.executableURL = install.wineserver
-        k.arguments = ["-k"]
-        k.environment = ["WINEPREFIX": install.prefix.path]
-        try? k.run()
+        RendererSetup.stopWineserver(install)
     }
 
     /// See the call site in `launch`: the game must be started the way a shell starts it.

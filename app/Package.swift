@@ -8,6 +8,10 @@ let package = Package(
         .executableTarget(
             name: "HorizonXILauncher",
             path: "Sources/HorizonXILauncher"
+        ),
+        .executableTarget(
+            name: "VanaguideCompanion",
+            path: "Sources/VanaguideCompanion"
         )
     ]
 )
