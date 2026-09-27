@@ -99,6 +99,11 @@ struct Server: Codable, Identifiable, Hashable {
     /// DYLD_FALLBACK_LIBRARY_PATH, WINE_LARGE_ADDRESS_AWARE, FFXI_FPS_DIVISOR, the MVK knobs)
     /// was ruled out individually.
     var msync: Bool = true
+    /// May two clients of this world run on this Mac at once? Only when the server's own
+    /// published rules allow a player more than one live character; without cited evidence it
+    /// stays false and a second Play is refused (see docs/MULTI_WORLD.md). Not the user's to
+    /// edit: refreshed from `builtins` like the other curated fields.
+    var allowsMultipleClients: Bool = false
 
     /// How a world's client is obtained.
     /// - `clientZip`: a plain archive of the finished client, unpacked straight into `dataPath`.
@@ -118,7 +123,8 @@ struct Server: Codable, Identifiable, Hashable {
          requiredClientURL: String = "", requiredClient: String = "",
          installURL: String = "", installKind: InstallKind = .website, installNote: String = "",
          accountURL: String = "", accountHow: String = "", discordURL: String = "",
-         renderer: Renderer? = nil, x87: Bool = true, msync: Bool = true) {
+         renderer: Renderer? = nil, x87: Bool = true, msync: Bool = true,
+         allowsMultipleClients: Bool = false) {
         self.codebase = codebase; self.retired = retired
         self.name = name; self.host = host; self.bootProfile = bootProfile
         self.verified = verified; self.note = note; self.era = era
@@ -127,6 +133,7 @@ struct Server: Codable, Identifiable, Hashable {
         self.installURL = installURL; self.installKind = installKind; self.installNote = installNote
         self.accountURL = accountURL; self.accountHow = accountHow; self.discordURL = discordURL
         self.renderer = renderer; self.x87 = x87; self.msync = msync
+        self.allowsMultipleClients = allowsMultipleClients
     }
 
     init(from decoder: Decoder) throws {
@@ -156,6 +163,7 @@ struct Server: Codable, Identifiable, Hashable {
         renderer    = try c.decodeIfPresent(Renderer.self, forKey: .renderer)
         x87         = try c.decodeIfPresent(Bool.self, forKey: .x87) ?? Server.builtins.first { $0.name == name }?.x87 ?? true
         msync       = try c.decodeIfPresent(Bool.self, forKey: .msync) ?? Server.builtins.first { $0.name == name }?.msync ?? true
+        allowsMultipleClients = Server.all.first { $0.name == name }?.allowsMultipleClients ?? false
         // A world the user has not renamed inherits a renderer the project has since measured
         // for it -- otherwise a servers.json written before this field existed keeps launching
         // Gaia XI on the pathway that is known to kill it.
@@ -225,7 +233,9 @@ struct Server: Codable, Identifiable, Hashable {
                era: "LandSandBoat · your own world", population: 9494, pinned: true, codebase: .landSandBoat,
                local: true,
                accountHow: "Your own world: the loader window offers to create the account the "
-                     + "first time you connect. No signup site, and nobody to ask."),
+                     + "first time you connect. No signup site, and nobody to ask.",
+               // Daniel's own server: nobody's rules but his.
+               allowsMultipleClients: true),
         Server(name: "CatsEyeXI", host: "server.catseyexi.com", bootProfile: "catseyexi.ini",
                verified: false,
                note: "Login host from CatsEyeXI's own connect page. Untested by this project.",
@@ -241,7 +251,13 @@ struct Server: Codable, Identifiable, Hashable {
                accountURL: "https://www.catseyexi.com/register",
                accountHow: "Register on catseyexi.com, then create the game account from that "
                      + "site's account page — the website login is not the game login.",
-               discordURL: "https://discord.gg/catseyexi"),
+               discordURL: "https://discord.gg/catseyexi",
+               // Their account rules (github.com/CatsAndBoats/catseyexi/wiki/Information-
+               // Regarding-Account-Rules-and-Limitations, read 2026-09-26): "I have one active
+               // character on two account's (dual box) is this allowed? Yes!" The cap is two
+               // per person and Crystal Warrior accounts may not dual box outside town; their
+               // server enforces both, which the launcher cannot see.
+               allowsMultipleClients: true),
         Server(name: "Eden", host: "play.edenxi.com", bootProfile: "eden.ini", verified: false,
                note: "Login host from Eden's own new-player wiki. Untested by this project.",
                era: "Classic · 75 cap", population: 1925, codebase: .darkStarLineage,
@@ -383,6 +399,7 @@ final class ServerStore: ObservableObject {
                 out[i].era = b.era
                 // Not the user's to edit, and an old servers.json predates the flag entirely.
                 out[i].local = b.local
+                out[i].allowsMultipleClients = b.allowsMultipleClients
                 if b.local { out[i].host = b.host }
                 // A stored blank host means the user never set one — adopt a host this project
                 // has since sourced (Gaia XI shipped blank until 2026-08-19). A user-typed host

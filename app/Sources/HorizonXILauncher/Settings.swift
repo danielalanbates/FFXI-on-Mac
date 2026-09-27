@@ -122,7 +122,8 @@ struct PerfSettings: Codable {
 
     /// Environment applied to the wine process.
     /// - Parameter x87: whether this world may use x87 acceleration (`Server.x87`).
-    func environment(for install: Install, x87: Bool = true) -> [String: String] {
+    /// - Parameter world: names the default frame-rate log, so two clients never share one.
+    func environment(for install: Install, x87: Bool = true, world: String = "") -> [String: String] {
         var env: [String: String] = [:]
         env["WINEPREFIX"] = install.prefix.path
         env["D3DMETAL_FRAMEWORK_PATH"] = install.d3dMetal.path
@@ -183,7 +184,7 @@ struct PerfSettings: Codable {
         // every fps number came from a shell that did not match what Play actually did.
         if ProcessInfo.processInfo.environment["FFXI_ON_MAC_FPSLOG"] == "1" {
             env["DXVK_FPS_LOG"] = ProcessInfo.processInfo.environment["FFXI_ON_MAC_FPSLOG_PATH"]
-                ?? ("C:\\" + install.gameDir.lastPathComponent + "\\fps.csv")
+                ?? MultiWorld.fpsLogPath(gameDirName: install.gameDir.lastPathComponent, world: world)
         }
         // Sound-output following. Only set when the dylib is really there and really has the
         // slice this Mac will run wine as — a DYLD_INSERT_LIBRARIES pointing at a missing or

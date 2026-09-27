@@ -28,14 +28,19 @@ enum CursorFix {
     }
 
     static func prepare(_ install: Install, policy: AddonPolicy,
-                        profile: String = "horizonxi.ini", log: (String) -> Void) {
+                        profile: String = "horizonxi.ini", othersLive: Bool = false,
+                        log: (String) -> Void) {
         let fm = FileManager.default
         let script = Narration.scriptName(in: install, profile: profile)
         let scripts = install.gameDir.appendingPathComponent("scripts/\(script)")
         let dest = install.gameDir.appendingPathComponent("addons/\(addonDirName)",
                                                           isDirectory: true)
         guard allowed(by: policy) else {
-            if fm.fileExists(atPath: dest.path) { try? fm.removeItem(at: dest) }
+            // Another client in this game folder may have it loaded (see Guide.prepare).
+            if fm.fileExists(atPath: dest.path) {
+                if othersLive { log("==> winecursor: addons/\(addonDirName) kept on disk — another world is running") }
+                else { try? fm.removeItem(at: dest) }
+            }
             if removeLoadLine(from: scripts) {
                 log("==> winecursor: removed — custom addons are not enabled on this world")
             }
@@ -45,11 +50,15 @@ enum CursorFix {
             log("==> winecursor: addon source unavailable; cursor fix not loaded")
             return
         }
-        do {
-            try AddonInstaller.replaceDirectory(at: dest, with: source, fileManager: fm)
-        } catch {
-            log("==> winecursor: could not install addon — \(error.localizedDescription)")
-            return
+        if othersLive, isCompleteAddon(at: dest) {
+            log("==> winecursor: another world is running; using the copy already installed")
+        } else {
+            do {
+                try AddonInstaller.replaceDirectory(at: dest, with: source, fileManager: fm)
+            } catch {
+                log("==> winecursor: could not install addon — \(error.localizedDescription)")
+                return
+            }
         }
         addLoadLine(to: scripts)
         log("==> winecursor: on (via scripts/\(script))")

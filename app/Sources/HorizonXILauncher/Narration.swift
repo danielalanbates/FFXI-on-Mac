@@ -90,6 +90,7 @@ enum Narration {
                         profile: String = "horizonxi.ini",
                         temporaryDirectory: URL = URL(fileURLWithPath: "/tmp/vanavoice", isDirectory: true),
                         launch: (() -> Void)? = nil,
+                        othersLive: Bool = false,
                         log: (String) -> Void) {
         let fm = FileManager.default
         let script = scriptName(in: install, profile: profile)
@@ -100,7 +101,11 @@ enum Narration {
         // launcher (or the player) put it there.
         guard allowed(by: policy) else {
             let dest = install.gameDir.appendingPathComponent("addons/vanavoice", isDirectory: true)
-            if fm.fileExists(atPath: dest.path) { try? fm.removeItem(at: dest) }
+            if fm.fileExists(atPath: dest.path) {
+                // Another client in this game folder may have it loaded (see Guide.prepare).
+                if othersLive { log("==> narration: addons/vanavoice kept on disk — another world is running") }
+                else { try? fm.removeItem(at: dest) }
+            }
             if removeLoadLine(from: scripts) || enabled {
                 log("==> narration: not allowed here — this world runs an addon allowlist and "
                     + "VanaVoice is not on it")
@@ -110,7 +115,7 @@ enum Narration {
 
         guard enabled else {
             let dest = install.gameDir.appendingPathComponent("addons/vanavoice", isDirectory: true)
-            let removedAddon = fm.fileExists(atPath: dest.path)
+            let removedAddon = !othersLive && fm.fileExists(atPath: dest.path)
             if removedAddon { try? fm.removeItem(at: dest) }
             if removeLoadLine(from: scripts) || removedAddon { log("==> narration: off") }
             return
@@ -127,8 +132,12 @@ enum Narration {
 
         let dest = install.gameDir.appendingPathComponent("addons/vanavoice", isDirectory: true)
         // Stage before replacing so a failed copy leaves the prior playable addon intact.
-        do { try AddonInstaller.replaceDirectory(at: dest, with: src, fileManager: fm) }
-        catch { log("==> narration: could not install the addon — \(error.localizedDescription)"); return }
+        if othersLive, isCompleteAddon(at: dest) {
+            log("==> narration: another world is running; using the copy already installed")
+        } else {
+            do { try AddonInstaller.replaceDirectory(at: dest, with: src, fileManager: fm) }
+            catch { log("==> narration: could not install the addon — \(error.localizedDescription)"); return }
+        }
 
         addLoadLine(to: scripts)
         if narratorAvailable {
