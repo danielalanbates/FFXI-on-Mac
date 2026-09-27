@@ -183,9 +183,9 @@ struct ContentView: View {
             Task { await feeds.refreshPopulations() }
         }
         // Clients started by another launcher are only visible to a process scan. One `ps`.
-        .task { await sessions.refreshElsewhere() }
+        .task { await sessions.refreshElsewhere(install: active, profiles: bootProfiles) }
         .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
-            Task { await sessions.refreshElsewhere() }
+            Task { await sessions.refreshElsewhere(install: active, profiles: bootProfiles) }
         }
         // Discovery walks /Volumes, and an external drive can make that take tens of seconds.
         // Doing it on the main thread means the window never appears at all — which looked
@@ -1538,18 +1538,26 @@ struct ContentView: View {
         }
     }
 
-    /// Clients this window did not start, named by the world whose host they were given.
+    /// Every world's boot profile, for `Sessions.bootHosts`.
+    private var bootProfiles: [(world: String, profile: String)] {
+        store.servers.map { ($0.name, $0.bootProfile) }
+    }
+
+    /// Clients this window did not start, named by the world whose host (or boot profile's
+    /// `--server`) they were given.
     private var elsewhere: [(host: String, name: String, pids: [pid_t])] {
         sessions.elsewhere.keys.sorted().map { h in
             let name = store.servers.first { LiveClients.normalize($0.host) == h }?.name
+                ?? store.servers.first { sessions.bootHosts[$0.name] == h }?.name
                 ?? (h.isEmpty ? "Unknown world" : h)
             return (h, name + " (outside this window)", sessions.elsewhere[h] ?? [])
         }
     }
 
-    /// The selected world is playing, here or in another launcher.
+    /// The selected world is playing, here or in another launcher. Keyed like the duplicate
+    /// refusal: the Host field and the `--server` its boot profile carries.
     private var selectedRunning: Bool {
-        runner.running || store.selected.map { sessions.elsewhere[LiveClients.normalize($0.host)] != nil } == true
+        runner.running || store.selected.map { sessions.runningElsewhere(world: $0.name, host: $0.host) } == true
     }
 
     /// Play is still pressable on a running world that allows a second client.
@@ -1632,7 +1640,7 @@ struct ContentView: View {
         // another launcher (or by --play) counts just the same.
         let hosts = [server.host] + [Credentials.bootServer(in: i, profile: server.bootProfile)].compactMap { $0 }
         if let why = Runner.duplicateRefusal(world: server.name, hosts: hosts, maxClients: server.maxClients,
-                                             clients: LiveClients.snapshot().clients) {
+                                             clients: LiveClients.snapshot().clients, install: i) {
             notice = why
             runner.appendLine("!! " + why)
             return
@@ -1701,7 +1709,9 @@ struct ContentView: View {
         }
         // Every refusal before any shared client file is rewritten: pivot.ini and the boot
         // profile belong to whatever world is already running too.
-        if let why = r.gate(i, renderer: effective.renderer, profile: server.bootProfile,
+        if let why = r.gate(i, renderer: effective.renderer,
+                            sync: MultiWorld.syncMode(msync: effective.msync, esync: effective.esync),
+                            msyncAllowed: server.msync, profile: server.bootProfile,
                             world: server.name, host: server.host,
                             maxClients: server.maxClients).refusal {
             notice = why
@@ -1760,7 +1770,7 @@ struct ContentView: View {
         }
         if let why = r.launch(i, perf: effective, profile: server.bootProfile, useX87: server.x87,
                               world: server.name, host: server.host,
-                              maxClients: server.maxClients,
+                              maxClients: server.maxClients, msyncAllowed: server.msync,
                               addonPolicy: addonPolicy) {
             notice = why
         }

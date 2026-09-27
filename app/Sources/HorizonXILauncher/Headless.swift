@@ -674,6 +674,18 @@ enum Headless {
         checks.append(("with its group unknown, a session still leaves other sessions' clients alone",
                        MultiWorld.sessionPIDs(group: nil, host: "127.0.0.1", preexisting: [],
                                               otherGroups: [72000], in: twoLocal) == [71001, 71002]))
+        // wine moved the loader into a group of its own (setsid): the spawn group 75000 is empty.
+        let moved = LiveClients.parse("75101 75101 .\\\\bootloader\\\\horizon-loader.exe --server 127.0.0.1 --user c\n"
+                                      + "71001 71000 .\\\\bootloader\\\\horizon-loader.exe --server 127.0.0.1 --user a\n")
+        checks.append(("a loader that left its spawn group is still found by host, other sessions excluded",
+                       MultiWorld.sessionPIDs(group: 75000, groupHeldLoader: false, host: "127.0.0.1",
+                                              preexisting: [], otherGroups: [71000], in: moved) == [75101]))
+        checks.append(("once its group has held the loader, an empty group means the client exited",
+                       MultiWorld.sessionPIDs(group: 75000, groupHeldLoader: true, host: "127.0.0.1",
+                                              preexisting: [], otherGroups: [71000], in: moved).isEmpty
+                           && MultiWorld.groupHoldsLoader(71000, in: moved)
+                           && !MultiWorld.groupHoldsLoader(73000, in: LiveClients.parse(
+                               "73001 73000 /x/wine C:\\HorizonXI\\Ashita-cli.exe horizonxi.ini\n"))))
         let unlisted = LiveClients.parse("74001 74000 C:\\Game\\mystery-loader.exe --server x\n")
         checks.append(("a session's group covers a loader name this launcher does not know",
                        MultiWorld.sessionPIDs(group: 74000, host: "x", preexisting: [], otherGroups: [],
@@ -685,6 +697,36 @@ enum Headless {
             """).clients
         checks.append(("an injector is a live client under the unknown host, before its loader exists",
                        injecting.map(\.pid) == [73001, 73002] && injecting.allSatisfy { $0.injecting && $0.host.isEmpty }))
+        checks.append(("an injector carries the boot profile it is starting",
+                       injecting.map(\.bootFile) == ["horizonxi.ini", "eden.xml"]))
+
+        // Another launcher process is in its injector phase: its Runner.playing is not ours to
+        // see, and the scan shows only its injector. A duplicate must still be refused.
+        let otherInjecting = LiveClients.parse("81001 81000 /x/wine/bin/wine C:\\HorizonXI\\Ashita-cli.exe horizonxi.ini\n").clients
+        let bootHosts = ["horizonxi.ini": "play.horizonxi.com", "lsb.ini": "127.0.0.1"]
+        func refusalSeeing(_ s: Server?, _ clients: [LiveClients.Client], own: Set<pid_t> = [],
+                           ownGroups: Set<pid_t> = [], resolve: [String: String] = bootHosts) -> String? {
+            s.flatMap { MultiWorld.refusal(world: $0.name, hosts: [$0.host], maxClients: $0.maxClients,
+                                           clients: clients, sessionGroups: own, ownGroups: ownGroups,
+                                           injectorHost: { resolve[$0] }) }
+        }
+        checks.append(("another launcher's injector for HorizonXI (scan shows only it) refuses a duplicate",
+                       refusalSeeing(horizon, otherInjecting)?.contains("81001") == true))
+        checks.append(("that injector is not a duplicate of a different world",
+                       refusalSeeing(local, otherInjecting) == nil))
+        checks.append(("an injector whose world cannot be told holds off a one-client world for a few seconds",
+                       refusalSeeing(horizon, otherInjecting, resolve: [:])?.contains("few seconds") == true))
+        checks.append(("... but not a world without a cap, nor when it is one of this window's own sessions",
+                       refusalSeeing(local, otherInjecting, resolve: [:]) == nil
+                           && refusalSeeing(horizon, otherInjecting, ownGroups: [81000], resolve: [:]) == nil))
+        let injectorAndLoader = otherInjecting
+            + LiveClients.parse("81002 81000 .\\\\bootloader\\\\horizon-loader.exe --server 127.0.0.1\n").clients
+        checks.append(("an unresolved injector whose group already shows a loader is that loader's world",
+                       refusalSeeing(horizon, injectorAndLoader, resolve: [:]) == nil))
+        let catsInjecting = LiveClients.parse("82001 82000 /x/wine C:\\CatsEye\\Ashita-cli.exe catseye.ini\n").clients
+        checks.append(("CatsEyeXI: one running plus another launcher's injector for it is at the cap of two",
+                       refusalSeeing(catseye, oneCats + catsInjecting,
+                                     resolve: ["catseye.ini": "server.catseyexi.com"])?.contains("at most 2") == true))
         checks.append(("a launch while another world is injecting treats the prefix as in use",
                        MultiWorld.clientsLive(injecting, otherSessionsPlaying: 0)))
         checks.append(("a launch while another session of this window is playing but not yet visible treats the prefix as in use",
@@ -699,6 +741,31 @@ enum Headless {
                        MultiWorld.elsewhere(snap.clients, ownGroups: [57810], ownHostsWithoutGroup: ["play.edenxi.com"])
                            == ["127.0.0.1": [61001], "": [61010]]))
 
+        checks.append(("Repair/Update wait for clients, for this window's starting sessions and for a held lock",
+                       MultiWorld.maintenanceBlocker([:], sessionsPlaying: 0, lockHeldElsewhere: false) == nil
+                           && MultiWorld.maintenanceBlocker(["": [73001]], sessionsPlaying: 0, lockHeldElsewhere: false) != nil
+                           && MultiWorld.maintenanceBlocker([:], sessionsPlaying: 1, lockHeldElsewhere: false) != nil
+                           && MultiWorld.maintenanceBlocker([:], sessionsPlaying: 0, lockHeldElsewhere: true) != nil))
+
+        // msync/esync are the wineserver's: a second world must match it, or be refused.
+        let prefixPath = "/Volumes/x10/Video Games/wrapper.app/Contents/SharedSupport/prefix10"
+        let serverEnv = "/x/wine/bin/wineserver HOME=/Users/x WINEPREFIX=\(prefixPath) WINEESYNC=0 WINEMSYNC=1 PATH=/usr/bin"
+        let wsSnap = LiveClients.parse("57821 57821 /Users/x/Library/Application Support/wine/bin/wineserver\n")
+        checks.append(("a wineserver is recorded, not taken for a client, even with spaces in its path",
+                       wsSnap.wineservers == [57821] && wsSnap.clients.isEmpty))
+        checks.append(("the running wineserver's sync mode is read from its environment, for this prefix only",
+                       MultiWorld.syncMode(wineserverEnv: serverEnv, prefix: prefixPath) == .msync
+                           && MultiWorld.syncMode(wineserverEnv: serverEnv, prefix: "/other/prefix") == nil
+                           && MultiWorld.syncMode(wineserverEnv: serverEnv.replacingOccurrences(of: "WINEMSYNC=1", with: "WINEMSYNC=0"),
+                                                  prefix: prefixPath) == .off))
+        let gaiaNext = MultiWorld.syncDecision(want: .off, running: .msync, msyncAllowed: false, world: "Gaia XI")
+        let msyncNext = MultiWorld.syncDecision(want: .msync, running: .off, msyncAllowed: true, world: "Local server")
+        checks.append(("a msync-off world next to a msync wineserver is refused; any other world matches the server",
+                       gaiaNext.refusal?.contains("msync off") == true
+                           && msyncNext.refusal == nil && msyncNext.use == .off
+                           && MultiWorld.syncDecision(want: .off, running: .msync, msyncAllowed: true, world: "x").use == .msync
+                           && MultiWorld.syncDecision(want: .msync, running: nil, msyncAllowed: true, world: "x").use == .msync))
+
         let lockFile = fm.temporaryDirectory.appendingPathComponent("hxi-multiworld-\(UUID().uuidString).lock")
         if let held = LaunchLock.acquire(at: lockFile) {
             let second = LaunchLock.acquire(at: lockFile)
@@ -708,6 +775,17 @@ enum Headless {
                            second == nil && again != nil))
             if let again { LaunchLock.release(again) }
             if let second { LaunchLock.release(second) }
+            // Handed-off hold: a spawn that is already gone lets the lock go (read-only scan).
+            if let held2 = LaunchLock.acquire(at: lockFile) {
+                LaunchLock.release(held2, whenVisible: 999_999, group: nil, timeout: 5)
+                var freed: Int32? = nil
+                for _ in 0..<60 where freed == nil {
+                    usleep(100_000)
+                    freed = LaunchLock.acquire(at: lockFile)
+                }
+                checks.append(("a launch's handed-off lock is let go once its spawn is gone", freed != nil))
+                if let freed { LaunchLock.release(freed) }
+            }
         } else {
             checks.append(("the launch lock refuses a second holder and frees on release", false))
         }
@@ -797,6 +875,17 @@ enum Headless {
                           othersLive: false, log: { _ in })
             checks.append(("with nothing else live, a strict allowlist world still gets the folder removed",
                            !fm.fileExists(atPath: addons.appendingPathComponent(Guide.addonDirName).path)))
+
+            // The real path: Runner reads the injector's boot profile from the install.
+            try "[ashita.boot]\ncommand     = --server play.horizonxi.com --user x --pass y\n"
+                .write(to: boot.appendingPathComponent("otherlauncher.ini"), atomically: true, encoding: .utf8)
+            let other = LiveClients.parse("83001 83000 /x/wine C:\\HorizonXI\\Ashita-cli.exe otherlauncher.ini\n").clients
+            checks.append(("Runner refuses a duplicate while another launcher's HorizonXI is only an injector",
+                           Runner.duplicateRefusal(world: "HorizonXI", hosts: ["play.horizonxi.com"], maxClients: 1,
+                                                   clients: other, install: install)?.contains("83001") == true
+                               && Runner.duplicateRefusal(world: "Local server", hosts: ["127.0.0.1"],
+                                                          maxClients: Server.noClientCap,
+                                                          clients: other, install: install) == nil))
         } catch {
             checks.append(("multiworld addon fixture setup and execution", false))
             FileHandle.standardError.write(Data("  \(error.localizedDescription)\n".utf8))
