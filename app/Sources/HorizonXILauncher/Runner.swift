@@ -158,6 +158,15 @@ final class Runner: ObservableObject {
     }()
     private lazy var logHandle: FileHandle? = try? FileHandle(forWritingTo: Self.logFile)
 
+    /// A line for the launcher log from outside any session (a forwarded request dropped while
+    /// no window was open), and stderr.
+    static func appendToLogFile(_ s: String) {
+        let line = s.hasSuffix("\n") ? s : s + "\n"
+        FileHandle.standardError.write(Data(line.utf8))
+        guard let h = try? FileHandle(forWritingTo: logFile) else { return }
+        h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close()
+    }
+
     private func tee(_ s: String) {
         // A headless run (--play/--check) has no log strip to read, and its silence is exactly
         // what made --play look like it did nothing for weeks. Mirror to stderr there.

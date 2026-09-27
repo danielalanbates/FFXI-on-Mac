@@ -6,7 +6,40 @@ import UniformTypeIdentifiers
 /// processes. Silently, and with the UI reverting to its "nothing installed yet" state -- so the
 /// only evidence a 6 GB download ever happened was the folder on disk. Ask first.
 final class LauncherDelegate: NSObject, NSApplicationDelegate {
+    /// One launcher window (docs/MULTI_WORLD.md, One launcher): no window tabs, whose "+"
+    /// would open a second one.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSWindow.allowsAutomaticWindowTabbing = false
+    }
+
+    /// A Dock click with the window minimised or hidden shows that window rather than letting
+    /// SwiftUI open a second one. Only with no window at all is one created.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        !LauncherDelegate.showMainWindow()
+    }
+
+    /// Bring the existing launcher window to the front. False when there is none.
+    @discardableResult
+    static func showMainWindow() -> Bool {
+        // A closed window SwiftUI has not let go of yet is not one to bring back.
+        guard let w = NSApp.windows.first(where: {
+            $0.canBecomeMain && ($0.isVisible || $0.isMiniaturized || NSApp.isHidden)
+        }) else { return false }
+        if NSApp.isHidden { NSApp.unhide(nil) }
+        if w.isMiniaturized { w.deminiaturize(nil) }
+        NSApp.activate(ignoringOtherApps: true)
+        w.makeKeyAndOrderFront(nil)
+        return true
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        SingleInstance.terminating = true
+        SingleInstance.stopListening()
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // No more handed-over requests from here on: one taken now would never be acted on.
+        SingleInstance.terminating = true
         guard Runner.workInFlight else { return .terminateNow }
         let a = NSAlert()
         a.messageText = "A download or install is still running."
@@ -15,7 +48,9 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
         a.addButton(withTitle: "Quit anyway")
         a.addButton(withTitle: "Keep running")
         a.alertStyle = .warning
-        return a.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
+        if a.runModal() == .alertFirstButtonReturn { return .terminateNow }
+        SingleInstance.terminating = false
+        return .terminateCancel
     }
 }
 
@@ -36,6 +71,14 @@ struct HorizonXILauncherApp: App {
                 .preferredColorScheme(.dark)
         }
         .windowResizability(.contentMinSize)
+        .commands {
+            // One launcher window: File > New Window would open a second ContentView with
+            // sessions of its own. This shows the one there is instead.
+            CommandGroup(replacing: .newItem) {
+                Button("Show Launcher Window") { LauncherDelegate.showMainWindow() }
+                    .keyboardShortcut("n")
+            }
+        }
     }
 }
 
@@ -216,7 +259,8 @@ struct ContentView: View {
             }
             // Press Play as soon as the install is known. For Shortcuts/Stream Deck users, and
             // for this project's own unattended tests (see docs/SERVERS-WORKLOG.md).
-            await handleCommand(LaunchCommand(CommandLine.arguments), forwarded: false)
+            // Once per process: a window opened later (Dock reopen) must not play it again.
+            if let own = SingleInstance.takeOwnCommand() { await handleCommand(own, forwarded: false) }
             // Then whatever other launches handed over while this one was starting.
             commandsReady = true
             await runForwarded()
@@ -1616,8 +1660,13 @@ struct ContentView: View {
     private func handleCommand(_ cmd: LaunchCommand, forwarded: Bool) async {
         let from = forwarded ? " (handed over by another launch)" : ""
         if let w = cmd.world {
-            if let srv = store.servers.first(where: { $0.name == w }) { store.select(srv) }
-            else if forwarded { runner.appendLine("!! --world\(from): no world named \(w)") }
+            guard let srv = store.servers.first(where: { $0.name == w }) else {
+                // Never fall through to the world that happens to be selected.
+                runner.appendLine("!! --world\(from): no world named \(w)"
+                                  + (cmd.play ? "; --play not carried out" : ""))
+                return
+            }
+            store.select(srv)
         }
         guard cmd.play else { return }
         if selected == nil { runner.appendLine("!! --play\(from): no install found yet") }

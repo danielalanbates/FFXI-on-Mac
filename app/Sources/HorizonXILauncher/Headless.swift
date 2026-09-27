@@ -801,6 +801,18 @@ enum Headless {
                        q(91011)?.host == "play.edenxi.com" && q(91011)?.injecting == false
                            && q(91041)?.host == "play.horizonxi.com" && q(91041)?.other == false))
         checks.append(("a Mac command that only mentions a quoted .exe is not a client", q(91051) == nil))
+        checks.append(("only a quote at the start of a word opens a run; an unclosed one means plain splitting",
+                       LiveClients.tokenize("--pass ab\"c --server h") == ["--pass", "ab\"c", "--server", "h"]
+                           && LiveClients.tokenize("--pass \"abc --server h") == ["--pass", "\"abc", "--server", "h"]
+                           && LiveClients.tokenize("\"a b\"c d") == ["a bc", "d"]))
+        let quotePass = LiveClients.parse("""
+            92001 92000 .\\\\bootloader\\\\horizon-loader.exe --user x --pass ab"c --server play.horizonxi.com
+            92011 92010 .\\\\bootloader\\\\horizon-loader.exe --user x --pass "abc --server play.horizonxi.com
+            92021 92020 /x/x87sidecar-coop --cooperative /x/wine .\\\\bootloader\\\\horizon-loader.exe --pass x" --server play.horizonxi.com
+            """).clients
+        checks.append(("a password containing a quote cannot hide a later --server",
+                       quotePass.map(\.pid) == [92001, 92011, 92021]
+                           && quotePass.allSatisfy { $0.host == "play.horizonxi.com" }))
 
         // Any Windows program holds the prefix, not only the loaders named in LiveClients.
         // wine's own, as read with ps under the live wineserver on 2026-09-26 (trailing space
@@ -842,6 +854,59 @@ enum Headless {
             """).clients
         checks.append(("a game program sharing a wine program's name, outside C:\\windows, still counts",
                        lookalike.map(\.pid) == [94001, 94011] && MultiWorld.clientsLive(lookalike, otherSessionsPlaying: 0)))
+
+        // Only this launcher's wine counts: a game under another wine install (XIV on Mac,
+        // CrossOver, Whisky) never holds this prefix. The executable is the kernel's
+        // (proc_pidpath); `ps -o comm` shows the Windows path wine rewrote argv to.
+        let wineFixture = fm.temporaryDirectory.appendingPathComponent("hxi-ownwine-\(UUID().uuidString)")
+        let realWine = wineFixture.appendingPathComponent("ffxi-runtime/wine-coop/wine")
+        let linkedWine = wineFixture.appendingPathComponent("Games/FFXI/wine-coop")
+        let ourBin = realWine.appendingPathComponent("lib/wine/x86_64-unix/wine")
+        let xivBin = wineFixture.appendingPathComponent("XIV on Mac/wine/bin/wine64-preloader")
+        do {
+            for f in [ourBin, xivBin] {
+                try fm.createDirectory(at: f.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data().write(to: f)
+            }
+            try fm.createDirectory(at: linkedWine.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.createSymbolicLink(at: linkedWine, withDestinationURL: realWine.deletingLastPathComponent())
+            // Configured through the symlink, as /Volumes/Games/FFXI/wine-coop is on this Mac.
+            let own = OwnWine(roots: [linkedWine.appendingPathComponent("wine").path])
+            let exes: [pid_t: String] = [
+                88001: xivBin.path,
+                88011: ourBin.path,
+                88021: "/Applications/FFXI-on-Mac.app/Contents/Resources/x87sidecar-coop",
+                88031: "/Applications/Whisky.app/Contents/Resources/Libraries/Wine/bin/wine64",
+                88051: xivBin.path,
+            ]
+            let scoped = LiveClients.parse("""
+                88001 88000 C:\\Program Files (x86)\\SquareEnix\\FINAL FANTASY XIV - A Realm Reborn\\game\\ffxiv_dx11.exe
+                88011 88010 C:\\Games\\mystery-loader.exe
+                88021 88020 /x/x87sidecar-coop --cooperative /x/wine .\\\\bootloader\\\\mystery-loader.exe
+                88031 88030 "C:\\Program Files\\Game\\game.exe" -windowed
+                88041 88040 C:\\Games\\gone.exe
+                88051 88050 .\\\\bootloader\\\\horizon-loader.exe --server play.horizonxi.com
+                """, isOurs: { own.owns(executable: exes[$0]) })
+            checks.append(("a program under another wine (XIV on Mac's ffxiv_dx11.exe, Whisky) is not live here",
+                           !scoped.clients.contains { [88001, 88031].contains($0.pid) }
+                               && !MultiWorld.clientsLive(scoped.clients.filter { $0.pid == 88001 }, otherSessionsPlaying: 0)))
+            checks.append(("an unknown program under this launcher's wine (reached through a symlink) or the sidecar is live",
+                           scoped.clients.filter(\.other).map(\.pid) == [88011, 88021]))
+            checks.append(("a program whose executable cannot be read is not counted as ours",
+                           !scoped.clients.contains { $0.pid == 88041 }))
+            checks.append(("a known loader counts whatever wine runs it",
+                           scoped.clients.contains { $0.pid == 88051 && $0.host == "play.horizonxi.com" }))
+        } catch {
+            checks.append(("own-wine fixture setup", false))
+            FileHandle.standardError.write(Data("  \(error.localizedDescription)\n".utf8))
+        }
+        try? fm.removeItem(at: wineFixture)
+        let home = fm.homeDirectoryForCurrentUser.path
+        checks.append(("this launcher's builds include the patched wine as measured on the live client",
+                       OwnWine.current().owns(executable: home
+                           + "/Library/Application Support/BatesAI/ffxi-runtime/wine-coop/wine/lib/wine/x86_64-unix/wine")
+                           && !OwnWine.current().owns(executable: home + "/Library/Application Support/XIV on Mac/wine/bin/wine64")
+                           && !OwnWine.current().owns(executable: "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/lib/wine/x86_64-unix/wine")))
 
         // Stop signals only what is provably still this session's.
         let stopSnap = LiveClients.parse("""
@@ -1043,6 +1108,45 @@ enum Headless {
         }
         checks.append(("a stale request, or one others could have written, is thrown away unread",
                        SingleInstance.takeRequests(dir: dir).isEmpty && waiting().isEmpty))
+        // Race a: the holder takes the file just after the sender's last look, so the sender's
+        // own delete finds it gone. That is a hand-over, not "nothing was done".
+        let raced = SingleInstance.writeRequest(["--play"], dir: dir)
+        if let raced { try? fm.removeItem(at: raced) }
+        let withdrawn = SingleInstance.writeRequest(["--play"], dir: dir)
+        checks.append(("a request already taken when the sender withdraws it counts as handed over",
+                       raced.map(SingleInstance.withdraw) == false
+                           && withdrawn.map(SingleInstance.withdraw) == true && waiting().isEmpty))
+
+        // A taken request still expires 30 s after it was written if no window acts on it.
+        let t0 = Date()
+        var queue = PendingRequests()
+        queue.add(LaunchCommand(play: true), written: t0)
+        queue.add(LaunchCommand(world: "Local server", play: true), written: t0.addingTimeInterval(20))
+        let droppedEarly = queue.expire(now: t0.addingTimeInterval(29), maxAge: SingleInstance.maxRequestAge)
+        let dropped = queue.expire(now: t0.addingTimeInterval(31), maxAge: SingleInstance.maxRequestAge)
+        checks.append(("a queued request no window acted on within 30 s is dropped; a younger one is kept",
+                       droppedEarly.isEmpty && dropped.map(\.command) == [LaunchCommand(play: true)]
+                           && queue.next() == LaunchCommand(world: "Local server", play: true) && queue.next() == nil))
+        // The real queue, as the holder fills it with no window open, and the drop is logged.
+        var logged: [String] = []
+        SingleInstance.log = { logged.append($0) }
+        SingleInstance.queue(["--play"], written: t0.addingTimeInterval(-40))
+        SingleInstance.queue(["--world", "Local server"], written: t0)
+        checks.append(("a window opening late gets only the fresh request, and the dropped one is logged",
+                       SingleInstance.takePending() == LaunchCommand(world: "Local server")
+                           && SingleInstance.takePending() == nil
+                           && logged.count == 1 && logged[0].contains("dropped") && logged[0].contains("--play")))
+        SingleInstance.queue(["--play"], written: Date())
+        SingleInstance.terminating = true
+        let whileQuitting = SingleInstance.takePending()
+        SingleInstance.terminating = false
+        checks.append(("nothing queued is acted on once the app is quitting",
+                       whileQuitting == nil && SingleInstance.takePending() == LaunchCommand(play: true)))
+        var own = OwnCommand()
+        let firstOwn = own.take(["/x/FFXI-on-Mac", "--world", "HorizonXI", "--play"])
+        checks.append(("a launch's own --world/--play runs once per process, not per window",
+                       firstOwn == LaunchCommand(world: "HorizonXI", play: true)
+                           && own.take(["/x/FFXI-on-Mac", "--world", "HorizonXI", "--play"]) == nil))
 
         func probe(_ extra: [String]) -> Process? {
             guard let exe = Bundle.main.executableURL else { return nil }
@@ -1062,7 +1166,7 @@ enum Headless {
         // 1. A launcher is running (this process holds the lock and listens): a second launch
         //    hands over --world/--play and exits 0 once it is taken.
         var received: [[String]] = []
-        SingleInstance.listen(dir: dir, name: name) { received.append($0) }
+        SingleInstance.listen(dir: dir, name: name) { args, _ in received.append(args) }
         if let p = probe(["5", "--world", "Local server", "--play"]) {
             pump(until: { !p.isRunning })
             checks.append(("a second launch forwards --world/--play to the running one and exits 0",
@@ -1071,6 +1175,15 @@ enum Headless {
         } else {
             checks.append(("a second launch forwards --world/--play to the running one and exits 0", false))
         }
+        // Quitting: nothing more is taken, so the sender withdraws it and says nothing was done.
+        SingleInstance.terminating = true
+        let late = SingleInstance.writeRequest(["--play"], dir: dir)
+        received = []
+        pump(until: { false }, timeout: 1.5)
+        checks.append(("once the app is quitting, no request is taken",
+                       received.isEmpty && late.map { fm.fileExists(atPath: $0.path) } == true
+                           && late.map(SingleInstance.withdraw) == true && waiting().isEmpty))
+        SingleInstance.terminating = false
         // 2. The holder does not answer: nothing is done, the request is withdrawn, exit 1.
         SingleInstance.stopListening()
         if let p = probe(["1", "--play"]) {
@@ -1111,7 +1224,7 @@ enum Headless {
         case .unanswered: exit(1)
         case .primary(let fd):
             var took = 0
-            SingleInstance.listen(dir: dir, name: name) { _ in took += 1 }
+            SingleInstance.listen(dir: dir, name: name) { _, _ in took += 1 }
             let deadline = Date().addingTimeInterval(3)
             while Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
             SingleInstance.stopListening()

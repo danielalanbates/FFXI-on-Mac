@@ -92,7 +92,12 @@ enum LiveClients {
     /// Every Windows program counts, not only the loaders and injectors named above:
     /// `Credentials.fixBootLoader` can boot any .exe in `bootloader/`, and a client whose name
     /// is unknown holds the wineserver just the same. Those are `other`; see `Client.knownLoader`.
-    static func parse(_ text: String) -> Snapshot {
+    ///
+    /// An `other` program counts only when `isOurs` says its executable is one of this
+    /// launcher's wine builds or the x87 sidecar (`OwnWine`), so a game running under another
+    /// wine install (XIV on Mac, CrossOver, Whisky) never holds this launcher's prefix up. The
+    /// default, used by self-tests that are not about this, takes every program as ours.
+    static func parse(_ text: String, isOurs: (pid_t) -> Bool = { _ in true }) -> Snapshot {
         var snap = Snapshot()
         for raw in text.split(whereSeparator: \.isNewline) {
             let fields = raw.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
@@ -114,7 +119,7 @@ enum LiveClients {
             snap.wine.insert(pid)
             let injecting = isInjector(program)
             let known = injecting || isLoader(program)
-            if !known, isWineSystemProgram(program) { continue }
+            if !known, isWineSystemProgram(program) || !isOurs(pid) { continue }
             var host = ""
             var bootFile = ""
             let rest = tokens[(at + 1)...]
@@ -139,19 +144,28 @@ enum LiveClients {
     /// word, quotes removed, so `"Z:\Volumes\x10\Video Games\Eden\Ashita\injector.exe" eden.xml`
     /// is two words, not four. (wine's backslash-escaped quotes are not handled; no path or
     /// profile this launcher starts has one.)
+    ///
+    /// Only a quote at the start of a word opens a run; anywhere else it is an ordinary
+    /// character. A run that is never closed means the quotes were not wine's (a password
+    /// such as `ab"c` or `"abc`), and the whole line is split on spaces alone, so such a
+    /// password can never swallow a later `--server` into one word.
     static func tokenize(_ command: String) -> [String] {
         var out: [String] = []
         var word = ""
         var quoted = false
         var started = false
         for ch in command {
-            if ch == "\"" { quoted.toggle(); started = true; continue }
+            if ch == "\"", quoted { quoted = false; continue }
+            if ch == "\"", !started { quoted = true; started = true; continue }
             if ch == " " || ch == "\t", !quoted {
                 if started { out.append(word) }
                 word = ""; started = false
                 continue
             }
             word.append(ch); started = true
+        }
+        if quoted {
+            return command.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
         }
         if started { out.append(word) }
         return out
@@ -215,7 +229,20 @@ enum LiveClients {
         guard (try? p.run()) != nil else { return Snapshot() }
         let data = out.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
-        return parse(String(decoding: data, as: UTF8.self))
+        let own = OwnWine.current()
+        return parse(String(decoding: data, as: UTF8.self),
+                     isOurs: { own.owns(executable: executablePath(of: $0)) })
+    }
+
+    /// The file a process is running, as the kernel has it. Not `ps -o comm`: wine rewrites
+    /// its argv, so for a Windows program comm is `.\bootloader\horizon-loader.exe` or
+    /// `C:\windows\system32\services.exe`, while this is `…/wine-coop/wine/lib/wine/
+    /// x86_64-unix/wine` (read both on the live client, 2026-09-26). nil when the process is
+    /// gone or not this user's.
+    static func executablePath(of pid: pid_t) -> String? {
+        var buf = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        let n = proc_pidpath(pid, &buf, UInt32(buf.count))
+        return n > 0 ? String(cString: buf) : nil
     }
 
     /// Every client, injector and other Windows program, by host (injectors and hostless
@@ -246,6 +273,56 @@ enum LiveClients {
             }
         }
         return nil
+    }
+}
+
+/// The wine builds this launcher runs clients with: the patched wine (`X87Sidecar.patchedWine`,
+/// at any of the places it is looked for) and the wrapper's own `SharedSupport/wine`, each
+/// with its symlinks resolved (`/Volumes/Games/FFXI/wine-coop` is a link into Application
+/// Support). A Windows program's executable is the wine binary under one of these roots
+/// (`wine/lib/wine/x86_64-unix/wine`, the preloader), or the x87 sidecar wrapping it.
+struct OwnWine: Equatable {
+    /// Resolved folders, each ending in "/".
+    let roots: [String]
+
+    init(roots: [String]) {
+        self.roots = Array(Set(roots.flatMap { r -> [String] in
+            let dir = r.hasSuffix("/") ? String(r.dropLast()) : r
+            return [dir, OwnWine.resolve(dir)].map { $0 + "/" }
+        })).sorted()
+    }
+
+    func owns(executable: String?) -> Bool {
+        guard let e = executable, !e.isEmpty else { return false }
+        let path = OwnWine.resolve(e)
+        if (path as NSString).lastPathComponent.lowercased().hasPrefix("x87sidecar") { return true }
+        return roots.contains { path.hasPrefix($0) || e.hasPrefix($0) }
+    }
+
+    /// realpath, or the path as given when it does not exist (a volume not mounted).
+    static func resolve(_ path: String) -> String {
+        guard let r = realpath(path, nil) else { return (path as NSString).standardizingPath }
+        defer { free(r) }
+        return String(cString: r)
+    }
+
+    private static let patchedRoots: [String] = X87Sidecar.patchedWineCandidates.map {
+        URL(fileURLWithPath: $0).deletingLastPathComponent().deletingLastPathComponent().path
+    }
+    /// Scans run on and off the main actor.
+    private static let cacheLock = NSLock()
+    private static var cache: (wrapper: String?, own: OwnWine)?
+
+    /// This launcher's builds, from the remembered install (read from defaults only, so no
+    /// volume is touched to find it). Cached until the remembered wrapper changes.
+    static func current() -> OwnWine {
+        let wrapper = Install.rememberedWrapper()?.path
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if let c = cache, c.wrapper == wrapper { return c.own }
+        let own = OwnWine(roots: patchedRoots + (wrapper.map { [$0 + "/Contents/SharedSupport/wine"] } ?? []))
+        cache = (wrapper, own)
+        return own
     }
 }
 

@@ -40,13 +40,15 @@ struct LaunchCommand: Equatable {
 ///     the request, and only files in this user's own Application Support, owned by this user,
 ///     are read);
 ///  3. waits up to five seconds for the holder to take the file (it deletes it), activates the
-///     holder, and exits 0. Unanswered, it takes the lock itself if the holder has since quit,
-///     and otherwise exits 1 saying so.
+///     holder, and exits 0. Unanswered, it withdraws the file; if the file is already gone the
+///     holder took it after all (exit 0). Otherwise it takes the lock itself if the holder has
+///     since quit, and else exits 1 saying so.
 ///
 /// The holder registers for the notification and drains the folder once at start-up, so a
 /// request written between the flock and the registration is not lost. A request older than
 /// `maxRequestAge` is thrown away unread: a `--play` from a launch that gave up must not start
-/// a game minutes later.
+/// a game minutes later. The same age limit holds after a request is taken: one no window has
+/// acted on by then is dropped and logged. Once the app is quitting nothing more is taken.
 ///
 /// A launcher from before this existed holds no lock. One is recognised by bundle id or by
 /// executable path and, since it cannot take a request, this launch activates it and exits
@@ -120,6 +122,12 @@ enum SingleInstance {
     /// sender's acknowledgement). Stale ones, and any file not owned by this user or readable
     /// by anyone else, are deleted unread.
     static func takeRequests(dir: URL = defaultDir, now: Date = Date()) -> [[String]] {
+        takeDatedRequests(dir: dir, now: now).map(\.args)
+    }
+
+    /// `takeRequests`, with when each was written: a taken request still expires
+    /// `maxRequestAge` after that (`PendingRequests`).
+    static func takeDatedRequests(dir: URL = defaultDir, now: Date = Date()) -> [(written: Date, args: [String])] {
         let fm = FileManager.default
         let reqs = requestsDir(dir)
         guard let names = try? fm.contentsOfDirectory(atPath: reqs.path) else { return [] }
@@ -138,7 +146,15 @@ enum SingleInstance {
                   let args = obj["args"] as? [String] else { continue }
             found.append((date, args))
         }
-        return found.sorted { $0.0 < $1.0 }.map(\.1)
+        return found.sorted { $0.0 < $1.0 }.map { (written: $0.0, args: $0.1) }
+    }
+
+    /// Take back a request nobody took in time. False when it was already gone: the holder
+    /// took it between the last look and this delete, so it *was* handed over, and this launch
+    /// must say so rather than "nothing was done" (or become a second launcher).
+    static func withdraw(_ request: URL) -> Bool {
+        if unlink(request.path) == 0 { return true }
+        return errno != ENOENT
     }
 
     /// Poll until `request` has been taken, or `timeout` runs out.
@@ -171,8 +187,9 @@ enum SingleInstance {
         guard let request = writeRequest(command.arguments, dir: dir) else { return .unanswered }
         DistributedNotificationCenter.default().postNotificationName(name, object: nil, userInfo: nil,
                                                                      deliverImmediately: true)
-        if waitForTaken(request, timeout: timeout) { return .forwarded(holder: holderPID(dir: dir)) }
-        try? FileManager.default.removeItem(at: request)
+        if waitForTaken(request, timeout: timeout) || !withdraw(request) {
+            return .forwarded(holder: holderPID(dir: dir))
+        }
         // The holder may have quit while this waited; then this launch is the launcher.
         if let fd = claim(dir: dir) { return .primary(fd: fd) }
         return .unanswered
@@ -241,11 +258,38 @@ enum SingleInstance {
     // MARK: - Receiving
 
     /// Requests taken but not yet acted on, oldest first. A window takes them in turn
-    /// (`takePending`), so with no window open they wait for one.
-    @MainActor private(set) static var pending: [LaunchCommand] = []
+    /// (`takePending`). One that no window has acted on `maxRequestAge` after it was written
+    /// is dropped and logged: a `--play` must never start a game long after it was asked for,
+    /// for instance when a window opens minutes later.
+    @MainActor private(set) static var pending = PendingRequests()
 
-    @MainActor static func takePending() -> LaunchCommand? {
-        pending.isEmpty ? nil : pending.removeFirst()
+    /// Where a dropped request is reported: the launcher log (there may be no window to show it).
+    @MainActor static var log: (String) -> Void = { Runner.appendToLogFile($0) }
+
+    /// The next request a window may act on, or nil. Expired ones are dropped first.
+    @MainActor static func takePending(now: Date = Date()) -> LaunchCommand? {
+        guard !terminating else { return nil }
+        expirePending(now: now)
+        return pending.next()
+    }
+
+    @MainActor static func expirePending(now: Date = Date()) {
+        for (cmd, written) in pending.expire(now: now, maxAge: maxRequestAge) {
+            log("!! request (\(cmd.arguments.joined(separator: " "))) from another launch dropped: no window "
+                + "acted on it within \(Int(maxRequestAge)) s of \(written.formatted(date: .omitted, time: .standard))")
+        }
+    }
+
+    /// Set once the app has been asked to quit: nothing more is taken, so a launch that hands a
+    /// request over now sees it untaken, withdraws it and says nothing was done. Cleared if the
+    /// quit is cancelled.
+    @MainActor static var terminating = false
+
+    /// This process's own `--world`/`--play`, handed out once per process. A window created
+    /// later (Dock reopen after the last one was closed) must not play it again.
+    @MainActor private static var own = OwnCommand()
+    @MainActor static func takeOwnCommand(_ args: [String] = CommandLine.arguments) -> LaunchCommand? {
+        own.take(args)
     }
 
     private static var observer: NSObjectProtocol?
@@ -254,13 +298,16 @@ enum SingleInstance {
     /// Take requests when told to, once a second in case a notification is lost, and once now
     /// for any written before this was listening.
     @MainActor static func listen(dir: URL = defaultDir, name: Notification.Name = notificationName,
-                                  onRequest: @escaping @MainActor ([String]) -> Void = queue) {
+                                  onRequest: @escaping @MainActor ([String], Date) -> Void = queue) {
         observer = DistributedNotificationCenter.default().addObserver(forName: name, object: nil,
                                                                       queue: .main) { _ in
             Task { @MainActor in drain(dir: dir, onRequest: onRequest) }
         }
         poll = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
-            Task { @MainActor in drain(dir: dir, onRequest: onRequest) }
+            Task { @MainActor in
+                drain(dir: dir, onRequest: onRequest)
+                expirePending()
+            }
         }
         drain(dir: dir, onRequest: onRequest)
     }
@@ -272,20 +319,47 @@ enum SingleInstance {
         poll = nil
     }
 
-    @MainActor private static func drain(dir: URL, onRequest: @MainActor ([String]) -> Void) {
-        for args in takeRequests(dir: dir) { onRequest(args) }
+    @MainActor private static func drain(dir: URL, onRequest: @MainActor ([String], Date) -> Void) {
+        guard !terminating else { return }
+        for r in takeDatedRequests(dir: dir) { onRequest(r.args, r.written) }
     }
 
     /// The real launcher's handler: queue it, come to the front, and tell the windows.
-    @MainActor static func queue(_ args: [String]) {
-        pending.append(LaunchCommand(args))
-        if NSApp != nil {
-            NSApp.activate(ignoringOtherApps: true)
-            if let w = NSApp.windows.first(where: { $0.canBecomeMain }) {
-                if w.isMiniaturized { w.deminiaturize(nil) }
-                w.makeKeyAndOrderFront(nil)
-            }
-        }
+    @MainActor static func queue(_ args: [String], written: Date) {
+        pending.add(LaunchCommand(args), written: written)
+        if NSApp != nil { LauncherDelegate.showMainWindow() }
         NotificationCenter.default.post(name: arrived, object: nil)
+    }
+}
+
+/// Taken requests waiting for a window, each with when it was written. Kept apart from the
+/// window and the clock so the self-test can drive it.
+struct PendingRequests {
+    private(set) var items: [(command: LaunchCommand, written: Date)] = []
+
+    mutating func add(_ command: LaunchCommand, written: Date) {
+        items.append((command, written))
+    }
+
+    /// Drop and return every request written more than `maxAge` before `now`.
+    mutating func expire(now: Date, maxAge: TimeInterval) -> [(command: LaunchCommand, written: Date)] {
+        let old = items.filter { now.timeIntervalSince($0.written) > maxAge }
+        items.removeAll { now.timeIntervalSince($0.written) > maxAge }
+        return old
+    }
+
+    mutating func next() -> LaunchCommand? {
+        items.isEmpty ? nil : items.removeFirst().command
+    }
+}
+
+/// A launch's own `--world`/`--play` runs once per process, however many windows are created.
+struct OwnCommand {
+    private(set) var taken = false
+
+    mutating func take(_ args: [String]) -> LaunchCommand? {
+        guard !taken else { return nil }
+        taken = true
+        return LaunchCommand(args)
     }
 }
