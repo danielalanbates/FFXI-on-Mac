@@ -333,6 +333,31 @@ enum Credentials {
         return nil
     }
 
+    /// The `--server` the profile's boot command really passes the loader, which is what a
+    /// running client is filed under. `apply` rewrites it only when a user and password are set,
+    /// so it can differ from the world's Host field.
+    static func bootServer(in install: Install, profile: String) -> String? {
+        let name = install.bootProfileName(profile)
+        guard let text = readFile(at: install.gameDir.appendingPathComponent("config/boot/\(name)"))
+        else { return nil }
+        var command: String?
+        if name.hasSuffix(".xml") {
+            command = xmlSetting("boot_command", in: text)
+        } else {
+            for raw in TextFile.lines(of: text) {
+                let t = raw.trimmingCharacters(in: .whitespaces)
+                guard !t.hasPrefix(";"), t.hasPrefix("command"), let eq = t.firstIndex(of: "=") else { continue }
+                command = String(t[t.index(after: eq)...]); break
+            }
+        }
+        let tokens = (command ?? "").split(separator: " ").map(String.init)
+        for (n, t) in tokens.enumerated() {
+            if t == "--server", n + 1 < tokens.count { return tokens[n + 1] }
+            if t.hasPrefix("--server=") { return String(t.dropFirst("--server=".count)) }
+        }
+        return nil
+    }
+
     /// Rewrite the `command = ...` line of the Ashita boot profile with these credentials.
     /// Returns false if the profile is missing or unwritable.
     @discardableResult

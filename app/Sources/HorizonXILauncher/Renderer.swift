@@ -111,6 +111,82 @@ enum RendererSetup {
     /// measured 5.1 -> 7.9 fps at the same screen, with no visual change.
     static let maxVersionGL: UInt32 = 0x0004_0001
 
+    /// What `apply` may do right now. Every client shares this prefix, and changing a renderer
+    /// means `wineserver -k`, which kills whatever is already playing.
+    enum Step: Equatable {
+        /// Nothing is running: stop the wineserver and rewrite registry and DLLs.
+        case stopAndApply
+        /// A client is running and the prefix already has this renderer: leave it alone.
+        case skip
+        case refuse(String)
+    }
+
+    static let refuseChangeMessage =
+        "stop the other world first, the renderer cannot change under a running client"
+
+    /// `current` nil means the prefix's renderer could not be read. A client running on an
+    /// unknown renderer is still not worth killing, so that is a skip as well.
+    static func step(for requested: Renderer, current: Renderer?, clientsLive: Bool) -> Step {
+        guard clientsLive else { return .stopAndApply }
+        if let c = current, c != requested {
+            return .refuse("\(requested.title) was asked for but the running world uses \(c.title): "
+                           + refuseChangeMessage)
+        }
+        return .skip
+    }
+
+    /// The renderer a prefix is set up for, read from its user.reg as `apply` wrote it.
+    static func current(_ install: Install) -> Renderer? {
+        Credentials.readFile(at: install.prefix.appendingPathComponent("user.reg"))
+            .flatMap(renderer(fromUserReg:))
+    }
+
+    static func renderer(fromUserReg text: String) -> Renderer? {
+        var section = ""
+        var d3dNative = false
+        var key: String?
+        for raw in TextFile.lines(of: text) {
+            let t = raw.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("[") {
+                section = String(t.prefix { $0 != "]" }.dropFirst()).lowercased()
+                continue
+            }
+            let v = t.lowercased()
+            if section == #"software\\wine\\dlloverrides"#,
+               v.hasPrefix(#""*d3d8"="native"#) || v.hasPrefix(#""d3d8"="native"#) {
+                d3dNative = true
+            }
+            if section == #"software\\wine\\direct3d"#, v.hasPrefix(#""renderer"=""#) {
+                key = String(v.dropFirst(#""renderer"=""#.count).prefix { $0 != "\"" })
+            }
+        }
+        if d3dNative { return .metal }
+        switch key {
+        case "vulkan": return .vulkan
+        case "gl": return .openGL
+        default: return nil
+        }
+    }
+
+    /// The file half of `apply` for a `.skip`: put the DXVK shim beside this world's own client
+    /// if it is not there yet. No registry write, no wineserver.
+    static func ensureFiles(_ renderer: Renderer, for install: Install, log: (String) -> Void) {
+        guard renderer.needsDXVK,
+              let d3d8to9 = Bundle.main.url(forResource: "d3d8to9", withExtension: "dll"),
+              let dxvk = Bundle.main.url(forResource: "dxvk-1.10.3-x32-d3d9-horizonxi", withExtension: "dll")
+        else { return }
+        let fm = FileManager.default
+        var placed = 0
+        for dir in dllDirs(install) where fm.fileExists(atPath: dir.path) {
+            for (src, name) in [(d3d8to9, "d3d8.dll"), (dxvk, "d3d9.dll")] {
+                let dst = dir.appendingPathComponent(name)
+                guard !fm.contentsEqual(atPath: src.path, andPath: dst.path) else { continue }
+                replace(src, at: dst); placed += 1
+            }
+        }
+        if placed > 0 { log("renderer: placed \(placed) DXVK DLLs beside this world's client") }
+    }
+
     static func apply(_ renderer: Renderer, to install: Install, log: (String) -> Void) {
         stopWineserver(install)
 

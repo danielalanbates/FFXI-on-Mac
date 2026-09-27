@@ -96,8 +96,12 @@ enum Guide {
 
     /// Called on every launch. Never fatal: if any part fails the game still starts without
     /// the guide, exactly as it did before.
+    ///
+    /// `othersLive`: another client shares this game folder right now. Its addons stay on disk
+    /// (it may have them loaded); only this world's load line is taken out.
     static func prepare(_ install: Install, enabled: Bool, policy: AddonPolicy,
-                        profile: String = "horizonxi.ini", log: (String) -> Void) {
+                        profile: String = "horizonxi.ini", othersLive: Bool = false,
+                        log: (String) -> Void) {
         let fm = FileManager.default
         let script = scriptName(in: install, profile: profile)
         let scripts = install.gameDir.appendingPathComponent("scripts/\(script)")
@@ -107,7 +111,10 @@ enum Guide {
         // Server rules first: scrub leftovers from older manual installs or prior launcher
         // builds so an allowlist world never carries Vanaguide into a session.
         guard allowed(by: policy) else {
-            if fm.fileExists(atPath: dest.path) { try? fm.removeItem(at: dest) }
+            if fm.fileExists(atPath: dest.path) {
+                if othersLive { log("==> vanaguide: addons/\(addonDirName) kept on disk — another world is running") }
+                else { try? fm.removeItem(at: dest) }
+            }
             if removeLoadLine(from: scripts) || enabled {
                 log("==> vanaguide: not allowed here — this world runs an addon allowlist and "
                     + "Vanaguide is not on it")
@@ -116,7 +123,7 @@ enum Guide {
         }
 
         guard enabled else {
-            let removedAddon = fm.fileExists(atPath: dest.path)
+            let removedAddon = !othersLive && fm.fileExists(atPath: dest.path)
             if removedAddon { try? fm.removeItem(at: dest) }
             if removeLoadLine(from: scripts) || removedAddon { log("==> vanaguide: off") }
             return
@@ -127,10 +134,15 @@ enum Guide {
             return
         }
 
-        do { try AddonInstaller.replaceDirectory(at: dest, with: src, preserving: ["data/nav"], fileManager: fm) }
-        catch {
-            log("==> vanaguide: could not install the addon — \(error.localizedDescription)")
-            return
+        // Replacing swaps the folder out from under a client that has it loaded.
+        if othersLive, isCompleteAddon(at: dest, fileManager: fm) {
+            log("==> vanaguide: another world is running; using the copy already installed")
+        } else {
+            do { try AddonInstaller.replaceDirectory(at: dest, with: src, preserving: ["data/nav"], fileManager: fm) }
+            catch {
+                log("==> vanaguide: could not install the addon — \(error.localizedDescription)")
+                return
+            }
         }
 
         addLoadLine(to: scripts)

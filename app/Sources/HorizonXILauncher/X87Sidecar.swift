@@ -32,15 +32,18 @@ enum X87Sidecar {
     /// reaches "Successfully logged in", prints "Closing..." a second later and exits (it starts
     /// Ashita-cli "in experimental wow64 mode"), while this wine runs on indefinitely. So this is
     /// the launch wine whenever it is present, sidecar or no sidecar. See docs/WINE-BUILD.md.
+    /// Where the patched wine is looked for, in order. `OwnWine` counts a Windows program
+    /// running under any of them as this launcher's.
+    static let patchedWineCandidates = [
+        "/Volumes/Games/FFXI/wine-coop/wine/bin/wine",
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/BatesAI/ffxi-runtime/wine-coop/wine/bin/wine").path,
+        "/Volumes/x10/Video Games/Mac/FFXI/wine-coop/wine/bin/wine",
+        "/Volumes/x10/Daniel Backup/Mac Offload/ffxi-runtime/wine-coop/wine/bin/wine"
+    ]
+
     static func patchedWine() -> URL? {
-        let candidates = [
-            "/Volumes/Games/FFXI/wine-coop/wine/bin/wine",
-            FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/BatesAI/ffxi-runtime/wine-coop/wine/bin/wine").path,
-            "/Volumes/x10/Video Games/Mac/FFXI/wine-coop/wine/bin/wine",
-            "/Volumes/x10/Daniel Backup/Mac Offload/ffxi-runtime/wine-coop/wine/bin/wine"
-        ]
-        for p in candidates {
+        for p in patchedWineCandidates {
             if FileManager.default.isExecutableFile(atPath: p) {
                 return URL(fileURLWithPath: p)
             }
