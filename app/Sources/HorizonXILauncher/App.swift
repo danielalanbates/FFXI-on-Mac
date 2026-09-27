@@ -22,7 +22,12 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
 @main
 struct HorizonXILauncherApp: App {
     @NSApplicationDelegateAdaptor(LauncherDelegate.self) private var delegate
-    init() { Headless.runIfAsked() }
+    init() {
+        Headless.runIfAsked()
+        // Before any window, scan or file: a second launch hands its --world/--play to the
+        // running launcher and exits here. See SingleInstance.
+        SingleInstance.enforce()
+    }
 
     var body: some Scene {
         WindowGroup("FFXI on Mac") {
@@ -113,6 +118,10 @@ struct ContentView: View {
     /// One update attempt per Play press chain; a second Play retries.
     @State private var updateChecked = false
     @State private var scanning = false
+    /// The start-up task has handled this launch's own --world/--play; handed-over requests
+    /// may run from now on. See `runForwarded`.
+    @State private var commandsReady = false
+    @State private var forwardRunning = false
     @State private var showSetup = false
     // Starts open when FFXI_ON_MAC_SHOW_SIGNUPS=1, so this project can screenshot the expanded
     // list without driving a synthetic click into the window (see docs/SERVERS-WORKLOG.md).
@@ -182,6 +191,11 @@ struct ContentView: View {
         .onReceive(Timer.publish(every: 120, on: .main, in: .common).autoconnect()) { _ in
             Task { await feeds.refreshPopulations() }
         }
+        // A later launch's --world/--play, handed over by SingleInstance.
+        .onReceive(NotificationCenter.default.publisher(for: SingleInstance.arrived)) { _ in
+            guard commandsReady else { return }   // the start-up task takes them in turn
+            Task { await runForwarded() }
+        }
         // Clients started by another launcher are only visible to a process scan. One `ps`.
         .task { await sessions.refreshElsewhere(install: active, profiles: bootProfiles) }
         .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
@@ -202,30 +216,10 @@ struct ContentView: View {
             }
             // Press Play as soon as the install is known. For Shortcuts/Stream Deck users, and
             // for this project's own unattended tests (see docs/SERVERS-WORKLOG.md).
-            let args = CommandLine.arguments
-            if let w = args.firstIndex(of: "--world"), w + 1 < args.count,
-               let srv = store.servers.first(where: { $0.name == args[w + 1] }) { store.select(srv) }
-            if args.contains("--play") {
-                if selected == nil { runner.appendLine("!! --play: no install found yet") }
-                else if runner.running, store.selected?.allowsMultipleClients != true {
-                    runner.appendLine("!! --play: \(store.selected?.name ?? "this world") is already running in this launcher")
-                }
-                else {
-                    if remember, !user.isEmpty, pass.isEmpty { pass = Credentials.password(for: user, world: store.selected?.name ?? "") }
-                    await recheckAsync()
-                    if store.selected?.local == true {
-                        // A refresh may already be in flight from onAppear; either way, wait
-                        // for a verdict (bounded) rather than refusing on a status that is nil.
-                        await local.refreshAsync()
-                        for _ in 0..<60 where local.status == nil {
-                            try? await Task.sleep(nanoseconds: 500_000_000)
-                        }
-                    }
-                    runner.appendLine("==> --play: \(store.selected?.name ?? "?") as \(user.isEmpty ? "(no account)" : user)")
-                    play()
-                    if !notice.isEmpty { runner.appendLine("!! \(notice)") }
-                }
-            }
+            await handleCommand(LaunchCommand(CommandLine.arguments), forwarded: false)
+            // Then whatever other launches handed over while this one was starting.
+            commandsReady = true
+            await runForwarded()
             await refreshAsync()
             // Pick up each server's own published addon list, so the app's compiled-in snapshot
             // does not go stale between releases. Silent on failure -- offline must still launch.
@@ -1616,6 +1610,47 @@ struct ContentView: View {
 
     // MARK: - Actions
 
+    /// `--world` and `--play`, from this launch's own command line or handed over by a later
+    /// launch (SingleInstance): one path, so a forwarded --play goes through Sessions, the
+    /// duplicate rule and every gate exactly as its own would.
+    private func handleCommand(_ cmd: LaunchCommand, forwarded: Bool) async {
+        let from = forwarded ? " (handed over by another launch)" : ""
+        if let w = cmd.world {
+            if let srv = store.servers.first(where: { $0.name == w }) { store.select(srv) }
+            else if forwarded { runner.appendLine("!! --world\(from): no world named \(w)") }
+        }
+        guard cmd.play else { return }
+        if selected == nil { runner.appendLine("!! --play\(from): no install found yet") }
+        else if runner.running, store.selected?.allowsMultipleClients != true {
+            runner.appendLine("!! --play\(from): \(store.selected?.name ?? "this world") is already running in this launcher")
+        }
+        else {
+            if remember, !user.isEmpty, pass.isEmpty { pass = Credentials.password(for: user, world: store.selected?.name ?? "") }
+            await recheckAsync()
+            if store.selected?.local == true {
+                // A refresh may already be in flight from onAppear; either way, wait
+                // for a verdict (bounded) rather than refusing on a status that is nil.
+                await local.refreshAsync()
+                for _ in 0..<60 where local.status == nil {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                }
+            }
+            runner.appendLine("==> --play\(from): \(store.selected?.name ?? "?") as \(user.isEmpty ? "(no account)" : user)")
+            play()
+            if !notice.isEmpty { runner.appendLine("!! \(notice)") }
+        }
+    }
+
+    /// Act on every handed-over request, one at a time and in order.
+    private func runForwarded() async {
+        guard !forwardRunning else { return }
+        forwardRunning = true
+        defer { forwardRunning = false }
+        while let cmd = SingleInstance.takePending() {
+            await handleCommand(cmd, forwarded: true)
+        }
+    }
+
     private func play() {
         guard let i = active else { return }
         if runner.busy {
@@ -1749,17 +1784,21 @@ struct ContentView: View {
                          + "\u{203A} Update HorizonXI\u{2026} if you are actually turned away.")
         }
 
-        // The client was installed by HorizonXI and carries their logo in its own data. On any
-        // other world, show the stock title screen instead. See Branding.swift.
-        Branding.apply(stockBranding: Branding.wantsStockBranding(server), to: i)
-
-        if !user.isEmpty, !pass.isEmpty {
-            if !Credentials.apply(user: user, password: pass, to: i,
-                                  profile: server.bootProfile, server: server.host) {
-                notice = "Could not write config/boot/\(server.bootProfile) — launching with its existing account."
-                r.appendLine("!! " + notice)
-                if i.gameDir.path.hasPrefix("/Volumes/") {
-                    r.appendLine("i  Note: If external volume access is restricted by macOS, grant Full Disk Access to FFXI on Mac in System Settings › Privacy & Security › Full Disk Access.")
+        // Written only once `launch` holds the lock and its gate has passed again, so a launch
+        // refused there (another launcher got in first) rewrites nothing another world is using.
+        let account = (user: user, pass: pass)
+        let writeShared = {
+            // The client was installed by HorizonXI and carries their logo in its own data. On
+            // any other world, show the stock title screen instead. See Branding.swift.
+            Branding.apply(stockBranding: Branding.wantsStockBranding(server), to: i)
+            if !account.user.isEmpty, !account.pass.isEmpty {
+                if !Credentials.apply(user: account.user, password: account.pass, to: i,
+                                      profile: server.bootProfile, server: server.host) {
+                    notice = "Could not write config/boot/\(server.bootProfile) — launching with its existing account."
+                    r.appendLine("!! " + notice)
+                    if i.gameDir.path.hasPrefix("/Volumes/") {
+                        r.appendLine("i  Note: If external volume access is restricted by macOS, grant Full Disk Access to FFXI on Mac in System Settings › Privacy & Security › Full Disk Access.")
+                    }
                 }
             }
         }
@@ -1771,7 +1810,7 @@ struct ContentView: View {
         if let why = r.launch(i, perf: effective, profile: server.bootProfile, useX87: server.x87,
                               world: server.name, host: server.host,
                               maxClients: server.maxClients, msyncAllowed: server.msync,
-                              addonPolicy: addonPolicy) {
+                              addonPolicy: addonPolicy, beforeLaunch: writeShared) {
             notice = why
         }
     }

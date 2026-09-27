@@ -595,9 +595,10 @@ final class Runner: ObservableObject {
         var sync = MultiWorld.SyncMode.off
     }
 
-    /// Everything that would refuse a launch, checked before anything is written: the caller
-    /// runs this before touching shared client files (pivot.ini, the boot profile), and
-    /// `launch` runs it again.
+    /// Everything that would refuse a launch, checked before anything is written. The caller
+    /// runs it first, for an early answer; `launch` runs it again under the launch lock and only
+    /// then makes the caller's writes to shared client files (pivot.ini, the boot profile; its
+    /// `beforeLaunch`).
     /// `sync` is the mode this world would like; `msyncAllowed` is false for a world whose
     /// client dies with msync on (Server.msync).
     func gate(_ install: Install, renderer: Renderer, sync: MultiWorld.SyncMode = .off,
@@ -639,7 +640,8 @@ final class Runner: ObservableObject {
     func launch(_ install: Install, perf: PerfSettings, profile: String = "horizonxi.ini",
                 useX87: Bool = true, world: String = "", host: String = "",
                 maxClients: Int = 1, msyncAllowed: Bool = true,
-                addonPolicy: AddonPolicy = .unknown) -> String? {
+                addonPolicy: AddonPolicy = .unknown,
+                beforeLaunch: () -> Void = {}) -> String? {
         let worldName = world.isEmpty ? "Vana'diel" : world
         guard let lock = LaunchLock.acquire() else {
             let why = "Another game is still starting, or the client is being repaired or updated "
@@ -657,6 +659,11 @@ final class Runner: ObservableObject {
             appendLine("!! " + why)
             return why
         }
+        // The caller's writes to shared client files (pivot.ini branding, the boot profile's
+        // account line), now that the lock is held and the gate has passed: a refused launch
+        // rewrites nothing another world is using. Before `hostKey`, which reads the `--server`
+        // this writes.
+        beforeLaunch()
         let clientsLive = g.clientsLive
         let rendererStep = g.rendererStep
         let live = g.snapshot.byHost
@@ -839,10 +846,15 @@ final class Runner: ObservableObject {
     /// been started again.
     private var launchGeneration = 0
 
+    /// Other sessions' groups: never this session's to watch or stop.
+    private var otherGroups: Set<pid_t> {
+        Set(Runner.playing.filter { $0.key != ObjectIdentifier(self) }.values.compactMap(\.group))
+    }
+
     /// This session's client pids (injector, loader, sidecar), and nobody else's.
-    private func sessionPIDs() -> [pid_t] {
-        let others = Set(Runner.playing.filter { $0.key != ObjectIdentifier(self) }.values.compactMap(\.group))
-        let snap = LiveClients.snapshot()
+    private func sessionPIDs(in scanned: LiveClients.Snapshot? = nil) -> [pid_t] {
+        let others = otherGroups
+        let snap = scanned ?? LiveClients.snapshot()
         if !groupHeldLoader, MultiWorld.groupHoldsLoader(sessionGroup, in: snap) { groupHeldLoader = true }
         return MultiWorld.sessionPIDs(group: sessionGroup, groupHeldLoader: groupHeldLoader, host: hostKey,
                                       preexisting: preexistingPIDs, otherGroups: others, in: snap)
@@ -923,21 +935,33 @@ final class Runner: ObservableObject {
     /// Ends this session's client only. The wineserver is shared by every world in the prefix,
     /// so it is stopped only once no client at all is left.
     func stop(_ install: Install) {
-        var pids = running ? sessionPIDs() : []
-        if let pid = gamePID, Detach.isAlive(pid) { pids.append(pid) }
-        let mine = Set(pids)
-        for pid in mine { kill(pid, SIGTERM) }
+        let snap = LiveClients.snapshot()
+        var pids = running ? sessionPIDs(in: snap) : []
+        // The injector: it exits seconds after launch and its pid is cleared then, but until
+        // that is noticed it may already belong to somebody else. `signalable` checks.
+        if let pid = gamePID { pids.append(pid) }
+        // Only what is provably still this session's: a wine process in its group (or, with no
+        // group, a loader of its host in no other session's group). pid -> group.
+        let mine = MultiWorld.signalable(pids, group: sessionGroup, host: hostKey,
+                                         otherGroups: otherGroups, in: snap)
+        for pid in mine.keys { kill(pid, SIGTERM) }
         proc?.terminate()
-        if !mine.isEmpty { appendLine("==> stopping \(currentWorld) (pid \(mine.sorted().map(String.init).joined(separator: ",")))") }
+        if !mine.isEmpty { appendLine("==> stopping \(currentWorld) (pid \(mine.keys.sorted().map(String.init).joined(separator: ",")))") }
         let generation = launchGeneration
         Task.detached {
             // wine usually honours SIGTERM within a second or two; a client wedged in a
             // cutscene or a dead socket may not, and a Stop that does nothing is worse.
             for _ in 0..<16 {
-                if !mine.contains(where: { Detach.isAlive($0) }) { break }
+                if !mine.keys.contains(where: { Detach.isAlive($0) }) { break }
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
-            for pid in mine where Detach.isAlive(pid) { kill(pid, SIGKILL) }
+            // Eight seconds on, check again that each pid is still the same wine process in the
+            // same group before the signal that cannot be ignored.
+            let now = LiveClients.snapshot()
+            for (pid, group) in mine where Detach.isAlive(pid)
+                && MultiWorld.stillSignalable(pid, group: group, in: now) {
+                kill(pid, SIGKILL)
+            }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             // Decided on the main actor, where no launch of this launcher can be half-way, and
             // under the launch lock, so no other launcher's can either. A launch that began
@@ -1012,7 +1036,12 @@ final class Runner: ObservableObject {
                    + (sessionGroup.map { ", process group \($0)" } ?? "; process group unknown, tracking by host"))
         Task.detached {
             while Detach.isAlive(pid) { try? await Task.sleep(nanoseconds: 500_000_000) }
-            await MainActor.run { done(0) }
+            // The injector is gone and its pid is free for the system to hand to anything, so
+            // Stop must not signal it any more.
+            await MainActor.run { [weak self] in
+                if self?.gamePID == pid { self?.gamePID = nil }
+                done(0)
+            }
         }
         // Tail the file: poll is plenty (the pane is human-read), and unlike a pipe it cannot
         // block the writer.
@@ -1038,7 +1067,10 @@ final class Runner: ObservableObject {
         String(s.map { $0.isLetter || $0.isNumber ? $0 : "-" })
     }
 
-    /// The detached game's pid, for `stop`. Not a Process: it is not our child any more.
+    /// The detached injector's pid, for `stop`, until it exits (seconds after launch; the
+    /// client carries on in the loader). Not a Process: it is not our child any more. Cleared
+    /// when it exits, and `stop` signals it only while it is still a wine process in this
+    /// session's group (`MultiWorld.signalable`).
     private var gamePID: pid_t?
 
     private var tailTimer: DispatchSourceTimer?

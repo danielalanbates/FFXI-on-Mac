@@ -30,6 +30,8 @@ enum Headless {
             || a.contains("--selftest-guide-disabled")
             || a.contains("--selftest-narration-disabled")
             || a.contains("--selftest-multiworld")
+            || a.contains("--selftest-single-instance")
+            || a.contains("--selftest-single-instance-probe")
     }
 
     @MainActor static func runIfAsked() {
@@ -63,6 +65,18 @@ enum Headless {
         }
         if args.contains("--selftest-multiworld") {
             runMultiWorldSelfTest()
+        }
+        if let at = args.firstIndex(of: "--selftest-single-instance-probe") {
+            runSingleInstanceProbe(Array(args[(at + 1)...]))
+        }
+        if args.contains("--selftest-single-instance") {
+            runSingleInstanceSelfTest()
+        }
+        // A self-test this build does not have must not fall through to a window: self-tests
+        // are exempt from SingleInstance, so that would be a second launcher.
+        if let unknown = args.first(where: { $0.hasPrefix("--selftest-") }) {
+            FileHandle.standardError.write(Data("unknown self-test \(unknown)\n".utf8))
+            exit(2)
         }
         guard args.contains("--check") else { return }
         var only: String? = nil
@@ -766,6 +780,91 @@ enum Headless {
                            && MultiWorld.syncDecision(want: .off, running: .msync, msyncAllowed: true, world: "x").use == .msync
                            && MultiWorld.syncDecision(want: .msync, running: nil, msyncAllowed: true, world: "x").use == .msync))
 
+        // Quote-aware: wine quotes a program path with spaces, and a quoted word is one word.
+        checks.append(("tokenising keeps a quoted run as one word, quotes removed",
+                       LiveClients.tokenize("\"a b\" c \"\"  d") == ["a b", "c", "", "d"]))
+        let quoted = LiveClients.parse("""
+            91001 91000 "Z:\\Volumes\\x10\\Video Games\\Eden\\Ashita\\injector.exe" eden.xml
+            91011 91010 "Z:\\Volumes\\x10\\Video Games\\Eden\\Ashita\\ffxi-bootmod\\xiloader.exe" --server "PLAY.EDENXI.COM" --user x
+            91021 91020 Z:\\Volumes\\x10\\Video Games\\HorizonXI\\Ashita-cli.exe horizonxi.ini
+            91031 91030 /x/x87sidecar-coop --cooperative /x/wine "C:\\Program Files\\Eden\\injector.exe" "eden big.xml"
+            91041 91040 "C:\\Program Files\\HorizonXI\\bootloader\\horizon-loader.exe" --server play.horizonxi.com
+            91051 91050 /bin/echo "C:\\Games\\Video Games\\injector.exe" eden.xml
+            """).clients
+        func q(_ pid: pid_t) -> LiveClients.Client? { quoted.first { $0.pid == pid } }
+        checks.append(("a quoted injector path with spaces is an injector, with its boot profile",
+                       q(91001)?.injecting == true && q(91001)?.bootFile == "eden.xml"
+                           && q(91031)?.injecting == true && q(91031)?.bootFile == "eden big.xml"))
+        checks.append(("an unquoted Windows injector path with spaces is still an injector",
+                       q(91021)?.injecting == true && q(91021)?.bootFile == "horizonxi.ini"))
+        checks.append(("a quoted loader path with spaces is a loader, with its (quoted) --server",
+                       q(91011)?.host == "play.edenxi.com" && q(91011)?.injecting == false
+                           && q(91041)?.host == "play.horizonxi.com" && q(91041)?.other == false))
+        checks.append(("a Mac command that only mentions a quoted .exe is not a client", q(91051) == nil))
+
+        // Any Windows program holds the prefix, not only the loaders named in LiveClients.
+        // wine's own, as read with ps under the live wineserver on 2026-09-26 (trailing space
+        // and all), are not clients.
+        let wineOwn = LiveClients.parse("""
+            57821 57821 /Users/x/Library/Application Support/BatesAI/ffxi-runtime/wine-coop/wine/lib/wine/../../bin/wineserver
+            57827 57827 C:\\windows\\system32\\services.exe\u{20}
+            57836 57836 C:\\windows\\system32\\winedevice.exe\u{20}
+            57840 57840 C:\\windows\\system32\\plugplay.exe\u{20}
+            57847 57847 C:\\windows\\system32\\svchost.exe -k LocalServiceNetworkRestricted\u{20}
+            57851 57851 C:\\windows\\system32\\winedevice.exe\u{20}
+            57864 57864 C:\\windows\\system32\\rpcss.exe\u{20}
+            58006 58006 C:\\windows\\system32\\explorer.exe /desktop\u{20}
+            """)
+        checks.append(("wine's own programs are not clients: the last Stop may take the wineserver down",
+                       wineOwn.clients.isEmpty && !MultiWorld.clientsLive(wineOwn.clients, otherSessionsPlaying: 0)
+                           && MultiWorld.mayStopWineserver(wineOwn.clients, otherSessionsPlaying: 0, launchUnderWay: false)
+                           && wineOwn.wine.isSuperset(of: [57821, 57827, 58006])))
+        let mystery = LiveClients.parse("""
+            93001 93000 .\\\\bootloader\\\\mystery-loader.exe --user x
+            93002 93000 /x/x87sidecar-coop --cooperative /x/wine .\\\\bootloader\\\\mystery-loader.exe --user x
+            """)
+        checks.append(("a loader under an unknown name is live: no wineserver -k, renderer and sync gated",
+                       mystery.clients.map(\.pid) == [93001, 93002] && mystery.clients.allSatisfy(\.other)
+                           && MultiWorld.clientsLive(mystery.clients, otherSessionsPlaying: 0)
+                           && !MultiWorld.mayStopWineserver(mystery.clients, otherSessionsPlaying: 0, launchUnderWay: false)
+                           && !LiveClients.byHost(mystery.clients).isEmpty))
+        checks.append(("... but with no --server its world is unknown: not a duplicate, not in the Running list",
+                       refusal(horizon, mystery.clients) == nil
+                           && MultiWorld.elsewhere(mystery.clients, ownGroups: [], ownHostsWithoutGroup: []).isEmpty
+                           && !MultiWorld.groupHoldsLoader(93000, in: mystery)))
+        let mysteryWithHost = LiveClients.parse("95001 95000 C:\\Game\\mystery-loader.exe --server play.horizonxi.com\n")
+        checks.append(("an unknown program given --server is that world's loader",
+                       refusal(horizon, mysteryWithHost.clients)?.contains("95001") == true
+                           && MultiWorld.groupHoldsLoader(95000, in: mysteryWithHost)))
+        let lookalike = LiveClients.parse("""
+            94001 94000 C:\\Games\\explorer.exe
+            94011 94010 "C:\\Program Files\\Tools\\svchost.exe" -k x
+            """).clients
+        checks.append(("a game program sharing a wine program's name, outside C:\\windows, still counts",
+                       lookalike.map(\.pid) == [94001, 94011] && MultiWorld.clientsLive(lookalike, otherSessionsPlaying: 0)))
+
+        // Stop signals only what is provably still this session's.
+        let stopSnap = LiveClients.parse("""
+            96001 96000 /x/wine C:\\HorizonXI\\Ashita-cli.exe horizonxi.ini
+            96002 96000 .\\\\bootloader\\\\horizon-loader.exe --server 127.0.0.1
+            96003 96003 /usr/bin/vim notes.txt
+            96004 96000 /bin/sleep 5
+            97001 97000 .\\\\bootloader\\\\horizon-loader.exe --server 127.0.0.1
+            98001 98000 /x/wine C:\\Other\\Ashita-cli.exe other.ini
+            """)
+        checks.append(("Stop signals this session's wine processes, never a reused pid, a non-wine process or another session's",
+                       MultiWorld.signalable([96001, 96002, 96003, 96004, 97001, 98001, 99999], group: 96000,
+                                             host: "127.0.0.1", otherGroups: [97000], in: stopSnap)
+                           == [96001: 96000, 96002: 96000]))
+        checks.append(("with no group, Stop signals only its host's loaders outside other sessions' groups",
+                       MultiWorld.signalable([96002, 97001, 96003, 98001], group: nil, host: "127.0.0.1",
+                                             otherGroups: [97000], in: stopSnap) == [96002: 96000]))
+        let reused = LiveClients.parse("96002 96002 /usr/bin/vim notes.txt\n")
+        checks.append(("the SIGKILL re-check refuses a pid that is no longer the same wine process",
+                       MultiWorld.stillSignalable(96002, group: 96000, in: stopSnap)
+                           && !MultiWorld.stillSignalable(96002, group: 96000, in: reused)
+                           && !MultiWorld.stillSignalable(96002, group: 96000, in: LiveClients.Snapshot())))
+
         let lockFile = fm.temporaryDirectory.appendingPathComponent("hxi-multiworld-\(UUID().uuidString).lock")
         if let held = LaunchLock.acquire(at: lockFile) {
             let second = LaunchLock.acquire(at: lockFile)
@@ -901,5 +1000,123 @@ enum Headless {
         print("  i    live on this Mac: \(now.isEmpty ? "none" : Runner.describe(now))")
         print(failures == 0 ? "all checks passed" : "\(failures) FAILED")
         exit(failures == 0 ? 0 : 1)
+    }
+    /// docs/MULTI_WORLD.md, Single instance. Runs entirely in a temporary folder with a
+    /// notification name of its own, so it never talks to, detects or disturbs a launcher that
+    /// is open: the probes it starts are this binary with `--selftest-single-instance-probe`.
+    @MainActor private static func runSingleInstanceSelfTest() -> Never {
+        let fm = FileManager.default
+        var checks: [(String, Bool)] = []
+        let dir = fm.temporaryDirectory.appendingPathComponent("hxi-single-\(UUID().uuidString)", isDirectory: true)
+        let name = Notification.Name("org.batesai.horizonxi-on-mac.selftest-\(UUID().uuidString)")
+        let reqs = dir.appendingPathComponent("requests", isDirectory: true)
+        func waiting() -> [String] {
+            ((try? fm.contentsOfDirectory(atPath: reqs.path)) ?? []).filter { !$0.hasPrefix(".") }
+        }
+
+        let cmd = LaunchCommand(["/x/FFXI-on-Mac", "--world", "Local server", "--play", "-psn_0_1", "--junk"])
+        checks.append(("--world and --play are what is forwarded; anything else is not",
+                       cmd == LaunchCommand(world: "Local server", play: true)
+                           && cmd.arguments == ["--world", "Local server", "--play"]
+                           && LaunchCommand(["/x/FFXI-on-Mac"]).arguments.isEmpty))
+        checks.append(("self-tests and --check are exempt; --play and a plain open are not",
+                       SingleInstance.isExempt(["x", "--selftest-multiworld"]) && SingleInstance.isExempt(["x", "--check"])
+                           && !SingleInstance.isExempt(["x", "--play"]) && !SingleInstance.isExempt(["x"])))
+
+        let first = SingleInstance.claim(dir: dir)
+        let second = SingleInstance.claim(dir: dir)
+        checks.append(("the instance lock has one holder, which records its pid",
+                       first != nil && second == nil && SingleInstance.holderPID(dir: dir) == getpid()))
+        if let second { SingleInstance.release(second) }
+
+        let req = SingleInstance.writeRequest(["--play"], dir: dir)
+        let mode = req.flatMap { try? fm.attributesOfItem(atPath: $0.path)[.posixPermissions] as? NSNumber }?.intValue
+        let taken = SingleInstance.takeRequests(dir: dir)
+        checks.append(("a request is private to this user, taken once, and deleted as it is taken",
+                       mode == 0o600 && taken == [["--play"]] && SingleInstance.takeRequests(dir: dir).isEmpty
+                           && waiting().isEmpty))
+        if let old = SingleInstance.writeRequest(["--play"], dir: dir) {
+            try? fm.setAttributes([.modificationDate: Date().addingTimeInterval(-120)], ofItemAtPath: old.path)
+        }
+        if let open = SingleInstance.writeRequest(["--play"], dir: dir) {
+            try? fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: open.path)
+        }
+        checks.append(("a stale request, or one others could have written, is thrown away unread",
+                       SingleInstance.takeRequests(dir: dir).isEmpty && waiting().isEmpty))
+
+        func probe(_ extra: [String]) -> Process? {
+            guard let exe = Bundle.main.executableURL else { return nil }
+            let p = Process()
+            p.executableURL = exe
+            p.arguments = ["--selftest-single-instance-probe", dir.path, name.rawValue] + extra
+            p.standardOutput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+            return (try? p.run()) != nil ? p : nil
+        }
+        /// Keep this run loop turning (the listener's notification and timer) until done.
+        func pump(until done: () -> Bool, timeout: TimeInterval = 20) {
+            let deadline = Date().addingTimeInterval(timeout)
+            while !done(), Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+        }
+
+        // 1. A launcher is running (this process holds the lock and listens): a second launch
+        //    hands over --world/--play and exits 0 once it is taken.
+        var received: [[String]] = []
+        SingleInstance.listen(dir: dir, name: name) { received.append($0) }
+        if let p = probe(["5", "--world", "Local server", "--play"]) {
+            pump(until: { !p.isRunning })
+            checks.append(("a second launch forwards --world/--play to the running one and exits 0",
+                           !p.isRunning && p.terminationStatus == 0
+                               && received == [["--world", "Local server", "--play"]]))
+        } else {
+            checks.append(("a second launch forwards --world/--play to the running one and exits 0", false))
+        }
+        // 2. The holder does not answer: nothing is done, the request is withdrawn, exit 1.
+        SingleInstance.stopListening()
+        if let p = probe(["1", "--play"]) {
+            p.waitUntilExit()
+            checks.append(("unanswered, a second launch withdraws its request and exits 1 without taking over",
+                           p.terminationStatus == 1 && waiting().isEmpty))
+        } else {
+            checks.append(("unanswered, a second launch withdraws its request and exits 1 without taking over", false))
+        }
+        if let first { SingleInstance.release(first) }
+        // 3. Two launches at once, nothing running: exactly one becomes the launcher (exit 3,
+        //    having taken the other's request) and the other forwards to it (exit 0).
+        let racers = [probe(["5", "--play"]), probe(["5", "--play"])].compactMap { $0 }
+        racers.forEach { $0.waitUntilExit() }
+        checks.append(("two launches at once: one launcher, which takes the other's request",
+                       racers.count == 2 && racers.map(\.terminationStatus).sorted() == [0, 3]))
+
+        try? fm.removeItem(at: dir)
+        let failures = checks.filter { !$0.1 }.count
+        for (name, passed) in checks {
+            print("  \(passed ? "ok  " : "FAIL") \(name)")
+        }
+        print(failures == 0 ? "all checks passed" : "\(failures) FAILED")
+        exit(failures == 0 ? 0 : 1)
+    }
+
+    /// One launch, as `SingleInstance.enforce` would make it, against the self-test's folder:
+    /// `<dir> <notification name> <timeout s> [--world <w>] [--play]`. Exit 0 forwarded,
+    /// 1 unanswered, 3 became the launcher and took exactly one request in three seconds,
+    /// 4 became the launcher and took some other number, 2 bad arguments.
+    @MainActor private static func runSingleInstanceProbe(_ args: [String]) -> Never {
+        guard args.count >= 3, let timeout = TimeInterval(args[2]) else { exit(2) }
+        let dir = URL(fileURLWithPath: args[0], isDirectory: true)
+        let name = Notification.Name(args[1])
+        switch SingleInstance.claimOrForward(LaunchCommand(Array(args[3...])), dir: dir, name: name,
+                                             timeout: timeout) {
+        case .forwarded: exit(0)
+        case .unanswered: exit(1)
+        case .primary(let fd):
+            var took = 0
+            SingleInstance.listen(dir: dir, name: name) { _ in took += 1 }
+            let deadline = Date().addingTimeInterval(3)
+            while Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+            SingleInstance.stopListening()
+            SingleInstance.release(fd)
+            exit(took == 1 ? 3 : 4)
+        }
     }
 }

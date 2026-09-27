@@ -29,12 +29,26 @@ enum LiveClients {
         /// The profile's `--server` is the world the injector is starting. See
         /// `MultiWorld.refusal`.
         var bootFile: String = ""
+        /// A Windows program that is neither a loader or injector this file knows nor one of
+        /// wine's own (`wineSystemPrograms`): a loader under a name nobody listed, an installer,
+        /// a tool. It holds the wineserver like any client, so it counts wherever the question
+        /// is "is anything live in the prefix"; its world is known only if it was given
+        /// `--server`.
+        var other = false
+
+        /// A loader whose world can be read: a known loader, or any program given `--server`.
+        /// What the duplicate rule, the Running list and a session's group test go by.
+        var knownLoader: Bool { !injecting && !(other && host.isEmpty) }
     }
 
     struct Snapshot: Equatable {
         var clients: [Client] = []
         /// Every process on the Mac: pid -> process group.
         var groups: [pid_t: pid_t] = [:]
+        /// Every process running wine, the x87 sidecar, a wineserver or a Windows program,
+        /// wine's own included. Stop signals nothing that is not in here. See
+        /// `MultiWorld.signalable`.
+        var wine: Set<pid_t> = []
         /// Every wineserver, whatever prefix it serves. See `runningSyncMode`.
         var wineservers: [pid_t] = []
 
@@ -51,6 +65,16 @@ enum LiveClients {
                               "catseye-loader.exe", "pol.exe"]
     /// Ashita v4's and Eden's Ashita v3's.
     static let injectorNames = ["ashita-cli.exe", "injector.exe"]
+    /// wine's own programs, which run for as long as the wineserver does whether or not any
+    /// client is left, so they never count as one. Read on 2026-09-26 from `ps` under the live
+    /// wineserver serving a HorizonXI client: services.exe, winedevice.exe (two), plugplay.exe,
+    /// svchost.exe, rpcss.exe, explorer.exe, each `C:\windows\system32\<name>` and each the
+    /// leader of its own group. The rest are the ones wine starts on demand and leaves running
+    /// (tabtip, conhost, start, winemenubuilder). Only matched under `C:\windows\` (or with no
+    /// folder at all), so a game program that happens to share a name still counts.
+    static let wineSystemPrograms = ["services.exe", "explorer.exe", "winedevice.exe", "plugplay.exe",
+                                     "svchost.exe", "rpcss.exe", "tabtip.exe", "conhost.exe",
+                                     "start.exe", "winemenubuilder.exe"]
 
     /// `127.0.0.1` and `localhost` are the same world; hosts are case-insensitive.
     static func normalize(_ host: String) -> String {
@@ -61,9 +85,13 @@ enum LiveClients {
     /// `ps -axww -o pid=,pgid=,command=` output -> clients and every process's group.
     ///
     /// The x87 sidecar wraps the loader (`x87sidecar-coop --cooperative …/wine …loader.exe`),
-    /// so one client is usually two pids under one host. A line counts only when the loader is
-    /// the command itself or follows a wine/sidecar executable, which keeps a shell or grep that
-    /// merely mentions the name out of it.
+    /// so one client is usually two pids under one host. A line counts only when the Windows
+    /// program is the command itself or follows a wine/sidecar executable, which keeps a shell
+    /// or grep that merely mentions the name out of it.
+    ///
+    /// Every Windows program counts, not only the loaders and injectors named above:
+    /// `Credentials.fixBootLoader` can boot any .exe in `bootloader/`, and a client whose name
+    /// is unknown holds the wineserver just the same. Those are `other`; see `Client.knownLoader`.
     static func parse(_ text: String) -> Snapshot {
         var snap = Snapshot()
         for raw in text.split(whereSeparator: \.isNewline) {
@@ -75,29 +103,83 @@ enum LiveClients {
             let command = String(fields[2])
             if command == "wineserver" || command.hasSuffix("/wineserver") || command.contains("/wineserver -") {
                 snap.wineservers.append(pid)
+                snap.wine.insert(pid)
                 continue
             }
-            let tokens = command.split(separator: " ").map(String.init)
-            guard let at = tokens.firstIndex(where: { isLoader($0) || isInjector($0) }),
-                  at == 0 || tokens[..<at].contains(where: isLauncherOfLoader) else { continue }
-            let injecting = isInjector(tokens[at])
+            let tokens = tokenize(command)
+            guard let (at, program) = windowsProgram(in: tokens) else {
+                if tokens.contains(where: isLauncherOfLoader) { snap.wine.insert(pid) }
+                continue
+            }
+            snap.wine.insert(pid)
+            let injecting = isInjector(program)
+            let known = injecting || isLoader(program)
+            if !known, isWineSystemProgram(program) { continue }
             var host = ""
             var bootFile = ""
+            let rest = tokens[(at + 1)...]
             if injecting {
                 // `Ashita-cli.exe <profile>.ini` / `injector.exe <profile>.xml`, as Runner.launch runs it.
-                if at + 1 < tokens.count { bootFile = basename(tokens[at + 1]) }
+                if let f = rest.first { bootFile = basename(f) }
             } else {
-                for (n, t) in tokens.enumerated() {
+                for (n, t) in zip(rest.indices, rest) {
                     if t == "--server", n + 1 < tokens.count { host = tokens[n + 1]; break }
                     if t.hasPrefix("--server=") { host = String(t.dropFirst("--server=".count)); break }
                 }
             }
             snap.clients.append(Client(pid: pid, group: group, host: normalize(host), injecting: injecting,
-                                       bootFile: bootFile))
+                                       bootFile: bootFile, other: !known))
         }
         snap.wineservers.sort()
         snap.clients.sort { $0.pid < $1.pid }
         return snap
+    }
+
+    /// A command line split into words the way wine quotes them: a double-quoted run is one
+    /// word, quotes removed, so `"Z:\Volumes\x10\Video Games\Eden\Ashita\injector.exe" eden.xml`
+    /// is two words, not four. (wine's backslash-escaped quotes are not handled; no path or
+    /// profile this launcher starts has one.)
+    static func tokenize(_ command: String) -> [String] {
+        var out: [String] = []
+        var word = ""
+        var quoted = false
+        var started = false
+        for ch in command {
+            if ch == "\"" { quoted.toggle(); started = true; continue }
+            if ch == " " || ch == "\t", !quoted {
+                if started { out.append(word) }
+                word = ""; started = false
+                continue
+            }
+            word.append(ch); started = true
+        }
+        if started { out.append(word) }
+        return out
+    }
+
+    /// Where the Windows program is in `tokens`, and its path. It is the command itself, or
+    /// follows a wine/sidecar executable. A Windows command line whose unquoted program path
+    /// has spaces (`Z:\Volumes\x10\Video Games\…\injector.exe eden.xml`) is rejoined.
+    private static func windowsProgram(in tokens: [String]) -> (Int, String)? {
+        guard let at = tokens.firstIndex(where: { $0.lowercased().hasSuffix(".exe") || isLoader($0) || isInjector($0) })
+        else { return nil }
+        if at == 0 { return (0, tokens[0]) }
+        if tokens[..<at].contains(where: isLauncherOfLoader) { return (at, tokens[at]) }
+        if looksLikeWindowsPath(tokens[0]) { return (at, tokens[0...at].joined(separator: " ")) }
+        return nil
+    }
+
+    /// `C:\…`, `Z:/…`, `.\…` or `\\…`: never how a Mac command line starts.
+    private static func looksLikeWindowsPath(_ t: String) -> Bool {
+        let c = Array(t)
+        if c.count >= 3, c[0].isLetter, c[1] == ":", c[2] == "\\" || c[2] == "/" { return true }
+        return t.hasPrefix(".\\") || t.hasPrefix("\\\\")
+    }
+
+    private static func isWineSystemProgram(_ t: String) -> Bool {
+        guard wineSystemPrograms.contains(basename(t)) else { return false }
+        let path = t.lowercased().replacingOccurrences(of: "/", with: "\\")
+        return !path.contains("\\") || path.hasPrefix("c:\\windows\\")
     }
 
     static func byHost(_ clients: [Client]) -> [String: [pid_t]] {
@@ -136,7 +218,8 @@ enum LiveClients {
         return parse(String(decoding: data, as: UTF8.self))
     }
 
-    /// Every client and injector, by host (injectors under "").
+    /// Every client, injector and other Windows program, by host (injectors and hostless
+    /// programs under "").
     static func scan() -> [String: [pid_t]] { snapshot().byHost }
 
     static func describe(_ live: [String: [pid_t]]) -> String {
@@ -209,7 +292,7 @@ enum MultiWorld {
                  + "most \(maxClients) per player, so another copy is refused. Stop one first."
         }
         // A group that already shows a loader is that loader's world, not an unknown one.
-        let known = Set(clients.filter { !$0.injecting }.map(\.group)).union(groups).union(ownGroups)
+        let known = Set(clients.filter(\.knownLoader).map(\.group)).union(groups).union(ownGroups)
         let unknown = clients.filter { $0.injecting && host(of: $0).isEmpty && !known.contains($0.group) }
         guard groups.count + Set(unknown.map(\.group)).count >= cap, let first = unknown.first else { return nil }
         return "A game client is starting (pid \(first.pid)) and which world it is cannot be told until "
@@ -260,8 +343,15 @@ enum MultiWorld {
         return nil
     }
 
-    /// Does anything hold the shared prefix? An injector counts, and so does a session of this
-    /// launcher that has spawned but whose client the scan has not caught yet.
+    /// Does anything hold the shared prefix? An injector counts, so does any Windows program
+    /// that is not one of wine's own (`Client.other`: a loader under a name nobody listed,
+    /// whatever its world), and so does a session of this launcher that has spawned but whose
+    /// client the scan has not caught yet. This decides `wineserver -k` at launch and at the
+    /// last Stop, the renderer step and the sync mode, so it errs towards "live".
+    ///
+    /// `ps` cannot tell which prefix a Windows program runs in (wine rewrites its command line
+    /// and `ps -E` shows no environment for it; measured 2026-09-26), so an installer running in
+    /// the installer prefix counts as well. The cost is a renderer change waiting for it.
     static func clientsLive(_ clients: [LiveClients.Client], otherSessionsPlaying: Int) -> Bool {
         !clients.isEmpty || otherSessionsPlaying > 0
     }
@@ -291,7 +381,32 @@ enum MultiWorld {
     /// Has `group` been seen holding a loader (not just the injector) in this scan?
     static func groupHoldsLoader(_ group: pid_t?, in snap: LiveClients.Snapshot) -> Bool {
         guard let g = group else { return false }
-        return snap.clients.contains { !$0.injecting && $0.group == g }
+        return snap.clients.contains { $0.knownLoader && $0.group == g }
+    }
+
+    /// Of `pids`, the ones Stop may still signal, with the group each is in now: a process
+    /// running wine, the sidecar or a Windows program (`Snapshot.wine`) that is in this
+    /// session's `group`, or, for the no-group fallback, a loader of this session's `host` in
+    /// no other session's group. Anything else (a pid the injector left behind and the system
+    /// has since handed to another program) is left alone. The group is kept so a later
+    /// SIGKILL can check again that the pid is still the same process (`stillSignalable`).
+    static func signalable(_ pids: [pid_t], group: pid_t?, host: String, otherGroups: Set<pid_t>,
+                           in snap: LiveClients.Snapshot) -> [pid_t: pid_t] {
+        var out: [pid_t: pid_t] = [:]
+        for pid in pids {
+            guard snap.wine.contains(pid), let g = snap.groups[pid] else { continue }
+            if let group, g == group { out[pid] = g; continue }
+            if !host.isEmpty, !otherGroups.contains(g),
+               snap.clients.contains(where: { $0.pid == pid && $0.knownLoader && $0.host == host }) {
+                out[pid] = g
+            }
+        }
+        return out
+    }
+
+    /// Is `pid` still the wine process that was in `group` when Stop signalled it?
+    static func stillSignalable(_ pid: pid_t, group: pid_t, in snap: LiveClients.Snapshot) -> Bool {
+        snap.wine.contains(pid) && snap.groups[pid] == group
     }
 
     /// The wineserver is every client's. Stop it only when no client or injector is left, no
@@ -306,7 +421,7 @@ enum MultiWorld {
     static func elsewhere(_ clients: [LiveClients.Client], ownGroups: Set<pid_t>,
                           ownHostsWithoutGroup: Set<String>) -> [String: [pid_t]] {
         LiveClients.byHost(clients.filter {
-            !$0.injecting && !ownGroups.contains($0.group) && !ownHostsWithoutGroup.contains($0.host)
+            $0.knownLoader && !ownGroups.contains($0.group) && !ownHostsWithoutGroup.contains($0.host)
         })
     }
 
