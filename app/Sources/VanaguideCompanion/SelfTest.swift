@@ -59,6 +59,8 @@ enum CompanionSelfTest {
                            } }))
         }
 
+        checks += achievementChecks(guides: guides)
+
         var failures = 0
         for (name, passed) in checks {
             print("  \(passed ? "ok  " : "FAIL") \(name)")

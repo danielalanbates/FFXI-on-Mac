@@ -58,6 +58,8 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
 struct HorizonXILauncherApp: App {
     @NSApplicationDelegateAdaptor(LauncherDelegate.self) private var delegate
     init() {
+        // Before anything can spawn a child: a key in the environment is kept in memory only.
+        RetroAchievements.adoptEnvironmentKey()
         Headless.runIfAsked()
         // Before any window, scan or file: a second launch hands its --world/--play to the
         // running launcher and exits here. See SingleInstance.
@@ -133,6 +135,7 @@ struct ContentView: View {
     @StateObject private var local = LocalServer()
     @StateObject private var feeds = ServerFeeds()
     @StateObject private var updater = Updater()
+    @StateObject private var ra = RAProgress()
     @State private var bannerIndex = 0
     /// One timer for the life of the view. Built inline in `newsBanner`'s body it was a *new*
     /// publisher on every body evaluation, so any re-render (hovering the window, a population
@@ -233,6 +236,8 @@ struct ContentView: View {
         .task { await feeds.refreshPopulations() }
         .onReceive(Timer.publish(every: 120, on: .main, in: .common).autoconnect()) { _ in
             Task { await feeds.refreshPopulations() }
+            // RetroAchievements: gated to once per 10 minutes inside; a no-op until set up.
+            ra.refresh(.automatic, gameDir: active?.gameDir, log: { runner.appendLine($0) })
         }
         // A later launch's --world/--play, handed over by SingleInstance.
         .onReceive(NotificationCenter.default.publisher(for: SingleInstance.arrived)) { _ in
@@ -1267,6 +1272,10 @@ struct ContentView: View {
                               + "a buffer the GPU has not finished writing, so NPCs blink in and "
                               + "out about once a second. Off until that is fixed properly.")
                     Toggle("Show frame rate (Metal HUD)", isOn: $perf.metalHUD)
+                    Divider()
+                    RetroAchievementsSection(ra: ra, gameDir: active?.gameDir,
+                                             log: { runner.appendLine($0) })
+                    Divider()
                     if checks.contains(where: { $0.id == "fda" && $0.state == .bad }) {
                         Button("Open Full Disk Access settings…") {
                             NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
@@ -1861,6 +1870,9 @@ struct ContentView: View {
                               maxClients: server.maxClients, msyncAllowed: server.msync,
                               addonPolicy: addonPolicy, beforeLaunch: writeShared) {
             notice = why
+        } else {
+            // Fresh progress for this session, fetched by the launcher, never by the game.
+            ra.refresh(.play, gameDir: i.gameDir, log: { r.appendLine($0) })
         }
     }
 
