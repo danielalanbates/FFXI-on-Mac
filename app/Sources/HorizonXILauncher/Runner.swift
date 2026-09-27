@@ -1019,6 +1019,8 @@ final class Runner: ObservableObject {
             .joined(separator: " ")
         var e = ProcessInfo.processInfo.environment
         for (k, v) in env { e[k] = v }
+        // The RetroAchievements key never reaches the game (or last-spawn.txt).
+        e.removeValue(forKey: RetroAchievements.envKey)
         // Record exactly what was spawned. Diffing this against a hand-run that works is how
         // the launch-death and Gaia XI exits were bisected; it costs one small file per launch.
         // last-spawn.txt is always the newest launch; each session also keeps its own.
@@ -1092,6 +1094,8 @@ final class Runner: ObservableObject {
         p.currentDirectoryURL = cwd
         var e = ProcessInfo.processInfo.environment
         for (k, v) in env { e[k] = v }
+        // The RetroAchievements key never reaches the game (or last-spawn.txt).
+        e.removeValue(forKey: RetroAchievements.envKey)
         p.environment = e
         let pipe = Pipe()
         p.standardOutput = pipe
