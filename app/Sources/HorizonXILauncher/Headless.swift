@@ -29,6 +29,7 @@ enum Headless {
             || a.contains("--selftest-cursor-fix")
             || a.contains("--selftest-guide-disabled")
             || a.contains("--selftest-narration-disabled")
+            || a.contains("--selftest-multiworld")
     }
 
     @MainActor static func runIfAsked() {
@@ -59,6 +60,9 @@ enum Headless {
         }
         if args.contains("--selftest-narration-disabled") {
             runNarrationDisabledSelfTest()
+        }
+        if args.contains("--selftest-multiworld") {
+            runMultiWorldSelfTest()
         }
         guard args.contains("--check") else { return }
         var only: String? = nil
@@ -591,6 +595,155 @@ enum Headless {
         for (name, passed) in checks {
             print("  \(passed ? "ok  " : "FAIL") \(name)")
         }
+        print(failures == 0 ? "all checks passed" : "\(failures) FAILED")
+        exit(failures == 0 ? 0 : 1)
+    }
+
+    /// docs/MULTI_WORLD.md, Tests. Everything runs on canned `pgrep` output and a temp fixture;
+    /// nothing is scanned, launched or stopped, so it is safe while somebody is playing.
+    @MainActor private static func runMultiWorldSelfTest() -> Never {
+        let fm = FileManager.default
+        var checks: [(String, Bool)] = []
+        let canned = """
+            57992 .\\\\bootloader\\\\horizon-loader.exe --server play.horizonxi.com --user fixture --pass fixture
+            57994 /Applications/FFXI-on-Mac.app/Contents/Resources/x87sidecar-coop --cooperative /Users/x/Library/Application Support/BatesAI/ffxi-runtime/wine-coop/wine/lib/wine/x86_64-unix/wine .\\\\bootloader\\\\horizon-loader.exe --server play.horizonxi.com --user fixture --pass fixture
+            61001 .\\\\bootloader\\\\horizon-loader.exe --server localhost --user local
+            61003 C:\\Eden\\Ashita\\ffxi-bootmod\\xiloader.exe --server=PLAY.EDENXI.COM
+            61010 C:\\CatsEye\\pol.exe
+            61020 /bin/sh -c while /usr/bin/pgrep -qf horizon-loader.exe ; do /bin/sleep 2; done
+            61030 grep horizon-loader.exe notes.txt
+            """
+        let live = LiveClients.parse(canned)
+        checks.append(("host extraction: loader and its x87 sidecar file under one host",
+                       live["play.horizonxi.com"] == [57992, 57994]))
+        checks.append(("host extraction: localhost is the local world's 127.0.0.1",
+                       live["127.0.0.1"] == [61001]))
+        checks.append(("host extraction: --server=HOST form, case-folded",
+                       live["play.edenxi.com"] == [61003]))
+        checks.append(("host extraction: a loader with no --server is live under an unknown host",
+                       live[""] == [61010]))
+        checks.append(("host extraction: shells and greps naming a loader are not clients",
+                       live.values.allSatisfy { !$0.contains(61020) && !$0.contains(61030) }))
+
+        let horizon = Server.all.first { $0.name == "HorizonXI" }
+        let local = Server.all.first(where: \.local)
+        let dup = horizon.flatMap {
+            MultiWorld.refusal(world: $0.name, host: $0.host,
+                               allowsMultipleClients: $0.allowsMultipleClients, live: live)
+        }
+        checks.append(("duplicate HorizonXI is refused, naming the running pid",
+                       horizon?.allowsMultipleClients == false && dup?.contains("57992") == true))
+        checks.append(("the local world may run twice",
+                       local?.allowsMultipleClients == true
+                           && local.flatMap { MultiWorld.refusal(world: $0.name, host: $0.host,
+                                                                 allowsMultipleClients: $0.allowsMultipleClients,
+                                                                 live: live) } == nil))
+        let onlyLocal = LiveClients.parse("61001 .\\\\bootloader\\\\horizon-loader.exe --server 127.0.0.1\n")
+        checks.append(("a different world is not a duplicate",
+                       horizon.flatMap { MultiWorld.refusal(world: $0.name, host: $0.host,
+                                                            allowsMultipleClients: false,
+                                                            live: onlyLocal) } == nil))
+        checks.append(("only the local world and CatsEyeXI (cited rules) allow several clients",
+                       Server.all.filter(\.allowsMultipleClients).map(\.name).sorted()
+                           == ["CatsEyeXI", "Local server"]))
+
+        checks.append(("renderer step is skip, not stop-and-apply, while a client is live",
+                       RendererSetup.step(for: .metal, current: .metal, clientsLive: true) == .skip))
+        checks.append(("renderer step with an unreadable prefix and a live client is still skip",
+                       RendererSetup.step(for: .metal, current: nil, clientsLive: true) == .skip))
+        if case .refuse(let why) = RendererSetup.step(for: .openGL, current: .metal, clientsLive: true) {
+            checks.append(("renderer change under a live client is refused with the design's message",
+                           why.contains(RendererSetup.refuseChangeMessage)))
+        } else {
+            checks.append(("renderer change under a live client is refused with the design's message", false))
+        }
+        checks.append(("renderer step with nothing live stops and applies",
+                       RendererSetup.step(for: .openGL, current: .metal, clientsLive: false) == .stopAndApply))
+        let userReg = """
+            [Software\\\\Wine\\\\Direct3D] 1786416352
+            #time=1dd293b86547c74
+            "MaxVersionGL"=dword:00040001
+            "renderer"="gl"
+
+            [Software\\\\Wine\\\\DllOverrides] 1790361829
+            "*d3d8"="native"
+            "*d3d9"="native"
+            """
+        checks.append(("prefix renderer read from user.reg: DXVK overrides mean Metal",
+                       RendererSetup.renderer(fromUserReg: userReg) == .metal))
+        checks.append(("prefix renderer read from user.reg: gl without overrides means Classic",
+                       RendererSetup.renderer(fromUserReg: "[Software\\\\Wine\\\\Direct3D] 1\n\"renderer\"=\"gl\"\n") == .openGL))
+
+        checks.append(("FPS logs are per world",
+                       MultiWorld.fpsLogPath(gameDirName: "HorizonXI", world: "HorizonXI") == "C:\\HorizonXI\\fps-horizonxi.csv"
+                           && MultiWorld.fpsLogPath(gameDirName: "HorizonXI", world: "Local server") == "C:\\HorizonXI\\fps-local-server.csv"))
+        checks.append(("memory warning at >60% swap or <20% free, silent otherwise",
+                       MultiWorld.memoryWarning(swapUsedFraction: 0.64, freePercent: 46) != nil
+                           && MultiWorld.memoryWarning(swapUsedFraction: 0.2, freePercent: 15) != nil
+                           && MultiWorld.memoryWarning(swapUsedFraction: 0.6, freePercent: 20) == nil))
+
+        let sessions = Sessions()
+        let first = sessions.runner(for: "Local server")
+        first.running = true   // as if its client were playing; nothing is launched
+        let second = sessions.newSession(for: "Local server")
+        checks.append(("a world's session is reused", sessions.runner(for: "HorizonXI") === sessions.runner(for: "HorizonXI")))
+        checks.append(("a second local client gets its own session, and Play/Stop/log follow it",
+                       second !== first && second.session == "Local server #2"
+                           && sessions.runner(for: "Local server") === second))
+        checks.append(("sessions are per world", sessions.runner(for: "HorizonXI") !== first))
+
+        let root = fm.temporaryDirectory.appendingPathComponent("hxi-multiworld-\(UUID().uuidString)")
+        let game = root.appendingPathComponent("game", isDirectory: true)
+        let scripts = game.appendingPathComponent("scripts", isDirectory: true)
+        let boot = game.appendingPathComponent("config/boot", isDirectory: true)
+        let addons = game.appendingPathComponent("addons", isDirectory: true)
+        let script = scripts.appendingPathComponent("horizon.txt")
+        let install = Install(wrapper: root.appendingPathComponent("wrapper.app"),
+                              prefixName: "prefix", gameDirOverride: game)
+        do {
+            try fm.createDirectory(at: scripts, withIntermediateDirectories: true)
+            try fm.createDirectory(at: boot, withIntermediateDirectories: true)
+            try Data().write(to: game.appendingPathComponent("Ashita-cli.exe"))
+            try "script=horizon.txt\n".write(to: boot.appendingPathComponent("horizonxi.ini"),
+                                              atomically: true, encoding: .utf8)
+            for (dir, file) in [("vanavoice", "vanavoice.lua"), (Guide.addonDirName, "Vanaguide.lua"),
+                                (CursorFix.addonDirName, "winecursor.lua")] {
+                try fm.createDirectory(at: addons.appendingPathComponent(dir), withIntermediateDirectories: true)
+                try Data().write(to: addons.appendingPathComponent("\(dir)/\(file)"))
+            }
+            try "# player command\n\(Narration.loadLine)\n\(Guide.loadLine)\n\(CursorFix.loadLine)\n"
+                .write(to: script, atomically: true, encoding: .utf8)
+            Narration.prepare(install, enabled: true, policy: AddonPolicies.horizon, profile: "horizonxi.ini",
+                              temporaryDirectory: root.appendingPathComponent("q"), launch: {},
+                              othersLive: true, log: { _ in })
+            Guide.prepare(install, enabled: true, policy: AddonPolicies.horizon, profile: "horizonxi.ini",
+                          othersLive: true, log: { _ in })
+            CursorFix.prepare(install, policy: AddonPolicies.horizon, profile: "horizonxi.ini",
+                              othersLive: true, log: { _ in })
+            let text = Credentials.readFile(at: script) ?? ""
+            checks.append(("addon prepare keeps every addon folder while another host is live",
+                           ["vanavoice", Guide.addonDirName, CursorFix.addonDirName].allSatisfy {
+                               fm.fileExists(atPath: addons.appendingPathComponent($0).path) }))
+            checks.append(("addon prepare still takes this world's load lines out, keeping user text",
+                           !text.contains(Narration.loadLine) && !text.contains(Guide.loadLine)
+                               && !text.contains(CursorFix.loadLine) && text.contains("# player command")))
+            Guide.prepare(install, enabled: true, policy: AddonPolicies.horizon, profile: "horizonxi.ini",
+                          othersLive: false, log: { _ in })
+            checks.append(("with nothing else live, a strict allowlist world still gets the folder removed",
+                           !fm.fileExists(atPath: addons.appendingPathComponent(Guide.addonDirName).path)))
+        } catch {
+            checks.append(("multiworld addon fixture setup and execution", false))
+            FileHandle.standardError.write(Data("  \(error.localizedDescription)\n".utf8))
+        }
+        try? fm.removeItem(at: root)
+
+        let failures = checks.filter { !$0.1 }.count
+        for (name, passed) in checks {
+            print("  \(passed ? "ok  " : "FAIL") \(name)")
+        }
+        // Read-only (pgrep), for comparing against Activity Monitor; not a check.
+        let now = LiveClients.scan()
+        print("  i    live on this Mac: \(now.isEmpty ? "none" : Runner.describe(now))")
         print(failures == 0 ? "all checks passed" : "\(failures) FAILED")
         exit(failures == 0 ? 0 : 1)
     }
