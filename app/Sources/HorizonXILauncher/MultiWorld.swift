@@ -121,7 +121,9 @@ enum MultiWorld {
 /// pane; `live` feeds the Running list.
 @MainActor
 final class Sessions: ObservableObject {
-    @Published private(set) var ids: [String] = []
+    /// Not @Published: `runner(for:)` creates sessions while a view body reads it, and a new
+    /// session is idle, so nothing on screen changes. Runner changes are forwarded below.
+    private(set) var ids: [String] = []
     private var runners: [String: Runner] = [:]
     private var worldOf: [String: String] = [:]
     /// Which session a world's Play/Stop/log currently mean: the newest one started for it.

@@ -77,7 +77,9 @@ struct ContentView: View {
     }
     @State private var checks: [Check] = []
     @State private var perf = PerfSettings.load()
-    @StateObject private var runner = Runner()
+    @StateObject private var sessions = Sessions()
+    /// The selected world's session: what Play, Stop and the log pane act on.
+    private var runner: Runner { sessions.runner(for: store.selectedID) }
 
     @StateObject private var store = ServerStore()
     @StateObject private var local = LocalServer()
@@ -200,7 +202,9 @@ struct ContentView: View {
                let srv = store.servers.first(where: { $0.name == args[w + 1] }) { store.select(srv) }
             if args.contains("--play") {
                 if selected == nil { runner.appendLine("!! --play: no install found yet") }
-                else if runner.running { runner.appendLine("!! --play: already running") }
+                else if runner.running, store.selected?.allowsMultipleClients != true {
+                    runner.appendLine("!! --play: \(store.selected?.name ?? "this world") is already running in this launcher")
+                }
                 else {
                     if remember, !user.isEmpty, pass.isEmpty { pass = Credentials.password(for: user, world: store.selected?.name ?? "") }
                     await recheckAsync()
@@ -1163,6 +1167,7 @@ struct ContentView: View {
             }
 
             playButton
+            runningList
 
             // Graphics and addons are things people change often -- they belong next to Play,
             // not inside a collapsed diagnostics section.
@@ -1420,7 +1425,7 @@ struct ContentView: View {
                               systemImage: runner.busy ? "arrow.down.circle.dotted" : "arrow.down.circle")
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(runner.busy || runner.running)
+                    .disabled(sessions.anyBusy || runner.running)
                     .help(runner.busy
                           ? "Another download or install is running — watch the log on the left. It resumes where it left off if it is interrupted."
                           : "Downloads are resumable: if this is interrupted, press Download again and it continues.")
@@ -1528,25 +1533,48 @@ struct ContentView: View {
         }
     }
 
+    /// Play is still pressable on a running world that allows a second client.
+    private var playAgain: Bool { runner.running && store.selected?.allowsMultipleClients == true }
+
     private var playButton: some View {
         Button(action: play) {
-            Text(runner.running ? "RUNNING" : "PLAY")
+            Text(playAgain ? "PLAY ANOTHER" : runner.running ? "RUNNING" : "PLAY")
                 .font(.system(size: 15, weight: .semibold, design: .serif)).tracking(5)
                 .frame(maxWidth: .infinity).padding(.vertical, 13)
                 .background(
-                    LinearGradient(colors: runner.running
+                    LinearGradient(colors: runner.running && !playAgain
                                    ? [Vana.goldDim.opacity(0.45), Vana.goldDim.opacity(0.25)]
                                    : [Vana.gold, Vana.goldDim],
                                    startPoint: .top, endPoint: .bottom))
                 .foregroundStyle(Color.black.opacity(0.86))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
-                .shadow(color: Vana.gold.opacity(runner.running ? 0 : 0.35), radius: 10, y: 3)
+                .shadow(color: Vana.gold.opacity(runner.running && !playAgain ? 0 : 0.35), radius: 10, y: 3)
         }
         .buttonStyle(.plain)
         .keyboardShortcut(.defaultAction)
         // Only the *absence* of an install should block Play. Once we have one — remembered
         // or found — a still-running background rescan must not hold the user up.
-        .disabled(selected == nil || runner.running || blocked)
+        .disabled(selected == nil || (runner.running && !playAgain) || blocked)
+    }
+
+    /// Every world playing right now, each with its own Stop. Stopping one never stops another.
+    @ViewBuilder private var runningList: some View {
+        let live = sessions.live
+        if !live.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("RUNNING").font(.caption2).tracking(2).foregroundStyle(Vana.muted)
+                ForEach(live, id: \.id) { s in
+                    HStack(spacing: 6) {
+                        Circle().fill(Vana.crystal).frame(width: 6, height: 6)
+                        Text(s.id).font(.caption).foregroundStyle(Vana.text)
+                        Spacer()
+                        Button("Stop") { if let i = selected { s.runner.stop(i) } }
+                            .font(.caption)
+                            .help("Ends \(s.id)'s client only. Other worlds keep running.")
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Actions
@@ -1571,6 +1599,22 @@ struct ContentView: View {
             runner.appendLine("!! " + notice)
             return
         }
+        // Checked against the processes, not only this window's sessions: a client started by
+        // another launcher (or by --play) counts just the same.
+        if let why = MultiWorld.refusal(world: server.name, host: server.host,
+                                        allowsMultipleClients: server.allowsMultipleClients,
+                                        live: LiveClients.scan()) {
+            notice = why
+            runner.appendLine("!! " + why)
+            return
+        }
+        if runner.running, !server.allowsMultipleClients {
+            notice = "\(server.name) is already running. \(server.name) does not allow a second "
+                   + "client from the same player, so another copy is refused."
+            runner.appendLine("!! " + notice)
+            return
+        }
+        let r = runner.running ? sessions.newSession(for: server.name) : runner
 
 
         // The local world has to be running before the client can reach it. Start it here rather
@@ -1584,31 +1628,31 @@ struct ContentView: View {
                 return
             }
             if !s.running {
-                local.start(log: { runner.appendLine($0) }) { ok in
-                    if ok { launchClient(i, server: server) }
+                local.start(log: { r.appendLine($0) }) { ok in
+                    if ok { launchClient(i, server: server, runner: r) }
                     else { notice = "The local server did not start — see the log." }
                 }
                 return
             }
         }
-        launchClient(i, server: server)
+        launchClient(i, server: server, runner: r)
     }
 
-    private func launchClient(_ i: Install, server: Server) {
+    private func launchClient(_ i: Install, server: Server, runner r: Runner) {
         // Two servers on the list publish no login host anywhere this project could find. Ashita
         // would take `--server ` with nothing after it and fail somewhere less obvious, so say
         // what is actually missing instead.
         if server.host.trimmingCharacters(in: .whitespaces).isEmpty {
             notice = "\(server.name) has no login host set. Get it from that server's own "
                    + "launcher or setup guide and put it in the server's Host field."
-            runner.appendLine("!! " + notice)
+            r.appendLine("!! " + notice)
             return
         }
         // A world the install has no boot profile for — the local one, on every machine — needs
         // that file to exist before anything can be written into it.
         if !Credentials.ensureProfile(server.bootProfile, in: i) {
             notice = "Could not create config/boot/\(server.bootProfile)."
-            runner.appendLine("!! " + notice)
+            r.appendLine("!! " + notice)
             return
         }
         // The client was installed by HorizonXI and carries their logo in its own data. On any
@@ -1629,8 +1673,8 @@ struct ContentView: View {
                    + (server.name == "CatsEyeXI"
                       ? "Open Setup & Diagnostics › CatsEyeXI installer… to update it with their own launcher."
                       : "Update the client first.")
-            runner.appendLine("!! " + notice)
-            runner.appendLine("!! version check: \(server.name) requires \(requiredVer), installed \(have)")
+            r.appendLine("!! " + notice)
+            r.appendLine("!! version check: \(server.name) requires \(requiredVer), installed \(have)")
             return
         }
         // HorizonXI publishes its updates, but being behind is not a reason to refuse Play:
@@ -1639,19 +1683,19 @@ struct ContentView: View {
         // (Setup & Diagnostics › Update HorizonXI…) and runs only when nothing else is.
         if server.name == "HorizonXI",
            let hv = ClientVersion.horizonVersion(in: i), let latest = feeds.horizonLatest, hv != latest {
-            runner.appendLine("i  HorizonXI \(latest) is published; this install is \(hv). "
-                              + "You do not need to do anything: the login server accepts this "
-                              + "client and the game plays normally. Only run Setup & Diagnostics "
-                              + "\u{203A} Update HorizonXI\u{2026} if you are actually turned away.")
+            r.appendLine("i  HorizonXI \(latest) is published; this install is \(hv). "
+                         + "You do not need to do anything: the login server accepts this "
+                         + "client and the game plays normally. Only run Setup & Diagnostics "
+                         + "\u{203A} Update HorizonXI\u{2026} if you are actually turned away.")
         }
 
         if !user.isEmpty, !pass.isEmpty {
             if !Credentials.apply(user: user, password: pass, to: i,
                                   profile: server.bootProfile, server: server.host) {
                 notice = "Could not write config/boot/\(server.bootProfile) — launching with its existing account."
-                runner.appendLine("!! " + notice)
+                r.appendLine("!! " + notice)
                 if i.gameDir.path.hasPrefix("/Volumes/") {
-                    runner.appendLine("i  Note: If external volume access is restricted by macOS, grant Full Disk Access to FFXI on Mac in System Settings › Privacy & Security › Full Disk Access.")
+                    r.appendLine("i  Note: If external volume access is restricted by macOS, grant Full Disk Access to FFXI on Mac in System Settings › Privacy & Security › Full Disk Access.")
                 }
             }
         }
@@ -1661,17 +1705,26 @@ struct ContentView: View {
         var effective = perf
         if !server.msync, effective.msync {
             effective.msync = false
-            runner.appendLine("i  \(server.name) runs with msync off — its client exits about a "
-                              + "second after login with it on.")
+            r.appendLine("i  \(server.name) runs with msync off — its client exits about a "
+                         + "second after login with it on.")
         }
-        if let r = server.renderer, r != perf.renderer {
-            effective.renderer = r
-            runner.appendLine("i  \(server.name) is pinned to the \(r.title) renderer "
-                              + "(your setting, \(perf.renderer.title), is left alone). "
-                              + "Clear it in the server's settings to override.")
+        if let pinned = server.renderer, pinned != perf.renderer {
+            effective.renderer = pinned
+            r.appendLine("i  \(server.name) is pinned to the \(pinned.title) renderer "
+                         + "(your setting, \(perf.renderer.title), is left alone). "
+                         + "Clear it in the server's settings to override.")
         }
-        runner.launch(i, perf: effective, profile: server.bootProfile, useX87: server.x87,
-                      world: server.name, addonPolicy: addonPolicy)
+        // Two clients plus LSB on this 8 GB Mac is where frame rates collapse; say so, then go.
+        if !LiveClients.scan().isEmpty, let w = MultiWorld.currentMemoryWarning() {
+            notice = w
+            r.appendLine("!! " + w)
+        }
+        if let why = r.launch(i, perf: effective, profile: server.bootProfile, useX87: server.x87,
+                              world: server.name, host: server.host,
+                              allowsMultipleClients: server.allowsMultipleClients,
+                              addonPolicy: addonPolicy) {
+            notice = why
+        }
     }
 
     private func refresh() { Task { await refreshAsync() } }
