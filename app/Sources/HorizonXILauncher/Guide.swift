@@ -127,7 +127,7 @@ enum Guide {
             return
         }
 
-        do { try AddonInstaller.replaceDirectory(at: dest, with: src, fileManager: fm) }
+        do { try AddonInstaller.replaceDirectory(at: dest, with: src, preserving: ["data/nav"], fileManager: fm) }
         catch {
             log("==> vanaguide: could not install the addon — \(error.localizedDescription)")
             return

@@ -141,9 +141,14 @@ enum Headless {
                 checks.append(("failed staging leaves the playable addon intact", prior == "old"))
             }
 
-            try AddonInstaller.replaceDirectory(at: destination, with: source, fileManager: fm)
+            let navDir = destination.appendingPathComponent("data/nav", isDirectory: true)
+            try fm.createDirectory(at: navDir, withIntermediateDirectories: true)
+            try Data("grid".utf8).write(to: navDir.appendingPathComponent("231.vgnav"))
+            try AddonInstaller.replaceDirectory(at: destination, with: source, preserving: ["data/nav"], fileManager: fm)
             let installed = try? String(contentsOf: destination.appendingPathComponent("addon.lua"), encoding: .utf8)
             checks.append(("successful staging atomically installs the new addon", installed == "new"))
+            let grid = try? String(contentsOf: destination.appendingPathComponent("data/nav/231.vgnav"), encoding: .utf8)
+            checks.append(("generated navigation grids survive a reinstall", grid == "grid"))
             let leftovers = (try? fm.contentsOfDirectory(atPath: destination.deletingLastPathComponent().path)) ?? []
             checks.append(("successful install leaves no staging or backup directories",
                            leftovers == [destination.lastPathComponent]))
