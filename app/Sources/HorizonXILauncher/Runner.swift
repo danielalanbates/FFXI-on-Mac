@@ -2,27 +2,51 @@ import Foundation
 import Combine
 import AppKit
 
-/// Runs the repair script and the game itself, streaming output back to the UI.
+/// Runs the repair script and the game itself, streaming output back to the UI. One per world
+/// session (see `Sessions`): several worlds can play at once in the same prefix.
 @MainActor
 final class Runner: ObservableObject {
     @Published var log: String = ""
     @Published var running = false
-    @Published var busy = false { didSet { Runner.workInFlight = busy } }
+    @Published var busy = false {
+        didSet { if busy != oldValue { Runner.busyCount += busy ? 1 : -1 } }
+    }
+    /// The world, or "<world> #2" for a further client of a world that allows several.
+    let session: String
+
+    init(session: String = "") { self.session = session }
 
     /// Read by the app delegate on quit. Downloads and installs are child processes of this app,
     /// so quitting kills them -- a 7.7 GB download that was 6 GB in simply vanished, and the card
     /// went back to saying "Download…" with nothing to say why. Quitting mid-download now asks.
-    static var workInFlight = false
+    /// Counted across every session: installers share one installer prefix, so one at a time.
+    private static var busyCount = 0
+    static var workInFlight: Bool { busyCount > 0 }
 
     /// Every long-running action refuses to start while another one is going. That refusal used
     /// to be a silent `return`, so pressing Download on a second world did nothing at all and
     /// said nothing about why -- which is exactly what "I pressed Download on all the servers and
     /// they still say Download" looked like. Now it says so in the log.
     private func refuseWhileBusy(_ what: String) -> Bool {
-        guard busy || running else { return false }
+        guard Runner.workInFlight || running else { return false }
         appendLine("!! not starting \(what): something else is already running in the wrapper. "
                  + "Wait for it to finish (or press Stop), then try again.")
         return true
+    }
+
+    /// Repair runs wine in the game prefix and an update rewrites the shared client folder;
+    /// neither belongs under a client that is playing.
+    private func refuseWhileClientsLive(_ what: String) -> Bool {
+        let live = LiveClients.scan()
+        guard !live.isEmpty else { return false }
+        appendLine("!! not starting \(what): a game is running in this prefix "
+                 + "(\(Self.describe(live))). Stop it first.")
+        return true
+    }
+
+    static func describe(_ live: [String: [pid_t]]) -> String {
+        live.keys.sorted().map { "\($0.isEmpty ? "unknown host" : $0): pid "
+            + (live[$0] ?? []).map(String.init).joined(separator: ",") }.joined(separator: "; ")
     }
 
     private var proc: Process?
@@ -142,6 +166,7 @@ final class Runner: ObservableObject {
     }
 
     func repair(_ install: Install) {
+        if refuseWhileClientsLive("Repair") { return }
         guard let script = Self.repairScript() else {
             appendLine("!! install.sh not found in the bundle"); return
         }
@@ -168,7 +193,8 @@ final class Runner: ObservableObject {
 
     /// Apply every pending HorizonXI game update (torrent, so it can take a while), then report.
     func updateHorizon(_ install: Install, done: @escaping (Bool) -> Void) {
-        guard !busy, !running else { appendLine("!! something else is running in the wrapper — try again when it finishes"); done(false); return }
+        guard !Runner.workInFlight, !running else { appendLine("!! something else is running in the wrapper — try again when it finishes"); done(false); return }
+        if refuseWhileClientsLive("the HorizonXI update") { done(false); return }
         guard let script = Self.updateScript() else {
             appendLine("!! update-client.sh not found in the bundle"); done(false); return
         }
@@ -338,7 +364,7 @@ final class Runner: ObservableObject {
     /// Run an installer the user already has on disk (their server's site, Discord, a USB stick)
     /// inside the installer prefix. Zips are unpacked first and the first .exe inside is run.
     func runLocalInstaller(_ file: URL, in gameInstall: Install, dataPath: String, name: String) {
-        guard !busy, !running else { return }
+        if refuseWhileBusy("the installer for \(name)") { return }
         busy = true
         Self.linkGamesFolder(name, to: dataPath, in: gameInstall)
         ensureInstallerPrefix(gameInstall) { [weak self] install in
@@ -480,7 +506,7 @@ final class Runner: ObservableObject {
 
     func runCatsEyeLauncher(_ gameInstall: Install, dataPath: String = "") {
         Self.linkGamesFolder("CatsEyeXI", to: dataPath, in: gameInstall)
-        guard !busy, !running else { return }
+        if refuseWhileBusy("the CatsEyeXI launcher") { return }
         busy = true
         ensureInstallerPrefix(gameInstall) { [weak self] ip in
             self?.busy = false
@@ -507,23 +533,61 @@ final class Runner: ObservableObject {
         }
     }
 
+    /// Returns why the launch was refused, or nil once it is under way.
+    @discardableResult
     func launch(_ install: Install, perf: PerfSettings, profile: String = "horizonxi.ini",
-                useX87: Bool = true, world: String = "", addonPolicy: AddonPolicy = .unknown) {
-        guard !running else { return }
+                useX87: Bool = true, world: String = "", host: String = "",
+                allowsMultipleClients: Bool = false,
+                addonPolicy: AddonPolicy = .unknown) -> String? {
+        guard !running else { return "\(session.isEmpty ? world : session) is already running." }
+        // Every client shares this prefix and, usually, this game folder. Everything below that
+        // would stop the wineserver or pull files out from under a running client is gated on
+        // this one scan.
+        let live = LiveClients.scan()
+        let worldName = world.isEmpty ? "Vana'diel" : world
+        if let why = MultiWorld.refusal(world: worldName, host: host,
+                                        allowsMultipleClients: allowsMultipleClients, live: live) {
+            appendLine("!! " + why)
+            return why
+        }
+        let clientsLive = !live.isEmpty
+        let rendererStep = RendererSetup.step(for: perf.renderer,
+                                              current: clientsLive ? RendererSetup.current(install) : nil,
+                                              clientsLive: clientsLive)
+        if case .refuse(let why) = rendererStep {
+            appendLine("!! " + why)
+            return why
+        }
+        // GameRegistry.point re-registers through wine and then stops the wineserver.
+        if clientsLive, GameRegistry.current(install) != install.squareEnixWine {
+            let why = "\(worldName) plays from \(install.squareEnixWine), but the running world's "
+                    + "registry names \(GameRegistry.current(install) ?? "another folder"). "
+                    + "Stop the other world first; the game folder cannot change under a running client."
+            appendLine("!! " + why)
+            return why
+        }
         running = true
         loginFailure = ""
         currentInstall = install
         currentProfile = profile
-        currentWorld = world.isEmpty ? "Vana'diel" : world
+        currentWorld = worldName
+        hostKey = LiveClients.normalize(host)
+        preexistingPIDs = Set(live[hostKey] ?? [])
+        if clientsLive { appendLine("==> also running: \(Self.describe(live))") }
         // The renderer lives in the prefix's registry and DLLs, not in the environment, so it has
         // to be written before the process starts — and after any wineserver holding the old copy
         // of the registry has exited.
         // A wrapper that has been copied or moved still has its dylib links aimed at the old
         // copy; fix that before anything tries to load one. See relinkStrayDylibs.
         RendererSetup.relinkStrayDylibs(install) { [weak self] in self?.appendLine($0) }
-        RendererSetup.apply(perf.renderer, to: install) { [weak self] in self?.appendLine($0) }
-        // Same moment, same reason: the registry has to name *this* world's SquareEnix folder.
-        GameRegistry.point(install) { [weak self] in self?.appendLine($0) }
+        if rendererStep == .stopAndApply {
+            RendererSetup.apply(perf.renderer, to: install) { [weak self] in self?.appendLine($0) }
+            // Same moment, same reason: the registry has to name *this* world's SquareEnix folder.
+            GameRegistry.point(install) { [weak self] in self?.appendLine($0) }
+        } else {
+            appendLine("renderer: \(perf.renderer.title) already set up; left alone for the running world")
+            RendererSetup.ensureFiles(perf.renderer, for: install) { [weak self] in self?.appendLine($0) }
+        }
         Self.cleanStaleWineSockets()
         gameExe = Credentials.bootLoaderName(in: install, profile: profile) ?? "horizon-loader.exe"
         Self.currentGameExe = gameExe
@@ -549,12 +613,13 @@ final class Runner: ObservableObject {
         // Cutscene narration, if the user asked for it: install VanaVoice's addon and start the
         // narrator. Never fatal -- a failure here leaves the game exactly as silent as before.
         Narration.prepare(install, enabled: perf.narrateCutscenes, policy: addonPolicy,
-                          profile: profile) { [weak self] in self?.appendLine($0) }
+                          profile: profile, othersLive: clientsLive) { [weak self] in self?.appendLine($0) }
         // Quest guide, same policy gate as narration: LSB / unrestricted only; scrubbed on
         // allowlist worlds. Never fatal.
         Guide.prepare(install, enabled: perf.enableVanaguide, policy: addonPolicy,
-                      profile: profile) { [weak self] in self?.appendLine($0) }
-        CursorFix.prepare(install, policy: addonPolicy, profile: profile) { [weak self] in
+                      profile: profile, othersLive: clientsLive) { [weak self] in self?.appendLine($0) }
+        CursorFix.prepare(install, policy: addonPolicy, profile: profile,
+                          othersLive: clientsLive) { [weak self] in
             self?.appendLine($0)
         }
         // Every launch: make sure no allowed addon can take the LuaJIT trace-patch fault that Ashita 4.3
@@ -563,7 +628,7 @@ final class Runner: ObservableObject {
         appendLine("==> launching \(install.bootProfileName(profile)) (Ashita \(install.ashitaGeneration.rawValue))")
         // Make the Dock tile say which world is running, under this project's own icon.
         DockIcon.apply(to: install, world: world.isEmpty ? "Vana'diel" : world) { [weak self] in self?.appendLine($0) }
-        var env = perf.environment(for: install, x87: useX87)
+        var env = perf.environment(for: install, x87: useX87, world: worldName)
         // The tile the *wine process* wears: CrossOver wine's CX_ROOT icon fallback, since the
         // loader has no icon resource of its own. See DockIcon.cxRoot.
         if env["CX_ROOT"] == nil, let cx = DockIcon.cxRoot(for: world.isEmpty ? "Vana'diel" : world,
@@ -624,8 +689,8 @@ final class Runner: ObservableObject {
         // last client. The game runs on the cooperative wine, a different protocol -- and
         // joining that server is "wine client error: version mismatch 856/1809" followed by a
         // refused login (2026-08-27, two launches in a row). Wait for it to be gone first;
-        // this is a no-op when a game is already running in the prefix.
-        if RendererSetup.stopWineserver(install) {
+        // Never with a client running: that wineserver is the one it plays on.
+        if !clientsLive, RendererSetup.stopWineserver(install) {
             appendLine("==> wrapper wineserver stopped; the game starts its own")
         }
         spawnViaShell(exe,
@@ -640,6 +705,19 @@ final class Runner: ObservableObject {
             self?.appendLine("==> injector exited \(code)")
             self?.watchGameProcess()
         }
+        return nil
+    }
+
+    /// The loader's `--server`, normalised; what this session's pids are filed under.
+    private var hostKey = ""
+    /// Clients of the same host that were already running when this session started (a second
+    /// local-world client). Never this session's to watch or stop.
+    private var preexistingPIDs: Set<pid_t> = []
+
+    /// This session's client pids: its host's loader (and sidecar) processes, minus any that
+    /// belonged to another session of the same world.
+    private func sessionPIDs() -> [pid_t] {
+        (LiveClients.scan()[hostKey] ?? []).filter { !preexistingPIDs.contains($0) }
     }
 
     /// Poll for the client itself. Ashita-cli.exe exits seconds after a successful injection
@@ -652,7 +730,7 @@ final class Runner: ObservableObject {
             let scale = self?.currentInstall.map(WindowMemory.scale(for:)) ?? 1
             for _ in 0..<300 {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
-                let pids = Self.gamePIDs()
+                let pids = self?.sessionPIDs() ?? []
                 if pids.isEmpty { break }
                 if let s = await MainActor.run(body: { WindowMemory.currentSize(pids: pids, scale: scale) }) {
                     if self?.firstWindowSize == nil { self?.firstWindowSize = s }
@@ -662,7 +740,7 @@ final class Runner: ObservableObject {
             // Two consecutive misses, because pgrep can miss the process for a beat while wine
             // re-execs it during start-up.
             try? await Task.sleep(nanoseconds: 2_000_000_000)
-            if Self.gameIsRunning() { self?.watchGameProcess(); return }
+            if !(self?.sessionPIDs() ?? []).isEmpty { self?.watchGameProcess(); return }
             await MainActor.run {
                 guard let self else { return }
                 self.running = false
@@ -684,31 +762,6 @@ final class Runner: ObservableObject {
     private var lastWindowSize: WindowMemory.Size?
     /// Bumped whenever a size was written back, so the Graphics panel can reload.
     @Published var windowSizeRemembered = 0
-
-    private static func gamePIDs() -> [pid_t] {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        p.arguments = ["-f", currentGameExe]
-        let out = Pipe()
-        p.standardOutput = out
-        p.standardError = Pipe()
-        guard (try? p.run()) != nil else { return [] }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        return String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline)
-            .compactMap { pid_t($0.trimmingCharacters(in: .whitespaces)) }
-    }
-
-    private static func gameIsRunning() -> Bool {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        p.arguments = ["-f", currentGameExe]
-        p.standardOutput = Pipe()
-        p.standardError = Pipe()
-        guard (try? p.run()) != nil else { return false }
-        p.waitUntilExit()
-        return p.terminationStatus == 0
-    }
 
     /// `RendererSetup.apply` just did `wineserver -k` and waited for it to actually exit, so any
     /// `server-*` socket directory left under `/tmp/.wine-<uid>/` at this point belongs to a
@@ -734,10 +787,33 @@ final class Runner: ObservableObject {
         }
     }
 
+    /// Ends this session's client only. The wineserver is shared by every world in the prefix,
+    /// so it is stopped only once no client at all is left.
     func stop(_ install: Install) {
-        if let pid = gamePID, Detach.isAlive(pid) { kill(pid, SIGTERM) }
+        var pids = running ? sessionPIDs() : []
+        if let pid = gamePID, Detach.isAlive(pid) { pids.append(pid) }
+        for pid in Set(pids) { kill(pid, SIGTERM) }
         proc?.terminate()
-        RendererSetup.stopWineserver(install)
+        if !pids.isEmpty { appendLine("==> stopping \(currentWorld) (pid \(pids.sorted().map(String.init).joined(separator: ",")))") }
+        let mine = Set(pids)
+        Task.detached {
+            // wine usually honours SIGTERM within a second or two; a client wedged in a
+            // cutscene or a dead socket may not, and a Stop that does nothing is worse.
+            for _ in 0..<16 {
+                if !mine.contains(where: { Detach.isAlive($0) }) { break }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            for pid in mine where Detach.isAlive(pid) { kill(pid, SIGKILL) }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            let left = LiveClients.scan()
+            if left.isEmpty {
+                RendererSetup.stopWineserver(install)
+            } else {
+                await MainActor.run { [weak self] in
+                    self?.appendLine("==> wineserver left up: still running \(Runner.describe(left))")
+                }
+            }
+        }
     }
 
     /// See the call site in `launch`: the game must be started the way a shell starts it.
@@ -754,7 +830,7 @@ final class Runner: ObservableObject {
     private func spawnViaShell(_ exe: URL, args: [String], env: [String: String], cwd: URL,
                                done: @escaping (Int32) -> Void) {
         let out = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ffxi-on-mac-game-\(getpid()).log")
+            .appendingPathComponent("ffxi-on-mac-game-\(getpid())-\(Self.fileSafe(session)).log")
         FileManager.default.createFile(atPath: out.path, contents: nil)
         let quoted = ([exe.path] + args).map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }
             .joined(separator: " ")
@@ -796,6 +872,11 @@ final class Runner: ObservableObject {
         // The game was already started above, detached. Nothing to run here any more; the
         // detached pid is remembered so `stop` can still end the session on request.
         gamePID = pid
+    }
+
+    /// Two sessions tailing one stdout file would each show the other's output.
+    private static func fileSafe(_ s: String) -> String {
+        String(s.map { $0.isLetter || $0.isNumber ? $0 : "-" })
     }
 
     /// The detached game's pid, for `stop`. Not a Process: it is not our child any more.
