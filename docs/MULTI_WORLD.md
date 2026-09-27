@@ -19,28 +19,33 @@ Every client shares one wine prefix (`prefix10`) and one game folder. The launch
 
 ## Design
 
-1. **Identity.** A running client is identified by its loader's `--server <host>` argument. The local world is `127.0.0.1`; HorizonXI is `play.horizonxi.com`. Add `LiveClients.scan()`, which returns `[host: [pid]]` by reading `pgrep -fl` for every loader name the launcher knows (`horizon-loader.exe`, `xiloader.exe`, `pol.exe`, `ffxi-bootmod`). Every PID check and every stop goes through it, filtered by host.
-2. **The duplicate rule.** Add `allowsMultipleClients: Bool = false` to `Server`.
-   - It is `true` only for the local world, which is Daniel's own server.
-   - Any other server needs cited evidence from its published rules. Without it, the value stays `false`.
-   - Launching a world whose host already has a live client is refused when the flag is false. The message says why and names the running PID.
+1. **Identity.** A running client's *world* is identified by its loader's `--server <host>` argument. The local world is `127.0.0.1`; HorizonXI is `play.horizonxi.com`. `LiveClients.snapshot()` reads `ps -axww -o pid=,pgid=,command=` and returns every loader the launcher knows (`horizon-loader.exe`, `xiloader.exe`, `pol.exe`, `ffxi-bootmod`) by host, plus Ashita's injectors (`Ashita-cli.exe`, `injector.exe`) under the unknown host, so a launch still injecting counts as live.
+   - A running client's *session* is its process group. Everything one launch starts (injector, loader, x87 sidecar) keeps the group of the shell `Detach.spawn` ran it from; wine's own services each lead a group of their own. Measured 2026-09-26: loader and sidecar in group 57810, spawned pid 57812. Stop, the exit watcher and window memory act on that group only, whatever the loader is called. Only when the group could not be read does a session fall back to its host, minus other sessions' groups.
+2. **The duplicate rule.** `Server.maxClients` (default 1) caps how many clients of one world may run. `allowsMultipleClients` is `maxClients > 1`.
+   - The local world, Daniel's own server, has no cap.
+   - Any other server needs cited evidence from its published rules. CatsEyeXI's account rules allow two active characters per person, so its cap is 2.
+   - A launch is refused when the world already has `maxClients` clients (counted by process group, so a sidecar is not a second client). Both the Host field and the `--server` the boot profile really carries are checked, and this launcher's own sessions count even while injecting. The message says why and names the running PID.
 3. **One session per world.** `Runner` becomes a per-world session, and a `Sessions` store keeps `[worldID: Runner]`.
    - The Play button, the log pane and Stop act on the selected world's session.
    - A small "Running" list shows every live world with its own Stop button.
-   - `--play` from the command line checks the store *and* `LiveClients.scan()`, so a second launcher process cannot start a duplicate either. The rule is still one launcher process at a time.
+   - `--play` from the command line checks the store *and* the process scan, so a second launcher process cannot start a duplicate either. The Running list also shows clients started outside this window, without a Stop button.
+   - `LaunchLock` (an flock in Application Support) is held from a launch's first check to its spawn, and while the last Stop decides to stop the wineserver. Until the injector exists no scan can see a launch, so without the lock a second launcher process could pass every check and run `wineserver -k` on it.
+   - Every refusal runs before any shared client file (`pivot.ini`, the boot profile) is rewritten.
 4. **Shared-prefix safety.** When `LiveClients.scan()` is not empty:
    - **`RendererSetup.apply`** must not run `wineserver -k`. If the prefix already has the requested renderer, skip the step. If the renderer would change, refuse, with this message: "stop the other world first, the renderer cannot change under a running client".
-   - **`stop`** terminates only this session's PIDs. `wineserver` is stopped only when no client is left.
+   - **`stop`** terminates only this session's process group. `wineserver` is stopped only when no client or injector is left, no other session of this launcher is playing, and no launch holds the lock. That decision is made on the main actor, after the kill.
    - **Addon prepare** only removes this world's load line from its own script. It never deletes an addon folder while another client is live. It still deletes the folder when nothing is running, so a strict allowlist world is never started with an excluded addon on disk.
 5. **Per-world FPS log.** Default `FFXI_ON_MAC_FPSLOG_PATH` to `fps-<world>.csv`.
 6. **Memory warning.** This Mac has 8 GB. Two clients plus LSB pushed HorizonXI to 0.4 fps on 2026-09-25/26. Before a second client starts, if swap is over 60% used or free memory is under 20%, show a warning. It does not block the launch.
 
 ## Tests
 
-- **`--selftest-multiworld`** feeds `LiveClients.parse()` canned `pgrep` output. It checks:
-  - host extraction;
-  - the refusal when a duplicate world has `allowsMultipleClients == false`;
+- **`--selftest-multiworld`** feeds `LiveClients.parse()` canned `ps` output. It checks:
+  - host extraction, and that injectors count as live;
+  - the refusal when a world is at its `maxClients`, including CatsEyeXI's cap of two;
   - that the local world may run twice;
+  - that each of two local sessions sees only its own process group;
+  - that the last Stop leaves the wineserver up while anything else holds the prefix;
   - that addon prepare keeps folders while another host is live;
   - that the renderer step reports "skip" rather than "kill" when a client is live.
 - **Live check on this Mac.** Start the local world, then HorizonXI; neither may die. Stop the local world; HorizonXI must keep running. Then try to start HorizonXI again; it must be refused.

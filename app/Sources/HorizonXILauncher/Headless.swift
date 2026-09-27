@@ -604,16 +604,19 @@ enum Headless {
     @MainActor private static func runMultiWorldSelfTest() -> Never {
         let fm = FileManager.default
         var checks: [(String, Bool)] = []
+        // `ps -axww -o pid=,pgid=,command=`: pid, process group, command line.
         let canned = """
-            57992 .\\\\bootloader\\\\horizon-loader.exe --server play.horizonxi.com --user fixture --pass fixture
-            57994 /Applications/FFXI-on-Mac.app/Contents/Resources/x87sidecar-coop --cooperative /Users/x/Library/Application Support/BatesAI/ffxi-runtime/wine-coop/wine/lib/wine/x86_64-unix/wine .\\\\bootloader\\\\horizon-loader.exe --server play.horizonxi.com --user fixture --pass fixture
-            61001 .\\\\bootloader\\\\horizon-loader.exe --server localhost --user local
-            61003 C:\\Eden\\Ashita\\ffxi-bootmod\\xiloader.exe --server=PLAY.EDENXI.COM
-            61010 C:\\CatsEye\\pol.exe
-            61020 /bin/sh -c while /usr/bin/pgrep -qf horizon-loader.exe ; do /bin/sleep 2; done
-            61030 grep horizon-loader.exe notes.txt
+            57992 57810 .\\\\bootloader\\\\horizon-loader.exe --server play.horizonxi.com --user fixture --pass fixture
+            57994 57810 /Applications/FFXI-on-Mac.app/Contents/Resources/x87sidecar-coop --cooperative /Users/x/Library/Application Support/BatesAI/ffxi-runtime/wine-coop/wine/lib/wine/x86_64-unix/wine .\\\\bootloader\\\\horizon-loader.exe --server play.horizonxi.com --user fixture --pass fixture
+            57827 57827 C:\\windows\\system32\\services.exe
+            61001 61000 .\\\\bootloader\\\\horizon-loader.exe --server localhost --user local
+            61003 61002 C:\\Eden\\Ashita\\ffxi-bootmod\\xiloader.exe --server=PLAY.EDENXI.COM
+            61010 61009 C:\\CatsEye\\pol.exe
+            61020 61019 /bin/sh -c while /usr/bin/pgrep -qf horizon-loader.exe ; do /bin/sleep 2; done
+            61030 61029 grep horizon-loader.exe notes.txt
             """
-        let live = LiveClients.parse(canned)
+        let snap = LiveClients.parse(canned)
+        let live = snap.byHost
         checks.append(("host extraction: loader and its x87 sidecar file under one host",
                        live["play.horizonxi.com"] == [57992, 57994]))
         checks.append(("host extraction: localhost is the local world's 127.0.0.1",
@@ -622,30 +625,93 @@ enum Headless {
                        live["play.edenxi.com"] == [61003]))
         checks.append(("host extraction: a loader with no --server is live under an unknown host",
                        live[""] == [61010]))
-        checks.append(("host extraction: shells and greps naming a loader are not clients",
-                       live.values.allSatisfy { !$0.contains(61020) && !$0.contains(61030) }))
+        checks.append(("host extraction: shells, greps and wine services are not clients",
+                       live.values.allSatisfy { !$0.contains(61020) && !$0.contains(61030) && !$0.contains(57827) }))
 
         let horizon = Server.all.first { $0.name == "HorizonXI" }
         let local = Server.all.first(where: \.local)
-        let dup = horizon.flatMap {
-            MultiWorld.refusal(world: $0.name, host: $0.host,
-                               allowsMultipleClients: $0.allowsMultipleClients, live: live)
+        let catseye = Server.all.first { $0.name == "CatsEyeXI" }
+        func refusal(_ s: Server?, _ clients: [LiveClients.Client], own: Set<pid_t> = []) -> String? {
+            s.flatMap { MultiWorld.refusal(world: $0.name, hosts: [$0.host], maxClients: $0.maxClients,
+                                           clients: clients, sessionGroups: own) }
         }
+        let dup = refusal(horizon, snap.clients)
         checks.append(("duplicate HorizonXI is refused, naming the running pid",
                        horizon?.allowsMultipleClients == false && dup?.contains("57992") == true))
-        checks.append(("the local world may run twice",
-                       local?.allowsMultipleClients == true
-                           && local.flatMap { MultiWorld.refusal(world: $0.name, host: $0.host,
-                                                                 allowsMultipleClients: $0.allowsMultipleClients,
-                                                                 live: live) } == nil))
-        let onlyLocal = LiveClients.parse("61001 .\\\\bootloader\\\\horizon-loader.exe --server 127.0.0.1\n")
-        checks.append(("a different world is not a duplicate",
-                       horizon.flatMap { MultiWorld.refusal(world: $0.name, host: $0.host,
-                                                            allowsMultipleClients: false,
-                                                            live: onlyLocal) } == nil))
+        checks.append(("the local world may run twice", local?.allowsMultipleClients == true
+                           && refusal(local, snap.clients, own: [61000, 70000]) == nil))
+        let onlyLocal = LiveClients.parse("61001 61000 .\\\\bootloader\\\\horizon-loader.exe --server 127.0.0.1\n").clients
+        checks.append(("a different world is not a duplicate", refusal(horizon, onlyLocal) == nil))
+        checks.append(("a boot profile --server that differs from the Host field still counts",
+                       horizon.flatMap { MultiWorld.refusal(world: $0.name, hosts: ["play.example.org", "127.0.0.1"],
+                                                            maxClients: 1, clients: onlyLocal) } != nil))
+        checks.append(("a session of this window that is still injecting counts as a copy",
+                       refusal(horizon, [], own: [-1]) != nil))
         checks.append(("only the local world and CatsEyeXI (cited rules) allow several clients",
                        Server.all.filter(\.allowsMultipleClients).map(\.name).sorted()
                            == ["CatsEyeXI", "Local server"]))
+        let oneCats = LiveClients.parse("62001 62000 C:\\CatsEye\\xiloader.exe --server server.catseyexi.com\n"
+                                        + "62002 62000 /x/x87sidecar-coop --cooperative /x/wine C:\\CatsEye\\xiloader.exe --server server.catseyexi.com\n").clients
+        let twoCats = oneCats + LiveClients.parse("63001 63000 C:\\CatsEye\\xiloader.exe --server server.catseyexi.com\n").clients
+        checks.append(("CatsEyeXI: a second client is allowed (a sidecar is not a second client)",
+                       catseye?.maxClients == 2 && refusal(catseye, oneCats) == nil))
+        checks.append(("CatsEyeXI: a third client is refused (their two-character cap)",
+                       refusal(catseye, twoCats)?.contains("at most 2") == true))
+
+        // Two local-world sessions in one prefix: A launched first (group 71000), then B (72000).
+        let twoLocal = LiveClients.parse("""
+            71001 71000 .\\\\bootloader\\\\horizon-loader.exe --server 127.0.0.1 --user a
+            71002 71000 /x/x87sidecar-coop --cooperative /x/wine .\\\\bootloader\\\\horizon-loader.exe --server 127.0.0.1 --user a
+            72001 72000 .\\\\bootloader\\\\horizon-loader.exe --server 127.0.0.1 --user b
+            72002 72000 /x/x87sidecar-coop --cooperative /x/wine .\\\\bootloader\\\\horizon-loader.exe --server 127.0.0.1 --user b
+            """)
+        checks.append(("stop/watch on the first of two local sessions sees only its own pids",
+                       MultiWorld.sessionPIDs(group: 71000, host: "127.0.0.1", preexisting: [],
+                                              otherGroups: [72000], in: twoLocal) == [71001, 71002]))
+        checks.append(("the second local session sees only its own pids",
+                       MultiWorld.sessionPIDs(group: 72000, host: "127.0.0.1", preexisting: [71001, 71002],
+                                              otherGroups: [71000], in: twoLocal) == [72001, 72002]))
+        checks.append(("with its group unknown, a session still leaves other sessions' clients alone",
+                       MultiWorld.sessionPIDs(group: nil, host: "127.0.0.1", preexisting: [],
+                                              otherGroups: [72000], in: twoLocal) == [71001, 71002]))
+        let unlisted = LiveClients.parse("74001 74000 C:\\Game\\mystery-loader.exe --server x\n")
+        checks.append(("a session's group covers a loader name this launcher does not know",
+                       MultiWorld.sessionPIDs(group: 74000, host: "x", preexisting: [], otherGroups: [],
+                                              in: unlisted) == [74001]))
+
+        let injecting = LiveClients.parse("""
+            73001 73000 /x/wine/bin/wine C:\\HorizonXI\\Ashita-cli.exe horizonxi.ini
+            73002 73000 C:\\Eden\\injector.exe eden.xml
+            """).clients
+        checks.append(("an injector is a live client under the unknown host, before its loader exists",
+                       injecting.map(\.pid) == [73001, 73002] && injecting.allSatisfy { $0.injecting && $0.host.isEmpty }))
+        checks.append(("a launch while another world is injecting treats the prefix as in use",
+                       MultiWorld.clientsLive(injecting, otherSessionsPlaying: 0)))
+        checks.append(("a launch while another session of this window is playing but not yet visible treats the prefix as in use",
+                       MultiWorld.clientsLive([], otherSessionsPlaying: 1)
+                           && !MultiWorld.clientsLive([], otherSessionsPlaying: 0)))
+        checks.append(("the last Stop takes the wineserver down only when nothing else holds the prefix",
+                       MultiWorld.mayStopWineserver([], otherSessionsPlaying: 0, launchUnderWay: false)
+                           && !MultiWorld.mayStopWineserver(injecting, otherSessionsPlaying: 0, launchUnderWay: false)
+                           && !MultiWorld.mayStopWineserver([], otherSessionsPlaying: 1, launchUnderWay: false)
+                           && !MultiWorld.mayStopWineserver([], otherSessionsPlaying: 0, launchUnderWay: true)))
+        checks.append(("the Running list shows clients another launcher started, not this window's",
+                       MultiWorld.elsewhere(snap.clients, ownGroups: [57810], ownHostsWithoutGroup: ["play.edenxi.com"])
+                           == ["127.0.0.1": [61001], "": [61010]]))
+
+        let lockFile = fm.temporaryDirectory.appendingPathComponent("hxi-multiworld-\(UUID().uuidString).lock")
+        if let held = LaunchLock.acquire(at: lockFile) {
+            let second = LaunchLock.acquire(at: lockFile)
+            LaunchLock.release(held)
+            let again = LaunchLock.acquire(at: lockFile)
+            checks.append(("the launch lock refuses a second holder and frees on release",
+                           second == nil && again != nil))
+            if let again { LaunchLock.release(again) }
+            if let second { LaunchLock.release(second) }
+        } else {
+            checks.append(("the launch lock refuses a second holder and frees on release", false))
+        }
+        try? fm.removeItem(at: lockFile)
 
         checks.append(("renderer step is skip, not stop-and-apply, while a client is live",
                        RendererSetup.step(for: .metal, current: .metal, clientsLive: true) == .skip))

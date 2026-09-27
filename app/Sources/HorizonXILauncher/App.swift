@@ -182,6 +182,11 @@ struct ContentView: View {
         .onReceive(Timer.publish(every: 120, on: .main, in: .common).autoconnect()) { _ in
             Task { await feeds.refreshPopulations() }
         }
+        // Clients started by another launcher are only visible to a process scan. One `ps`.
+        .task { await sessions.refreshElsewhere() }
+        .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
+            Task { await sessions.refreshElsewhere() }
+        }
         // Discovery walks /Volumes, and an external drive can make that take tens of seconds.
         // Doing it on the main thread means the window never appears at all — which looked
         // exactly like the app failing to launch. Scan off the main actor and fill the UI in.
@@ -1533,34 +1538,48 @@ struct ContentView: View {
         }
     }
 
+    /// Clients this window did not start, named by the world whose host they were given.
+    private var elsewhere: [(host: String, name: String, pids: [pid_t])] {
+        sessions.elsewhere.keys.sorted().map { h in
+            let name = store.servers.first { LiveClients.normalize($0.host) == h }?.name
+                ?? (h.isEmpty ? "Unknown world" : h)
+            return (h, name + " (outside this window)", sessions.elsewhere[h] ?? [])
+        }
+    }
+
+    /// The selected world is playing, here or in another launcher.
+    private var selectedRunning: Bool {
+        runner.running || store.selected.map { sessions.elsewhere[LiveClients.normalize($0.host)] != nil } == true
+    }
+
     /// Play is still pressable on a running world that allows a second client.
-    private var playAgain: Bool { runner.running && store.selected?.allowsMultipleClients == true }
+    private var playAgain: Bool { selectedRunning && store.selected?.allowsMultipleClients == true }
 
     private var playButton: some View {
         Button(action: play) {
-            Text(playAgain ? "PLAY ANOTHER" : runner.running ? "RUNNING" : "PLAY")
+            Text(playAgain ? "PLAY ANOTHER" : selectedRunning ? "RUNNING" : "PLAY")
                 .font(.system(size: 15, weight: .semibold, design: .serif)).tracking(5)
                 .frame(maxWidth: .infinity).padding(.vertical, 13)
                 .background(
-                    LinearGradient(colors: runner.running && !playAgain
+                    LinearGradient(colors: selectedRunning && !playAgain
                                    ? [Vana.goldDim.opacity(0.45), Vana.goldDim.opacity(0.25)]
                                    : [Vana.gold, Vana.goldDim],
                                    startPoint: .top, endPoint: .bottom))
                 .foregroundStyle(Color.black.opacity(0.86))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
-                .shadow(color: Vana.gold.opacity(runner.running && !playAgain ? 0 : 0.35), radius: 10, y: 3)
+                .shadow(color: Vana.gold.opacity(selectedRunning && !playAgain ? 0 : 0.35), radius: 10, y: 3)
         }
         .buttonStyle(.plain)
         .keyboardShortcut(.defaultAction)
         // Only the *absence* of an install should block Play. Once we have one — remembered
         // or found — a still-running background rescan must not hold the user up.
-        .disabled(selected == nil || (runner.running && !playAgain) || blocked)
+        .disabled(selected == nil || (selectedRunning && !playAgain) || blocked)
     }
 
     /// Every world playing right now, each with its own Stop. Stopping one never stops another.
     @ViewBuilder private var runningList: some View {
         let live = sessions.live
-        if !live.isEmpty {
+        if !live.isEmpty || !elsewhere.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 Text("RUNNING").font(.caption2).tracking(2).foregroundStyle(Vana.muted)
                 ForEach(live, id: \.id) { s in
@@ -1568,9 +1587,19 @@ struct ContentView: View {
                         Circle().fill(Vana.crystal).frame(width: 6, height: 6)
                         Text(s.id).font(.caption).foregroundStyle(Vana.text)
                         Spacer()
-                        Button("Stop") { if let i = selected { s.runner.stop(i) } }
+                        Button("Stop") { s.runner.stop() }
                             .font(.caption)
                             .help("Ends \(s.id)'s client only. Other worlds keep running.")
+                    }
+                }
+                ForEach(elsewhere, id: \.host) { e in
+                    HStack(spacing: 6) {
+                        Circle().fill(Vana.muted).frame(width: 6, height: 6)
+                        Text(e.name).font(.caption).foregroundStyle(Vana.text)
+                        Spacer()
+                        Text("pid \(e.pids.map(String.init).joined(separator: ","))")
+                            .font(.caption).foregroundStyle(Vana.muted)
+                            .help("Started outside this window (another launcher, or by hand). Stop it from there.")
                     }
                 }
             }
@@ -1601,9 +1630,9 @@ struct ContentView: View {
         }
         // Checked against the processes, not only this window's sessions: a client started by
         // another launcher (or by --play) counts just the same.
-        if let why = MultiWorld.refusal(world: server.name, host: server.host,
-                                        allowsMultipleClients: server.allowsMultipleClients,
-                                        live: LiveClients.scan()) {
+        let hosts = [server.host] + [Credentials.bootServer(in: i, profile: server.bootProfile)].compactMap { $0 }
+        if let why = Runner.duplicateRefusal(world: server.name, hosts: hosts, maxClients: server.maxClients,
+                                             clients: LiveClients.snapshot().clients) {
             notice = why
             runner.appendLine("!! " + why)
             return
@@ -1655,9 +1684,30 @@ struct ContentView: View {
             r.appendLine("!! " + notice)
             return
         }
-        // The client was installed by HorizonXI and carries their logo in its own data. On any
-        // other world, show the stock title screen instead. See Branding.swift.
-        Branding.apply(stockBranding: Branding.wantsStockBranding(server), to: i)
+        // A world may need a different renderer than the global preference (Gaia XI: DXVK kills
+        // its client, OpenGL boots it). Applied here rather than by mutating the user's setting,
+        // so switching worlds never silently rewrites what they chose.
+        var effective = perf
+        if !server.msync, effective.msync {
+            effective.msync = false
+            r.appendLine("i  \(server.name) runs with msync off — its client exits about a "
+                         + "second after login with it on.")
+        }
+        if let pinned = server.renderer, pinned != perf.renderer {
+            effective.renderer = pinned
+            r.appendLine("i  \(server.name) is pinned to the \(pinned.title) renderer "
+                         + "(your setting, \(perf.renderer.title), is left alone). "
+                         + "Clear it in the server's settings to override.")
+        }
+        // Every refusal before any shared client file is rewritten: pivot.ini and the boot
+        // profile belong to whatever world is already running too.
+        if let why = r.gate(i, renderer: effective.renderer, profile: server.bootProfile,
+                            world: server.name, host: server.host,
+                            maxClients: server.maxClients).refusal {
+            notice = why
+            r.appendLine("!! " + why)
+            return
+        }
 
         // Pre-game version check. The login server does this anyway and answers "The game's
         // data has been updated" — better to say so here, name the versions, and (for HorizonXI,
@@ -1689,6 +1739,10 @@ struct ContentView: View {
                          + "\u{203A} Update HorizonXI\u{2026} if you are actually turned away.")
         }
 
+        // The client was installed by HorizonXI and carries their logo in its own data. On any
+        // other world, show the stock title screen instead. See Branding.swift.
+        Branding.apply(stockBranding: Branding.wantsStockBranding(server), to: i)
+
         if !user.isEmpty, !pass.isEmpty {
             if !Credentials.apply(user: user, password: pass, to: i,
                                   profile: server.bootProfile, server: server.host) {
@@ -1699,21 +1753,6 @@ struct ContentView: View {
                 }
             }
         }
-        // A world may need a different renderer than the global preference (Gaia XI: DXVK kills
-        // its client, OpenGL boots it). Applied here rather than by mutating the user's setting,
-        // so switching worlds never silently rewrites what they chose.
-        var effective = perf
-        if !server.msync, effective.msync {
-            effective.msync = false
-            r.appendLine("i  \(server.name) runs with msync off — its client exits about a "
-                         + "second after login with it on.")
-        }
-        if let pinned = server.renderer, pinned != perf.renderer {
-            effective.renderer = pinned
-            r.appendLine("i  \(server.name) is pinned to the \(pinned.title) renderer "
-                         + "(your setting, \(perf.renderer.title), is left alone). "
-                         + "Clear it in the server's settings to override.")
-        }
         // Two clients plus LSB on this 8 GB Mac is where frame rates collapse; say so, then go.
         if !LiveClients.scan().isEmpty, let w = MultiWorld.currentMemoryWarning() {
             notice = w
@@ -1721,7 +1760,7 @@ struct ContentView: View {
         }
         if let why = r.launch(i, perf: effective, profile: server.bootProfile, useX87: server.x87,
                               world: server.name, host: server.host,
-                              allowsMultipleClients: server.allowsMultipleClients,
+                              maxClients: server.maxClients,
                               addonPolicy: addonPolicy) {
             notice = why
         }
