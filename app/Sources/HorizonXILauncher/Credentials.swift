@@ -368,15 +368,26 @@ enum Credentials {
         let url = install.gameDir.appendingPathComponent("config/boot/\(name)")
         guard var text = readFile(at: url) else { return false }
 
+        // Keep the password off the loader's command line (readable with `ps` for the whole
+        // session) and out of the boot profile: loaders that take --json read it from a private
+        // file the launcher deletes once the game has logged in. Older loaders get --pass.
+        let secret: String
+        if loaderSupportsJSON(install), writeLoginFile(user: user, password: password, install: install, profile: name) {
+            secret = "--json \(loginFileWindowsPath(install, profile: name))"
+        } else {
+            secret = "--pass \(password)"
+        }
+        let command = "--server \(server) --user \(user) \(secret)"
+
         if name.hasSuffix(".xml") {
             guard let out = xmlSetting("boot_command",
-                                       to: "--server \(server) --user \(user) --pass \(password)",
+                                       to: command,
                                        in: text)
             else { return false }
             return writeFile(out, to: url)
         }
 
-        let line = "command     = --server \(server) --user \(user) --pass \(password)"
+        let line = "command     = \(command)"
         var replaced = false
         let eol = TextFile.terminator(of: text)
         let lines = TextFile.lines(of: text).map { l -> String in
@@ -391,6 +402,45 @@ enum Credentials {
         text = TextFile.join(lines, terminator: eol)
         guard replaced else { return false }
         return writeFile(text, to: url)
+    }
+
+    /// True when the world's bootloader (xiloader lineage) understands `--json <file>`.
+    static func loaderSupportsJSON(_ install: Install) -> Bool {
+        let dir = install.gameDir.appendingPathComponent("bootloader")
+        guard let exes = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .filter({ $0.pathExtension.lowercased() == "exe" }), !exes.isEmpty else { return false }
+        let needle = Data("--json-file".utf8)
+        return exes.allSatisfy { (try? Data(contentsOf: $0, options: .mappedIfSafe))?.range(of: needle) != nil }
+    }
+
+    private static func loginFileName(_ profile: String) -> String {
+        ".login-" + profile.lowercased().map { $0.isLetter || $0.isNumber ? $0 : "-" } + ".json"
+    }
+
+    static func loginFileURL(_ install: Install, profile: String) -> URL {
+        install.gameDir.appendingPathComponent("config/boot/" + loginFileName(profile))
+    }
+
+    static func loginFileWindowsPath(_ install: Install, profile: String) -> String {
+        "C:\\" + install.gameDir.lastPathComponent + "\\config\\boot\\" + loginFileName(profile)
+    }
+
+    private static func writeLoginFile(user: String, password: String, install: Install, profile: String) -> Bool {
+        let url = loginFileURL(install, profile: profile)
+        guard let data = try? JSONSerialization.data(withJSONObject: ["username": user, "password": password]) else { return false }
+        try? FileManager.default.removeItem(at: url)
+        guard FileManager.default.createFile(atPath: url.path, contents: data,
+                                             attributes: [.posixPermissions: 0o600]) else { return false }
+        return true
+    }
+
+    /// Delete every login file under this install. Called once the loader has had time to read it.
+    static func scrubLoginFiles(_ install: Install) {
+        let dir = install.gameDir.appendingPathComponent("config/boot")
+        for f in (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        where f.hasPrefix(".login-") && f.hasSuffix(".json") {
+            try? FileManager.default.removeItem(at: dir.appendingPathComponent(f))
+        }
     }
 
     /// Set `key = value` lines in the boot profile, leaving commented examples alone.

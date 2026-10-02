@@ -908,6 +908,13 @@ final class Runner: ObservableObject {
             self?.appendLine("==> injector exited \(code)")
             self?.watchGameProcess()
         }
+        // The login file (if this loader takes --json) only needs to outlive the loader's start;
+        // wine can take a minute to boot after a Repair, so give it three, then delete it.
+        let loginFile = Credentials.loginFileURL(install, profile: install.bootProfileName(profile))
+        Task.detached {
+            try? await Task.sleep(nanoseconds: 180_000_000_000)
+            try? FileManager.default.removeItem(at: loginFile)
+        }
         // Keep other launches out until a scan can see this one.
         if let pid = spawned {
             lockHandedOff = true
