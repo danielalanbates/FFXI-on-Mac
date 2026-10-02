@@ -41,7 +41,13 @@ installed_client() {
 
 horizon_marketing() {
   [[ -f "$game/version.json" ]] || { print ""; return; }
-  python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version",""))' "$game/version.json" 2>/dev/null || print ""
+  local v
+  v=$(grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "$game/version.json" 2>/dev/null | head -1 | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+  if [[ -n "$v" ]]; then
+    print -r -- "$v"
+  else
+    python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version",""))' "$game/version.json" 2>/dev/null || print ""
+  fi
 }
 
 fetch_json() { curl -fsSL -A "$UA" --max-time 20 "$1"; }

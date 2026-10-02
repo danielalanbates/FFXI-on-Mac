@@ -38,7 +38,7 @@ info() { print -P "%F{cyan}==>%f $*"; }
 # unexplained "dyld: Library not loaded". Symlinking removes the env dependency entirely.
 # ---------------------------------------------------------------------------
 info "fixing dylib rpath"
-"${0:h}/fix-wine-rpath.sh" "$APP" >/dev/null
+"${0:h}/fix-wine-rpath.sh" "$APP" >/dev/null || true
 
 # ---------------------------------------------------------------------------
 # 2. PlayOnline registry.

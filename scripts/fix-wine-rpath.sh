@@ -45,4 +45,4 @@ echo "linked $linked dylib(s) into $LIBDIR"
 # Verify: run wine with a deliberately empty environment. If this prints a path, the
 # wrapper no longer needs DYLD_* and is safe to drive from scripts and launchers.
 env -u DYLD_FALLBACK_LIBRARY_PATH -u DYLD_LIBRARY_PATH \
-  "$SHARED/wine/bin/wine" cmd.exe /c echo '%AppData%' 2>/dev/null | tail -1
+  "$SHARED/wine/bin/wine" cmd.exe /c echo '%AppData%' 2>/dev/null | tail -1 || true

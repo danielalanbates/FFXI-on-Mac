@@ -7,6 +7,16 @@ import UniformTypeIdentifiers
 /// processes. Silently, and with the UI reverting to its "nothing installed yet" state -- so the
 /// only evidence a 6 GB download ever happened was the folder on disk. Ask first.
 final class LauncherDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // VanaVoice should only run alongside an active game when selected; never while the
+        // launcher is sitting idle.
+        Narration.terminateNarrator()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        Narration.terminateNarrator()
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard Runner.workInFlight else { return .terminateNow }
         let a = NSAlert()
@@ -118,10 +128,16 @@ struct ContentView: View {
     @State private var showAllSignups =
         ProcessInfo.processInfo.environment["FFXI_ON_MAC_SHOW_SIGNUPS"] == "1"
 
+    private var isUpdateReady: Bool {
+        if case .ready = updater.state { return true }
+        return false
+    }
+
     private var blocked: Bool { checks.contains { $0.state == .bad } }
 
     private var statusText: String {
         if scanning { return "looking for your install…" }
+        if isUpdateReady { return "update downloaded — restart to install" }
         if selected == nil { return "nothing installed yet" }
         if let i = active, !i.hasGame { return "wine is ready — \(store.selected?.name ?? "the game")'s data is not installed" }
         return blocked ? "setup incomplete" : "ready to play"
@@ -390,7 +406,7 @@ struct ContentView: View {
                 Image(systemName: "arrow.down.circle.fill").foregroundStyle(Vana.gold)
                 Text("Update \(release.version) is available").font(.caption).foregroundStyle(Vana.text)
                 Spacer()
-                Button("Update") { updater.downloadAvailable() }
+                Button("Download update") { updater.downloadAvailable() }
                     .buttonStyle(.borderedProminent).controlSize(.small)
             }
             .padding(10)
@@ -398,13 +414,13 @@ struct ContentView: View {
             .padding(.top, 6)
         case .ready(let release):
             HStack(spacing: 10) {
-                Image(systemName: "arrow.down.circle.fill").foregroundStyle(Vana.gold)
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(Vana.gold)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Update \(release.version) is ready").font(.caption).foregroundStyle(Vana.text)
-                    Text("Restart to finish installing it.").font(.caption2).foregroundStyle(Vana.muted)
+                    Text("Update \(release.version) is downloaded").font(.caption).foregroundStyle(Vana.text)
+                    Text("Press UPDATE below to finish installing.").font(.caption2).foregroundStyle(Vana.muted)
                 }
                 Spacer()
-                Button("Restart") { updater.restartToUpdate() }
+                Button("Update") { updater.restartToUpdate() }
                     .buttonStyle(.borderedProminent).controlSize(.small)
             }
             .padding(10)
@@ -1296,7 +1312,10 @@ struct ContentView: View {
                 .onChange(of: perf.disableAppNap) { _ in perf.save() }
                 .onChange(of: perf.followSoundOutput) { _ in perf.save() }
                 .onChange(of: perf.largeAddressAware) { _ in perf.save() }
-                .onChange(of: perf.narrateCutscenes) { _ in perf.save() }
+                .onChange(of: perf.narrateCutscenes) { enabled in
+                    perf.save()
+                    if !enabled { Narration.terminateNarrator() }
+                }
                 .onChange(of: perf.enableVanaguide) { _ in perf.save() }
                 .onChange(of: perf.metalHUD) { _ in perf.save() }
             } label: {
@@ -1540,8 +1559,14 @@ struct ContentView: View {
     }
 
     private var playButton: some View {
-        Button(action: play) {
-            Text(runner.running ? "RUNNING" : "PLAY")
+        Button(action: {
+            if isUpdateReady {
+                updater.restartToUpdate()
+            } else {
+                play()
+            }
+        }) {
+            Text(runner.running ? "RUNNING" : (isUpdateReady ? "UPDATE" : "PLAY"))
                 .font(.system(size: 15, weight: .semibold, design: .serif)).tracking(5)
                 .frame(maxWidth: .infinity).padding(.vertical, 13)
                 .background(
@@ -1555,9 +1580,9 @@ struct ContentView: View {
         }
         .buttonStyle(.plain)
         .keyboardShortcut(.defaultAction)
-        // Only the *absence* of an install should block Play. Once we have one — remembered
-        // or found — a still-running background rescan must not hold the user up.
-        .disabled(selected == nil || runner.running || blocked)
+        // Only the *absence* of an install should block Play. When an update is ready to install,
+        // Update is available immediately regardless of server selection.
+        .disabled(runner.running || (!isUpdateReady && (selected == nil || blocked)))
     }
 
     // MARK: - Actions

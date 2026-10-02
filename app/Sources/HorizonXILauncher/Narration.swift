@@ -79,6 +79,7 @@ enum Narration {
         // gets the addon removed, not merely left uninstalled, in case an older build of this
         // launcher (or the player) put it there.
         guard allowed(by: policy) else {
+            terminateNarrator()
             let dest = install.gameDir.appendingPathComponent("addons/vanavoice", isDirectory: true)
             if fm.fileExists(atPath: dest.path) { try? fm.removeItem(at: dest) }
             if removeLoadLine(from: scripts) || enabled {
@@ -89,6 +90,7 @@ enum Narration {
         }
 
         guard enabled else {
+            terminateNarrator()
             if removeLoadLine(from: scripts) { log("==> narration: off") }
             return
         }
@@ -147,6 +149,16 @@ enum Narration {
         NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: appPath),
                                            configuration: cfg) { _, error in
             if let error { NSLog("VanaVoice launch failed: \(error.localizedDescription)") }
+        }
+    }
+
+    /// Stop the narrator process if it is running. VanaVoice only runs alongside an active game
+    /// when the player specifically selected narration for that session.
+    static func terminateNarrator() {
+        let apps = NSWorkspace.shared.runningApplications
+            .filter { $0.bundleIdentifier == "org.batesai.vanavoice" }
+        for app in apps {
+            app.terminate()
         }
     }
 }
