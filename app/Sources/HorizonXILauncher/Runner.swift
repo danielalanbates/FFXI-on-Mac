@@ -141,9 +141,13 @@ final class Runner: ObservableObject {
         return FileManager.default.isExecutableFile(atPath: dev.path) ? dev : nil
     }
 
-    func repair(_ install: Install) {
+    func repair(_ install: Install, done: @escaping (Bool) -> Void = { _ in }) {
+        if refuseWhileBusy("the repair") { done(false); return }
         guard let script = Self.repairScript() else {
-            appendLine("!! install.sh not found in the bundle"); return
+            appendLine("!! install.sh not found in the bundle"); done(false); return
+        }
+        guard install.ensureClassicGameLink(log: { [weak self] in self?.appendLine($0) }) else {
+            done(false); return
         }
         busy = true
         appendLine("==> repairing \(install.wrapper.path) [\(install.prefixName)]")
@@ -152,8 +156,13 @@ final class Runner: ObservableObject {
         spawn(URL(fileURLWithPath: "/bin/zsh"),
               args: [script.path, install.wrapper.path, install.prefixName],
               env: [:], cwd: script.deletingLastPathComponent()) { [weak self] code in
+            // Wine keeps registry changes in its server process. Stop it and wait for the
+            // flush before the UI re-runs Preflight, or a successful repair can still leave
+            // Play disabled until the next app launch.
+            RendererSetup.stopWineserver(install)
             self?.busy = false
             self?.appendLine("==> repair exited \(code)")
+            done(code == 0)
         }
     }
 
@@ -464,17 +473,29 @@ final class Runner: ObservableObject {
     }
 
     /// Fresh HorizonXI client into `dir` via their published torrent + updates (update-client.sh install).
-    func installHorizon(into dir: URL) {
-        if refuseWhileBusy("the HorizonXI client install") { return }
-        guard let script = Self.updateScript() else { return }
+    func installHorizon(_ install: Install, done: @escaping (Bool) -> Void = { _ in }) {
+        if refuseWhileBusy("the HorizonXI client install") { done(false); return }
+        guard let script = Self.updateScript() else {
+            appendLine("!! update-client.sh not found in the bundle"); done(false); return
+        }
+        guard install.ensureClassicGameLink(log: { [weak self] in self?.appendLine($0) }) else {
+            done(false); return
+        }
         busy = true
+        let dir = install.gameDir
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         appendLine("==> installing HorizonXI into \(dir.path) (9.4 GB torrent — leave this running)")
         var env: [String: String] = [:]
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")
         spawn(URL(fileURLWithPath: "/bin/zsh"), args: [script.path, "install", dir.path],
               env: env, cwd: script.deletingLastPathComponent()) { [weak self] code in
-            self?.busy = false; self?.appendLine("==> install exited \(code)")
+            guard let self else { done(false); return }
+            self.appendLine("==> install exited \(code)")
+            self.busy = false
+            guard code == 0 else { done(false); return }
+            // The torrent only puts game files on disk. The prefix still needs its registry,
+            // COM registrations, and compatibility path before Preflight will allow Play.
+            self.repair(install, done: done)
         }
     }
 

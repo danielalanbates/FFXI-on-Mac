@@ -8,6 +8,11 @@ let package = Package(
         .executableTarget(
             name: "HorizonXILauncher",
             path: "Sources/HorizonXILauncher"
-        )
+        ),
+        .testTarget(
+            name: "HorizonXILauncherTests",
+            dependencies: ["HorizonXILauncher"],
+            path: "Tests/HorizonXILauncherTests"
+        ),
     ]
 )

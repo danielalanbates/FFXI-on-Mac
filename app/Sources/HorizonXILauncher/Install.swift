@@ -24,6 +24,12 @@ struct Install: Identifiable, Hashable {
     static let installerPrefixName = "prefix-installers"
     var installerPrefix: Install { Install(wrapper: wrapper, prefixName: Self.installerPrefixName) }
 
+    /// Only game prefixes belong in the install picker. The installer prefix runs untrusted
+    /// third-party setup programs and deliberately has none of the registry state needed to play.
+    static func isGamePrefixName(_ name: String) -> Bool {
+        name.hasPrefix("prefix") && name != installerPrefixName
+    }
+
     /// The world this install was resolved for, when it came from a `Server`. Diagnostics only
     /// (`clientAmbiguity`); the launch itself keys off `gameDirOverride`.
     var worldName: String? = nil
@@ -216,6 +222,42 @@ struct Install: Identifiable, Hashable {
     var prefix: URL { sharedSupport.appendingPathComponent(prefixName) }
     var driveC: URL { prefix.appendingPathComponent("drive_c") }
     var gameDir: URL { gameDirOverride ?? driveC.appendingPathComponent("HorizonXI") }
+
+    /// Keep the classic `C:\HorizonXI` path available when HorizonXI's data lives elsewhere.
+    /// The repair script and remembered-install fast path both use this location, while normal
+    /// launches continue to use `gameDirOverride` directly. Never replace a real directory.
+    @discardableResult
+    func ensureClassicGameLink(log: (String) -> Void) -> Bool {
+        guard gameDirOverride != nil else { return true }
+        let fm = FileManager.default
+        let classic = driveC.appendingPathComponent("HorizonXI")
+        let wanted = gameDir.standardizedFileURL
+
+        if let destination = try? fm.destinationOfSymbolicLink(atPath: classic.path) {
+            let current = URL(fileURLWithPath: destination,
+                              relativeTo: classic.deletingLastPathComponent()).standardizedFileURL
+            if current.path == wanted.path { return true }
+            do { try fm.removeItem(at: classic) }
+            catch {
+                log("!! could not replace the old C:\\HorizonXI link: \(error.localizedDescription)")
+                return false
+            }
+        } else if fm.fileExists(atPath: classic.path) {
+            log("!! C:\\HorizonXI is a real folder; not replacing it with a link to \(wanted.path)")
+            return false
+        }
+
+        do {
+            try fm.createDirectory(at: driveC, withIntermediateDirectories: true)
+            try fm.createSymbolicLink(at: classic, withDestinationURL: wanted)
+            log("==> linked C:\\HorizonXI to \(wanted.path)")
+            return true
+        } catch {
+            log("!! could not link C:\\HorizonXI to \(wanted.path): \(error.localizedDescription)")
+            return false
+        }
+    }
+
     var squareEnix: URL { Self.resolveSquareEnix(gameDir: gameDir, root: dataRoot) }
     /// Windows-side path of `squareEnix`, for the registry.
     var squareEnixWine: String { Self.winePath(squareEnix, driveC: driveC) }
@@ -302,7 +344,7 @@ struct Install: Identifiable, Hashable {
     static func remembered() -> Install? {
         guard let s = UserDefaults.standard.string(forKey: key) else { return nil }
         let parts = s.components(separatedBy: "#")
-        guard parts.count == 2 else { return nil }
+        guard parts.count == 2, isGamePrefixName(parts[1]) else { return nil }
         let i = Install(wrapper: URL(fileURLWithPath: parts[0]), prefixName: parts[1])
         return FileManager.default.fileExists(atPath: i.gameDir.path) ? i : nil
     }
@@ -354,7 +396,7 @@ struct Install: Identifiable, Hashable {
                 // the game nowhere, it is a fresh wrapper waiting for an install, and its
                 // prefixes are exactly what the user needs to see.
                 let candidates = kids
-                    .filter { $0.lastPathComponent.hasPrefix("prefix") }
+                    .filter { isGamePrefixName($0.lastPathComponent) }
                     .map { Install(wrapper: app, prefixName: $0.lastPathComponent) }
                 let withGame = candidates.filter(\.hasGame)
                 found.append(contentsOf: withGame.isEmpty ? candidates : withGame)
@@ -385,7 +427,7 @@ struct Install: Identifiable, Hashable {
               let kids = try? fm.contentsOfDirectory(at: shared, includingPropertiesForKeys: nil)
         else { return [] }
         return kids
-            .filter { $0.lastPathComponent.hasPrefix("prefix") }
+            .filter { isGamePrefixName($0.lastPathComponent) }
             .map { Install(wrapper: app, prefixName: $0.lastPathComponent) }
             .sorted { a, b in
                 if a.hasGame != b.hasGame { return a.hasGame }

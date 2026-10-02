@@ -1221,7 +1221,9 @@ struct ContentView: View {
                         }.buttonStyle(.borderedProminent)
                     }
                     HStack(spacing: 8) {
-                        Button("Repair") { if let i = active { runner.repair(i) } }
+                        Button("Repair") {
+                            if let i = active { runner.repair(i) { _ in recheck() } }
+                        }
                             .disabled(runner.busy)
                         if store.selected?.name == "HorizonXI" {
                             Button("Update HorizonXI…") {
@@ -1493,7 +1495,7 @@ struct ContentView: View {
         case .catseyeLauncher:
             runner.runCatsEyeLauncher(i, dataPath: s.dataPath)
         case .horizonTorrent:
-            runner.installHorizon(into: i.gameDir)
+            runner.installHorizon(i) { _ in recheck() }
         case .installerExe:
             guard let u = URL(string: s.installURL) else { return }
             runner.installPageFallback = Self.homePages[s.name].flatMap(URL.init(string:))
