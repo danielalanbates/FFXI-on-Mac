@@ -48,6 +48,8 @@ correct atmospheric haze at the main menu and in Selbina, fog enabled, no bypass
 This is an upstream DXVK bug worth reporting — it affects any Vulkan driver that respects
 push-constant stage flags strictly.
 
+**Update 2026-09-04:** already fixed in DXVK 2.x (`info.pushConstSize = sizeof(D3D9RenderStateInfo)`), so there is nothing to file against the EOL 1.10.3 branch. See `docs/UPSTREAM.md` §3a for the assessment.
+
 ---
 
 ## 1. DXVK is not actually incompatible with modern MoltenVK

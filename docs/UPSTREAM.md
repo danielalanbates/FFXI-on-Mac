@@ -1,15 +1,35 @@
 # Upstream reports
 
-Two bugs found in this project's own debugging that are not ours to fix. Both are written up so
-they can be filed verbatim. Neither has been filed yet — filing is a public action on someone
-else's tracker and is Daniel's call.
+Two bugs found in this project's own debugging that are not ours to fix. They were written up to
+be filed verbatim; **read the staleness gate below before filing** — #1 has since been superseded.
+Nothing here has been filed. Filing is a public action on someone else's tracker and is Daniel's call.
 
-Environment for both: MacBook Pro M1 (Apple M1, 8 GB), macOS 26.5, wine-10.0 (Sikarugir /
-Gcenx build) running x86_64 under Rosetta, 32-bit Windows game (Final Fantasy XI).
+Environment when these were measured: MacBook Pro M1 (Apple M1, 8 GB), macOS 26.5, wine-10.0
+(Sikarugir / Gcenx build) running x86_64 under Rosetta, 32-bit Windows game (Final Fantasy XI).
+
+> **⚠ Staleness gate — read before filing (updated 2026-09-04).** These reports were measured on
+> the **older stack above**: M1, wine-10.0 (Gcenx), **MoltenVK 1.2.10**. The project has since moved to
+> a MacBook Pro **M2 Pro**, **athei `wine-cx-26.3.0-1`** (new-wow64), and **MoltenVK 1.4.1**. Filing on
+> someone else's tracker is a public action — **re-verify each report still reproduces on the current
+> versions first**, or it may describe an already-fixed or misdiagnosed bug. In particular:
+>
+> - **#1 (MoltenVK duplicate buffer binding) is SUPERSEDED — do not file.** `docs/FOG-INVESTIGATION.md`
+>   §3 later disproved it on MoltenVK 1.4.1: `render_state_t` binds to `[[buffer(1)]]` and
+>   `spvDescriptorSet0` to `[[buffer(0)]]` — **no collision** — and argument buffers make no difference.
+>   The black world it blamed on MoltenVK was actually the DXVK `pushConstSize` typo in §3a below (a
+>   zero-sized fragment push-constant range), which is version-independent and already fixed in DXVK 2.x.
+> - **#2 (wined3d drops BC/DXT)** was found on wine-10.0's wined3d Vulkan backend. The shipped stack
+>   renders through DXVK, not wined3d, so it is untested on the current athei wine — confirm the
+>   `DXT1`–`DXT5` rows are still missing from `init_vulkan_format_info` on current wine before filing.
 
 ---
 
 ## 1. MoltenVK — SPIRV-Cross assigns two uniform buffers to the same Metal binding
+
+> **SUPERSEDED / DO NOT FILE (2026-09-04).** Disproven on MoltenVK 1.4.1 — see the staleness gate
+> at the top and `docs/FOG-INVESTIGATION.md` §3. No buffer collision occurs; the black world was the
+> DXVK `pushConstSize` typo (§3a), already fixed in DXVK 2.x. The report below is kept as the
+> historical trail on MoltenVK 1.2.10 only.
 
 **Where:** KhronosGroup/MoltenVK
 **Affects:** MoltenVK 1.2.10. Any D3D9 fixed-function title under DXVK 1.10.3.
@@ -126,7 +146,7 @@ sky — is very hard to attribute without knowing this.
 
 ### 3b. D3D9 demanding Vulkan features Metal does not have
 
-`src/dxvk/dxvk_adapter.cpp` required `geometryShader`, `robustBufferAccess` and
+`src/d3d9/d3d9_device.cpp` required `geometryShader`, `robustBufferAccess` and
 `shaderCullDistance` unconditionally for D3D9. Metal has none of the three, and D3D9 needs none
 of them. Making them conditional is what let DXVK 1.10.3 run on **MoltenVK 1.4.1** instead of
 only on 1.2.10 — the one version that falsely claimed to support them.
