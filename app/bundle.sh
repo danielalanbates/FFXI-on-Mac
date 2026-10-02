@@ -37,6 +37,13 @@ cp "$REPO/scripts/catseye-launcher.sh" "$APP/Contents/Resources/catseye-launcher
 cp "$REPO/scripts/retail-client.sh"    "$APP/Contents/Resources/retail-client.sh"
 chmod +x "$APP/Contents/Resources/"*.sh
 
+# Bundle the tested Vanaguide addon when its project is next to this one in the Code folder.
+# The launcher still needs no addon on allowlist worlds; they use Vanaguide.app separately.
+VG_SOURCE="${VG_ADDON_SOURCE:-${REPO:h}/vanaguide/Vanaguide}"
+if [[ -f "$VG_SOURCE/Vanaguide.lua" ]]; then
+  cp -R "$VG_SOURCE" "$APP/Contents/Resources/Vanaguide"
+fi
+
 # The Metal/DXVK renderer ships inside the app: Renderer.swift resolves these by name out of
 # Bundle.main, so the user never has to fetch a DLL by hand.
 for dll in d3d8to9.dll dxvk-1.10.3-x32-d3d9-horizonxi.dll; do
@@ -97,8 +104,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>NSDesktopFolderUsageDescription</key><string>To find a wrapper you keep on the Desktop.</string>
   <key>NSDocumentsFolderUsageDescription</key><string>To find a wrapper you keep in Documents.</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>3.8</string>
-  <key>CFBundleVersion</key><string>21</string>
+  <key>CFBundleShortVersionString</key><string>3.8.1</string>
+  <key>CFBundleVersion</key><string>22</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.games</string>

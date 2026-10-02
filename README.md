@@ -162,6 +162,16 @@ Ashita addons work — HXUI, statustimers, the usual set. The **Addons** screen 
 your server actually allows, and says where that list came from. On HorizonXI an unapproved addon
 can get you banned, so this matters more than it sounds.
 
+For a separate quest guide on worlds that do not permit the Vanaguide addon, install
+[Vanaguide.app](https://github.com/danielalanbates/vanaguide) and use **Open Vanaguide** in
+Setup & Diagnostics. The companion reads quest data without modifying the game. VanaVoice has
+a separate screen-reading option for narration. Neither external app is represented as approved
+by a server; consult that world's rules.
+
+The launcher checks this repository's public Releases quietly. It offers **Update** only when a
+newer version exists, downloads only after that button is pressed, and offers **Restart** once
+the verified app is ready. Local beta builds can change more often than public releases.
+
 ## Running your own server
 
 Pick **Local server** in the World menu and press **Set up server**. The launcher builds

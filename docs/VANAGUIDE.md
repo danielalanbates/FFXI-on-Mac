@@ -8,10 +8,11 @@
 | Dest folder | `<game>/addons/Vanaguide` (same layout as `vanaguide/tools/install.sh`) |
 | Policy | `Guide.allowed(by:)` — refuse + scrub on allowlist worlds (HorizonXI, CatsEyeXI, FFEra, …) |
 | Hosted servers | **Never** offer or auto-load. Ban risk; see `docs/ADDON-POLICY.md` and vanaguide `docs/SERVERS.md` |
+| Separate companion | `/Applications/Vanaguide.app`, launched by **Open Vanaguide** in Setup & Diagnostics |
 
 ## How to enable on local LandSandBoat
 
-1. Keep the Vanaguide checkout at `~/Library/Mobile Documents/com~apple~CloudDocs/Code/Vanaguide` (addon root = `…/Vanaguide/Vanaguide` containing `Vanaguide.lua`), **or** copy that addon folder to `~/Downloads/Vanaguide`.
+1. The local beta bundles a tested `Vanaguide` addon snapshot when its repository sits next to the launcher checkout. Older builds can use a separate Code checkout or `~/Downloads/Vanaguide`.
 2. In the launcher, select **Local server (LandSandBoat)** (unrestricted policy).
 3. Turn on **Quest guide (Vanaguide, local LSB only)** under Setup & Diagnostics.
 4. Press Play. Log should show `==> vanaguide: on (from …, via scripts/…)`.
@@ -19,10 +20,9 @@
 
 ## Source search order
 
-1. iCloud `Code/Vanaguide/Vanaguide`
-2. iCloud `Code/GitHub/vanaguide/Vanaguide` or `Code/GitHub/Vanaguide/Vanaguide`
+1. Launcher bundle `Contents/Resources/Vanaguide`
+2. Google Drive and iCloud Code checkouts
 3. `~/Downloads/Vanaguide` or `~/Downloads/vanaguide/Vanaguide`
-4. Launcher bundle `Contents/Resources/Vanaguide` (optional future vendored snapshot)
 
 `/Applications/HorizonXI.app` and `/Applications/VanaVoice.app` are **not** modified by this wiring.
 

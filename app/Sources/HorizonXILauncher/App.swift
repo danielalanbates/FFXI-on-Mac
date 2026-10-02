@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import UniformTypeIdentifiers
 
 /// Quitting the launcher kills every download and install it started, because they are its child
@@ -220,8 +221,7 @@ struct ContentView: View {
             // Pick up each server's own published addon list, so the app's compiled-in snapshot
             // does not go stale between releases. Silent on failure -- offline must still launch.
             await feeds.refreshAsync(servers: store.servers)
-            // Check GitHub Releases and, if there is a newer build, download it automatically.
-            // The update is only *applied* when the user presses Restart (updateBanner).
+            // Check GitHub Releases quietly. Download and restart are both player choices.
             updater.start()
         }
     }
@@ -382,11 +382,20 @@ struct ContentView: View {
     /// invented to fill the space.** No FFXI private server publishes a news feed a launcher can
     /// read (see `ServerFeeds` for what was checked), so there are no headlines to rotate; the
     /// moment one does, fetched items appear here first and are marked as such.
-    /// Shown only when an update has finished downloading and is staged: one line and a Restart
-    /// button. While a download is in flight it shows quiet progress; otherwise it renders nothing,
-    /// so the normal launcher is undisturbed.
+    /// Show only a newer release or its requested download. The current state stays silent.
     @ViewBuilder private var updateBanner: some View {
         switch updater.state {
+        case .available(let release):
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.down.circle.fill").foregroundStyle(Vana.gold)
+                Text("Update \(release.version) is available").font(.caption).foregroundStyle(Vana.text)
+                Spacer()
+                Button("Update") { updater.downloadAvailable() }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Vana.gold.opacity(0.12)))
+            .padding(.top, 6)
         case .ready(let release):
             HStack(spacing: 10) {
                 Image(systemName: "arrow.down.circle.fill").foregroundStyle(Vana.gold)
@@ -1208,6 +1217,12 @@ struct ContentView: View {
                     Toggle("Quest guide (Vanaguide, local LSB only)", isOn: $perf.enableVanaguide)
                         .disabled(!Guide.isAvailable || !Guide.allowed(by: addonPolicy))
                         .help(vanaguideHelp)
+                    if Guide.companionAvailable {
+                        Button("Open Vanaguide") {
+                            NSWorkspace.shared.open(URL(fileURLWithPath: Guide.companionPath))
+                        }
+                        .help("Open the separate read-only guide and achievement list.")
+                    }
                     Toggle("Large address aware", isOn: $perf.largeAddressAware)
                     Toggle("Fast lens flares (skip occlusion wait) — glitches", isOn: $perf.flareReadbackNoWait)
                         .help("Roughly doubles the frame rate: FFXI stops the whole frame four "

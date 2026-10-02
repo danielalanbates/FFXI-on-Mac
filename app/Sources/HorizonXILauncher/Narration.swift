@@ -59,11 +59,12 @@ enum Narration {
     }
 
     static var addonSource: URL? {
+        let bundled = URL(fileURLWithPath: appPath).appendingPathComponent("Contents/Resources/vanavoice")
+        if FileManager.default.fileExists(atPath: bundled.path) { return bundled }
         let home = FileManager.default.homeDirectoryForCurrentUser
         let gdrive = home.appendingPathComponent("Library/CloudStorage/GoogleDrive-danielalanbates@gmail.com/My Drive/Code/GitHub/vanavoice/addon/vanavoice")
         if FileManager.default.fileExists(atPath: gdrive.path) { return gdrive }
-        let u = URL(fileURLWithPath: appPath).appendingPathComponent("Contents/Resources/vanavoice")
-        return FileManager.default.fileExists(atPath: u.path) ? u : nil
+        return nil
     }
 
     /// Called on every launch. Never fatal: if any part of this fails the game still starts,
