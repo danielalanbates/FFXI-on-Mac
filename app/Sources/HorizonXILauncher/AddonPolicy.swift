@@ -43,9 +43,14 @@ enum AddonPolicy: Hashable {
         "addons", "thirdparty", "screenshot", "winefix", "libs",
     ]
 
+    /// Frame-rate monitors are for testing on the local server only. Daniel's rule: never on a
+    /// hosted world (HorizonXI and every other allowlisted server), even where its list allows one.
+    static let localOnly: Set<String> = ["fps", "autofps", "fpslog"]
+
     func allows(_ installedName: String) -> Bool {
         let key = AddonPolicy.normalize(installedName)
         if AddonPolicy.infrastructure.contains(key) { return true }
+        if isRestricting, AddonPolicy.localOnly.contains(key) { return false }
         switch self {
         case .unknown, .unrestricted:
             return true

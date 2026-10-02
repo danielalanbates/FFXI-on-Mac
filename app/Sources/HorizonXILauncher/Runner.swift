@@ -804,6 +804,19 @@ final class Runner: ObservableObject {
                           othersLive: clientsLive) { [weak self] in
             self?.appendLine($0)
         }
+        // Frame-rate monitors never load on a hosted world, even if they were switched on earlier.
+        if addonPolicy.isRestricting {
+            var items = AddonSuite.scan(install, profile: profile)
+            let off = items.indices.filter {
+                items[$0].enabled && AddonPolicy.localOnly.contains(AddonPolicy.normalize(items[$0].name))
+            }
+            if !off.isEmpty {
+                for k in off { items[k].enabled = false }
+                if AddonSuite.write(items, to: install, profile: profile) {
+                    appendLine("==> fps monitor: off on this world (local server only)")
+                }
+            }
+        }
         // Every launch: make sure no allowed addon can take the LuaJIT trace-patch fault that Ashita 4.3
         // hits on this Mac (see LuaJITGuard). Idempotent, so this is cheap after the first run.
         LuaJITGuard.apply(install, policy: addonPolicy) { [weak self] in self?.appendLine($0) }
