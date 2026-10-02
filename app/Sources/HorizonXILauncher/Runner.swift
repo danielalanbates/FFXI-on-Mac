@@ -211,6 +211,15 @@ final class Runner: ObservableObject {
         if log.count > 200_000 { log = String(log.suffix(150_000)) }
     }
 
+    /// Working directory for bundled scripts. Never the bundle itself: wine tools (regsvr32)
+    /// drop log files into their cwd, and one stray file inside the .app breaks its signature.
+    static var scratchDir: URL {
+        let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("HorizonXI-on-Mac/work", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }
+
     /// install.sh ships inside the app bundle; fall back to the repo copy when running from
     /// `swift run`.
     static func repairScript() -> URL? {
@@ -235,7 +244,7 @@ final class Runner: ObservableObject {
         Sandbox.repair(install) { [weak self] in self?.appendLine($0) }
         spawn(URL(fileURLWithPath: "/bin/zsh"),
               args: [script.path, install.wrapper.path, install.prefixName],
-              env: [:], cwd: script.deletingLastPathComponent()) { [weak self] code in
+              env: [:], cwd: Self.scratchDir) { [weak self] code in
             self?.endMaintenance()
             self?.busy = false
             self?.appendLine("==> repair exited \(code)")
@@ -266,7 +275,7 @@ final class Runner: ObservableObject {
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")
         spawn(URL(fileURLWithPath: "/bin/zsh"),
               args: [script.path, "horizon", install.gameDir.path],
-              env: env, cwd: script.deletingLastPathComponent()) { [weak self] code in
+              env: env, cwd: Self.scratchDir) { [weak self] code in
             self?.endMaintenance()
             self?.busy = false
             self?.appendLine("==> update exited \(code)")
@@ -536,7 +545,7 @@ final class Runner: ObservableObject {
             env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")
             self.spawn(URL(fileURLWithPath: "/bin/zsh"),
                        args: [script.path, ip.wrapper.path, ip.prefixName, s.dataPath, s.name],
-                       env: env, cwd: script.deletingLastPathComponent()) { [weak self] code in
+                       env: env, cwd: Self.scratchDir) { [weak self] code in
                 self?.busy = false
                 self?.appendLine("==> retail install exited \(code)")
             }
@@ -561,7 +570,7 @@ final class Runner: ObservableObject {
         var env: [String: String] = [:]
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")
         spawn(URL(fileURLWithPath: "/bin/zsh"), args: [script.path, "install", dir.path],
-              env: env, cwd: script.deletingLastPathComponent()) { [weak self] code in
+              env: env, cwd: Self.scratchDir) { [weak self] code in
             self?.busy = false; self?.appendLine("==> install exited \(code)")
         }
     }
@@ -589,7 +598,7 @@ final class Runner: ObservableObject {
         appendLine("==> CatsEyeXI launcher in \(install.prefixName)")
         spawn(URL(fileURLWithPath: "/bin/zsh"),
               args: [script.path, install.wrapper.path, install.prefixName],
-              env: [:], cwd: script.deletingLastPathComponent()) { [weak self] code in
+              env: [:], cwd: Self.scratchDir) { [weak self] code in
             self?.busy = false
             self?.appendLine("==> CatsEyeXI launcher exited \(code)")
         }

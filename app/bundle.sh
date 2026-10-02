@@ -173,8 +173,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>NSDesktopFolderUsageDescription</key><string>To find a wrapper you keep on the Desktop.</string>
   <key>NSDocumentsFolderUsageDescription</key><string>To find a wrapper you keep in Documents.</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>3.8</string>
-  <key>CFBundleVersion</key><string>48</string>
+  <key>CFBundleShortVersionString</key><string>3.9</string>
+  <key>CFBundleVersion</key><string>53</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
@@ -182,6 +182,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
+# Default to the Developer ID when it is in the keychain, so a Full Disk Access grant (keyed to
+# bundle id + team) survives rebuilds. HXI_ADHOC=1 forces ad-hoc.
+if [[ -z "${HXI_SIGN_ID:-}" && -z "${HXI_ADHOC:-}" ]]; then
+  HXI_SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ {print $2; exit}')"
+fi
 # Signature. Ad-hoc by default; set HXI_SIGN_ID to a Developer ID hash for a release build
 # that can be notarised. Use the certificate *hash*, not its name -- there are two identical
 # "Developer ID Application: Daniel Bates" certs in the login keychain and codesign rejects

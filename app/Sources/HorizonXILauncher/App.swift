@@ -169,6 +169,7 @@ struct ContentView: View {
     @State private var commandsReady = false
     @State private var forwardRunning = false
     @State private var showSetup = false
+    private var fdaBlocked: Bool { checks.contains(where: { $0.id == "fda" && $0.state == .bad }) }
     // Starts open when FFXI_ON_MAC_SHOW_SIGNUPS=1, so this project can screenshot the expanded
     // list without driving a synthetic click into the window (see docs/SERVERS-WORKLOG.md).
     @State private var showAllSignups =
@@ -1276,14 +1277,10 @@ struct ContentView: View {
                     RetroAchievementsSection(ra: ra, gameDir: active?.gameDir,
                                              log: { runner.appendLine($0) })
                     Divider()
-                    if checks.contains(where: { $0.id == "fda" && $0.state == .bad }) {
-                        Button("Open Full Disk Access settings…") {
-                            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
-                        }.buttonStyle(.borderedProminent)
-                    }
                     HStack(spacing: 8) {
                         Button("Repair") { if let i = active { runner.repair(i) } }
-                            .disabled(runner.busy)
+                            .disabled(runner.busy || fdaBlocked)
+                            .help(fdaBlocked ? "Grant Full Disk Access first — Repair runs wine from a drive this app can't read yet." : "Re-applies the prefix configuration the game needs.")
                         if store.selected?.name == "HorizonXI" {
                             Button("Update HorizonXI…") {
                                 if let i = active { runner.updateHorizon(i) { _ in recheck() } }
@@ -1316,23 +1313,11 @@ struct ContentView: View {
                         // Also reachable when an install already exists: a wrapper can be
                         // broken past what Repair fixes, and rebuilding a fresh one beside it
                         // is faster than diagnosing wine by hand.
-                        Button("Install wine…") { showSetup = true }
+                        Button("Install dependencies…") { showSetup = true }
+                            .help("Installs Rosetta 2 and Wine, and creates the Windows drive FFXI installs into")
                     }
                     .padding(.top, 4)
 
-                    // Said out loud, not just in a tooltip. Chasing client updates that the
-                    // game does not need is a good way to break a working install: the fetch
-                    // is a multi-hour torrent, it rewrites files in place, and a stall leaves
-                    // the client half-updated. Being a version behind is normal and playable.
-                    Text("Don't update the client unless the world has actually published an "
-                       + "update and the game is turning you away. A working install does not "
-                       + "need one — being a version or two behind is normal, and Play still "
-                       + "works. Updating rewrites a working install over a multi-hour "
-                       + "download.")
-                        .font(.caption2)
-                        .foregroundStyle(Vana.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 6)
                 }
                 .font(.caption)
                 .foregroundStyle(Vana.muted)
@@ -1356,6 +1341,19 @@ struct ContentView: View {
             // the user needs is the button that installs everything. Offering it here rather
             // than burying it in Setup & Diagnostics is the difference between a launcher that
             // works out of the box and one that needs the README first.
+            // Shown outside the collapsed panel: without this grant every wine process the app
+            // starts is killed by macOS at launch, so Play and Repair just "exit".
+            if fdaBlocked {
+                Button {
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
+                } label: {
+                    Label("Grant Full Disk Access", systemImage: "lock.open")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .help("The game drive needs Full Disk Access. Turn on FFXI on Mac in the list, then press ↻.")
+            }
+
             if !scanning && selected == nil {
                 Button { showSetup = true } label: {
                     Label("Set up FFXI on Mac", systemImage: "wand.and.stars")
