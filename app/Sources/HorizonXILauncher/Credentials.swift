@@ -1,8 +1,9 @@
 import Foundation
 import Security
 
-/// Account handling. The password lives in the macOS Keychain, never in a plist, never in the
-/// repo. It is written into Ashita's boot profile only at launch time, and that file is chmod 600.
+/// Account handling. Remembered passwords live in a mode-600 Application Support JSON file and
+/// are written to Ashita's mode-600 boot profile for autologin. The loader also receives the
+/// password in its command line; see RELEASE-WHEN-STABLE.md for the unresolved exposure.
 enum Credentials {
     private static let service = "org.batesai.horizonxi-on-mac"
 
@@ -64,20 +65,21 @@ enum Credentials {
     /// two different accounts with two different passwords — keying on the name alone let a
     /// CatsEye login overwrite the HorizonXI password for "danielalanbates" (2026-08-19). The
     /// bare-username key survives as a read fallback for stores written before this.
-    private static func key(_ user: String, _ world: String) -> String {
+    static func passwordKey(_ user: String, world: String) -> String {
         world.isEmpty ? user : "\(world)|\(user)"
     }
 
     static func savePassword(_ password: String, for user: String, world: String = "") {
         var m = load()
-        if password.isEmpty { m.removeValue(forKey: key(user, world)) }
-        else { m[key(user, world)] = password }
+        let storageKey = passwordKey(user, world: world)
+        if password.isEmpty { m.removeValue(forKey: storageKey) }
+        else { m[storageKey] = password }
         store(m)
     }
 
     static func password(for user: String, world: String = "") -> String {
         let m = load()
-        if let p = m[key(user, world)], !p.isEmpty { return p }
+        if let p = m[passwordKey(user, world: world)], !p.isEmpty { return p }
         if let p = m[user], !p.isEmpty { return p }
         return ""
     }
@@ -88,25 +90,51 @@ enum Credentials {
         store(m)
     }
 
-    /// One-time pickup of a password that is already sitting in a boot profile, so moving off the
-    /// Keychain does not silently present an empty password box to someone who never typed it
-    /// into this build. Reads only `--pass` from the live `command` line.
-    static func adoptPasswordFromProfile(user: String, install: Install, profile: String) {
-        guard password(for: user).isEmpty else { return }
+    /// One-time pickup of a password already sitting in a boot profile, so moving to per-world
+    /// storage does not silently present an empty password box. Reads only `--pass` from the live
+    /// `command` line and adopts it under that world's key.
+    static func adoptPasswordFromProfile(user: String, world: String, install: Install, profile: String) {
+        let current = password(for: user, world: world)
         let url = install.gameDir.appendingPathComponent("config/boot/\(profile)")
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+        guard let text = readFile(at: url) else { return }
+        guard let adoption = passwordAdoption(from: text, user: user, world: world,
+                                              currentWorldPassword: current) else { return }
+        savePassword(adoption.password, for: user, world: world)
+    }
+
+    static func passwordAdoption(from text: String, user: String, world: String,
+                                 currentWorldPassword: String) -> (key: String, password: String)? {
+        guard currentWorldPassword.isEmpty,
+              let password = passwordInBootProfile(text) else { return nil }
+        return (passwordKey(user, world: world), password)
+    }
+
+    private static func passwordInBootProfile(_ text: String) -> String? {
         for raw in text.split(separator: "\n") {
             let line = raw.trimmingCharacters(in: .whitespaces)
             guard !line.hasPrefix(";"), line.hasPrefix("command"),
                   let r = line.range(of: "--pass ") else { continue }
             let rest = line[r.upperBound...].trimmingCharacters(in: .whitespaces)
             let pass = rest.split(separator: " ").first.map(String.init) ?? ""
-            if !pass.isEmpty { savePassword(pass, for: user) }
-            return
+            return pass.isEmpty ? nil : pass
         }
+        return nil
     }
 
     // MARK: - Ashita boot profile
+
+    /// Write a file safely, falling back to headless shell copy if GUI process file write
+    /// is denied by macOS TCC / Seatbelt sandbox on an external volume.
+    @discardableResult
+    static func writeFile(_ text: String, to target: URL) -> Bool {
+        Bridge.writeFile(text, to: target)
+    }
+
+    /// Read a file safely, falling back to headless shell base64 read if GUI process file read
+    /// is denied by macOS TCC / Seatbelt sandbox on an external volume.
+    static func readFile(at url: URL) -> String? {
+        Bridge.readFile(at: url)
+    }
 
     /// Make sure `config/boot/<profile>` exists, seeding it from a profile that already works.
     ///
@@ -133,7 +161,7 @@ enum Credentials {
                 .filter { $0.lowercased().hasSuffix(".xml") }.sorted()
             let widest = xmls.max { a, b in
                 func width(_ n: String) -> Int {
-                    guard let t = try? String(contentsOf: dir.appendingPathComponent(n), encoding: .utf8)
+                    guard let t = readFile(at: dir.appendingPathComponent(n))
                     else { return 0 }
                     return Int(xmlSetting("window_x", in: t) ?? "0") ?? 0
                 }
@@ -144,16 +172,14 @@ enum Credentials {
             // So when there is nothing to seed from, write a minimal one.
             let text: String
             if let seed = widest,
-               let t = try? String(contentsOf: dir.appendingPathComponent(seed), encoding: .utf8) {
+               let t = readFile(at: dir.appendingPathComponent(seed)) {
                 text = t
             } else {
                 text = v3Profile(loader: defaultLoaderName(in: install),
                                  folder: install.bootLoaderDir.lastPathComponent)
             }
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-            guard (try? text.write(to: target, atomically: true, encoding: .utf8)) != nil
-            else { return false }
-            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+            guard writeFile(text, to: target) else { return false }
             return true
         }
 
@@ -170,10 +196,8 @@ enum Credentials {
         for seed in seeds {
             let src = dir.appendingPathComponent(seed)
             guard fm.fileExists(atPath: src.path),
-                  let text = try? String(contentsOf: src, encoding: .utf8) else { continue }
-            guard (try? text.write(to: target, atomically: true, encoding: .utf8)) != nil
-            else { continue }
-            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+                  let text = readFile(at: src) else { continue }
+            guard writeFile(text, to: target) else { continue }
             fixBootLoader(profile, in: install)
             return true
         }
@@ -233,7 +257,7 @@ enum Credentials {
         // v3 profiles are seeded from the world's own XML, which already names its own loader.
         guard name.hasSuffix(".ini") else { return }
         let url = install.gameDir.appendingPathComponent("config/boot/\(name)")
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+        guard let text = readFile(at: url) else { return }
         let bl = install.bootLoaderDir
         let present = ((try? fm.contentsOfDirectory(atPath: bl.path)) ?? []).filter { $0.lowercased().hasSuffix(".exe") }
         guard !present.isEmpty else { return }
@@ -251,7 +275,7 @@ enum Credentials {
             return String(l)
         }
         guard replaced else { return }
-        try? TextFile.join(lines, terminator: eol).write(to: url, atomically: true, encoding: .utf8)
+        writeFile(TextFile.join(lines, terminator: eol), to: url)
     }
 
 
@@ -291,7 +315,7 @@ enum Credentials {
     static func bootLoaderName(in install: Install, profile: String) -> String? {
         let name = install.bootProfileName(profile)
         let url = install.gameDir.appendingPathComponent("config/boot/\(name)")
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        guard let text = readFile(at: url) else { return nil }
         if name.hasSuffix(".xml") {
             guard let v = xmlSetting("boot_file", in: text), !v.isEmpty else { return nil }
             let base = v.replacingOccurrences(of: "/", with: "\\")
@@ -309,6 +333,31 @@ enum Credentials {
         return nil
     }
 
+    /// The `--server` the profile's boot command really passes the loader, which is what a
+    /// running client is filed under. `apply` rewrites it only when a user and password are set,
+    /// so it can differ from the world's Host field.
+    static func bootServer(in install: Install, profile: String) -> String? {
+        let name = install.bootProfileName(profile)
+        guard let text = readFile(at: install.gameDir.appendingPathComponent("config/boot/\(name)"))
+        else { return nil }
+        var command: String?
+        if name.hasSuffix(".xml") {
+            command = xmlSetting("boot_command", in: text)
+        } else {
+            for raw in TextFile.lines(of: text) {
+                let t = raw.trimmingCharacters(in: .whitespaces)
+                guard !t.hasPrefix(";"), t.hasPrefix("command"), let eq = t.firstIndex(of: "=") else { continue }
+                command = String(t[t.index(after: eq)...]); break
+            }
+        }
+        let tokens = (command ?? "").split(separator: " ").map(String.init)
+        for (n, t) in tokens.enumerated() {
+            if t == "--server", n + 1 < tokens.count { return tokens[n + 1] }
+            if t.hasPrefix("--server=") { return String(t.dropFirst("--server=".count)) }
+        }
+        return nil
+    }
+
     /// Rewrite the `command = ...` line of the Ashita boot profile with these credentials.
     /// Returns false if the profile is missing or unwritable.
     @discardableResult
@@ -317,16 +366,14 @@ enum Credentials {
                       server: String = "play.horizonxi.com") -> Bool {
         let name = install.bootProfileName(profile)
         let url = install.gameDir.appendingPathComponent("config/boot/\(name)")
-        guard var text = try? String(contentsOf: url, encoding: .utf8) else { return false }
+        guard var text = readFile(at: url) else { return false }
 
         if name.hasSuffix(".xml") {
             guard let out = xmlSetting("boot_command",
                                        to: "--server \(server) --user \(user) --pass \(password)",
-                                       in: text),
-                  (try? out.write(to: url, atomically: true, encoding: .utf8)) != nil
+                                       in: text)
             else { return false }
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-            return true
+            return writeFile(out, to: url)
         }
 
         let line = "command     = --server \(server) --user \(user) --pass \(password)"
@@ -343,13 +390,7 @@ enum Credentials {
         }
         text = TextFile.join(lines, terminator: eol)
         guard replaced else { return false }
-        do {
-            try text.write(to: url, atomically: true, encoding: .utf8)
-        } catch {
-            guard (try? text.write(to: url, atomically: false, encoding: .utf8)) != nil else { return false }
-        }
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-        return true
+        return writeFile(text, to: url)
     }
 
     /// Set `key = value` lines in the boot profile, leaving commented examples alone.
@@ -361,7 +402,7 @@ enum Credentials {
         // v3's XML has no `[ffxi.direct3d8]` section, so there is nothing to override there.
         guard name.hasSuffix(".ini") else { return }
         let url = install.gameDir.appendingPathComponent("config/boot/\(name)")
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+        guard let text = readFile(at: url) else { return }
 
         let eol = TextFile.terminator(of: text)
         let out = TextFile.lines(of: text).map { l -> String in
@@ -375,7 +416,6 @@ enum Credentials {
             return key + String(repeating: " ", count: pad) + "= " + v
         }.joined(separator: eol)
 
-        try? out.write(to: url, atomically: true, encoding: .utf8)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        writeFile(out, to: url)
     }
 }

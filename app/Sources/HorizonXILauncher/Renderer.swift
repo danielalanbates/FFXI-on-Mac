@@ -111,6 +111,82 @@ enum RendererSetup {
     /// measured 5.1 -> 7.9 fps at the same screen, with no visual change.
     static let maxVersionGL: UInt32 = 0x0004_0001
 
+    /// What `apply` may do right now. Every client shares this prefix, and changing a renderer
+    /// means `wineserver -k`, which kills whatever is already playing.
+    enum Step: Equatable {
+        /// Nothing is running: stop the wineserver and rewrite registry and DLLs.
+        case stopAndApply
+        /// A client is running and the prefix already has this renderer: leave it alone.
+        case skip
+        case refuse(String)
+    }
+
+    static let refuseChangeMessage =
+        "stop the other world first, the renderer cannot change under a running client"
+
+    /// `current` nil means the prefix's renderer could not be read. A client running on an
+    /// unknown renderer is still not worth killing, so that is a skip as well.
+    static func step(for requested: Renderer, current: Renderer?, clientsLive: Bool) -> Step {
+        guard clientsLive else { return .stopAndApply }
+        if let c = current, c != requested {
+            return .refuse("\(requested.title) was asked for but the running world uses \(c.title): "
+                           + refuseChangeMessage)
+        }
+        return .skip
+    }
+
+    /// The renderer a prefix is set up for, read from its user.reg as `apply` wrote it.
+    static func current(_ install: Install) -> Renderer? {
+        Credentials.readFile(at: install.prefix.appendingPathComponent("user.reg"))
+            .flatMap(renderer(fromUserReg:))
+    }
+
+    static func renderer(fromUserReg text: String) -> Renderer? {
+        var section = ""
+        var d3dNative = false
+        var key: String?
+        for raw in TextFile.lines(of: text) {
+            let t = raw.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("[") {
+                section = String(t.prefix { $0 != "]" }.dropFirst()).lowercased()
+                continue
+            }
+            let v = t.lowercased()
+            if section == #"software\\wine\\dlloverrides"#,
+               v.hasPrefix(#""*d3d8"="native"#) || v.hasPrefix(#""d3d8"="native"#) {
+                d3dNative = true
+            }
+            if section == #"software\\wine\\direct3d"#, v.hasPrefix(#""renderer"=""#) {
+                key = String(v.dropFirst(#""renderer"=""#.count).prefix { $0 != "\"" })
+            }
+        }
+        if d3dNative { return .metal }
+        switch key {
+        case "vulkan": return .vulkan
+        case "gl": return .openGL
+        default: return nil
+        }
+    }
+
+    /// The file half of `apply` for a `.skip`: put the DXVK shim beside this world's own client
+    /// if it is not there yet. No registry write, no wineserver.
+    static func ensureFiles(_ renderer: Renderer, for install: Install, log: (String) -> Void) {
+        guard renderer.needsDXVK,
+              let d3d8to9 = Bundle.main.url(forResource: "d3d8to9", withExtension: "dll"),
+              let dxvk = Bundle.main.url(forResource: "dxvk-1.10.3-x32-d3d9-horizonxi", withExtension: "dll")
+        else { return }
+        let fm = FileManager.default
+        var placed = 0
+        for dir in dllDirs(install) where fm.fileExists(atPath: dir.path) {
+            for (src, name) in [(d3d8to9, "d3d8.dll"), (dxvk, "d3d9.dll")] {
+                let dst = dir.appendingPathComponent(name)
+                guard !fm.contentsEqual(atPath: src.path, andPath: dst.path) else { continue }
+                replace(src, at: dst); placed += 1
+            }
+        }
+        if placed > 0 { log("renderer: placed \(placed) DXVK DLLs beside this world's client") }
+    }
+
     static func apply(_ renderer: Renderer, to install: Install, log: (String) -> Void) {
         stopWineserver(install)
 
@@ -153,6 +229,7 @@ enum RendererSetup {
         else { log("renderer: bundled DXVK not found — staying on Classic"); return }
 
         backupBuiltins(i)
+        try? fm.createDirectory(at: i.driveC.appendingPathComponent("dxvk-cache"), withIntermediateDirectories: true)
         // wine ships no api-ms-win-crt-* forwarders; without them the shim silently fails to load
         let crt = i.sharedSupport.appendingPathComponent("wine.cx32bak/lib32on64/wine")
         let syswow = i.driveC.appendingPathComponent("windows/syswow64")
@@ -168,6 +245,7 @@ enum RendererSetup {
         reg(i, add: #"HKCU\Software\Wine\DllOverrides"#, name: "*d3d8", type: "REG_SZ", data: "native")
         reg(i, add: #"HKCU\Software\Wine\DllOverrides"#, name: "*d3d9", type: "REG_SZ", data: "native")
         linkMoltenVK(i, toCX: true)
+        upgradeCoopMoltenVK(log: log)
         log("renderer: DXVK 1.10.3 + d3d8to9 installed")
     }
 
@@ -214,7 +292,25 @@ enum RendererSetup {
         }
     }
 
-    /// DXVK 1.10.3 needs a MoltenVK that can create a Vulkan 1.2 device; the wrapper's default
+    /// DXVK 2.x/3.x cannot replace 1.10.3 here: they require geometryShader, which MoltenVK
+    /// does not expose ("No adapters found", measured 2026-09-26 with 3.1.1).
+    /// The patched launch wine (X87Sidecar.patchedWine) loads MoltenVK from its own lib/external,
+    /// not through linkMoltenVK. Its CrossOver copy stalls command submission under macOS 27's
+    /// Metal 4 (0.4-7 fps in-world); 1.4.2 held 49 fps avg. Replace it once, keeping a backup.
+    private static func upgradeCoopMoltenVK(log: (String) -> Void) {
+        let fm = FileManager.default
+        guard let bundled = Bundle.main.url(forResource: "libMoltenVK-1.4.2", withExtension: "dylib"),
+              let wine = X87Sidecar.patchedWine() else { return }
+        let live = wine.deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("lib/external/libMoltenVK.dylib")
+        guard fm.fileExists(atPath: live.path), !fm.contentsEqual(atPath: live.path, andPath: bundled.path) else { return }
+        let backup = live.appendingPathExtension("bak-pre-1.4.2")
+        if !fm.fileExists(atPath: backup.path) { try? fm.copyItem(at: live, to: backup) }
+        replace(bundled, at: live)
+        log("renderer: MoltenVK 1.4.2 installed into the launch wine")
+    }
+
+    /// DXVK needs a MoltenVK that can create a Vulkan 1.2 device; the wrapper's default
     /// one is 1.1 and DXVK refuses it with "DxvkAdapter: Failed to create device".
     private static func linkMoltenVK(_ i: Install, toCX: Bool) {
         let fm = FileManager.default
@@ -329,7 +425,9 @@ enum RendererSetup {
     private static func replace(_ src: URL, at dst: URL) {
         let fm = FileManager.default
         try? fm.removeItem(at: dst)
-        try? fm.copyItem(at: src, to: dst)
+        if (try? fm.copyItem(at: src, to: dst)) == nil {
+            Bridge.runShell("/bin/rm -f \(Bridge.shellQuote(dst.path)) && /bin/cp -f \(Bridge.shellQuote(src.path)) \(Bridge.shellQuote(dst.path))")
+        }
     }
 
     // MARK: - wine plumbing
@@ -346,26 +444,17 @@ enum RendererSetup {
         chk.standardOutput = Pipe(); chk.standardError = Pipe()
         var wasUp = false
         if (try? chk.run()) != nil { chk.waitUntilExit(); wasUp = chk.terminationStatus == 0 }
-        let p = Process()
-        p.executableURL = i.wineserver
-        p.arguments = ["-k"]
-        p.environment = ["WINEPREFIX": i.prefix.path]
-        try? p.run()
-        p.waitUntilExit()
+
+        let killCmd = "export WINEPREFIX=\(Bridge.shellQuote(i.prefix.path)); \(Bridge.shellQuote(i.wineserver.path)) -k"
+        Bridge.runShell(killCmd)
+
         // `-k` only *sends* the kill; the server then flushes the registry and exits on its own
         // time. A fixed 1.5 s covered that on the SSD, but after the wrapper moved to the x10
         // (spinning disk) the flush can outlive it — and a game spawned while the old server is
         // still dying gets torn down with it about a second after login ("Closing…", every
         // world, 2026-08-19). `wineserver -w` blocks until the server has actually terminated.
-        let w = Process()
-        w.executableURL = i.wineserver
-        w.arguments = ["-w"]
-        w.environment = ["WINEPREFIX": i.prefix.path]
-        try? w.run()
-        // Bounded, so a wedged server cannot hang the launcher forever.
-        let deadline = Date().addingTimeInterval(30)
-        while w.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.2) }
-        if w.isRunning { w.terminate() }
+        let waitCmd = "export WINEPREFIX=\(Bridge.shellQuote(i.prefix.path)); \(Bridge.shellQuote(i.wineserver.path)) -w"
+        Bridge.runShell(waitCmd)
         return wasUp
     }
 
@@ -378,13 +467,7 @@ enum RendererSetup {
     }
 
     private static func wine(_ i: Install, _ args: [String]) {
-        let p = Process()
-        p.executableURL = i.wine
-        p.arguments = args
-        p.environment = ["WINEPREFIX": i.prefix.path, "WINEDEBUG": "-all"]
-        p.standardOutput = FileHandle.nullDevice
-        p.standardError = FileHandle.nullDevice
-        try? p.run()
-        p.waitUntilExit()
+        let cmd = "export WINEPREFIX=\(Bridge.shellQuote(i.prefix.path)); export WINEDEBUG=-all; \(Bridge.shellQuote(i.wine.path)) " + args.map(Bridge.shellQuote).joined(separator: " ")
+        Bridge.runShell(cmd)
     }
 }

@@ -71,7 +71,7 @@ import json,sys; d=json.load(sys.stdin)["installData"]; print(d["baseGameMagnetL
     say "extracting $base"
     ditto -x -k "$dl/$base" "$game" || die "unzip failed"
     if [[ -d "$game/HorizonXI" && ! -f "$game/version.json" ]]; then ditto "$game/HorizonXI" "$game" && rm -rf "$game/HorizonXI"; fi
-    [[ -f "$game/version.json" ]] || print -r -- "{\n  \"version\": \"$mv\"\n}" > "$game/version.json"
+    [[ -f "$game/version.json" ]] || printf '{\n  "version": "%s"\n}\n' "$mv" > "$game/version.json"
     say "base client in place — applying updates"
     exec "$0" horizon "$game"
     ;;
@@ -81,20 +81,27 @@ import json,sys; d=json.load(sys.stdin)["installData"]; print(d["baseGameMagnetL
     hm=$(horizon_marketing); [[ -n "$hm" ]] || die "no version.json in $game — is this a HorizonXI install?"
     say "installed HorizonXI $hm, asking api.horizonxi.com what is newer"
     # ver= takes the *marketing* version; the API answers with everything after it.
+    # The API stopped honouring ver= (2026-10: it returns every update since 1.1.1), so filter
+    # here too -- applying an old zip over a newer client would roll its files back.
     plan=$(fetch_json "$API/update-game?ver=$hm" | python3 -c '
 import json,sys
+def v(s): return tuple(int(x) if x.isdigit() else 0 for x in s.split("."))
+have=v(sys.argv[1])
 seen=set()
 for e in json.load(sys.stdin):
+    if v(e["marketingVersion"]) <= have: continue
     if e["updateZipName"] in seen: continue
     seen.add(e["updateZipName"])
-    print("\t".join([str(e["version"]), e["marketingVersion"], e["updateZipName"], e["updateMagnetLink"], "|".join(e.get("deleteFiles",[]))]))')
+    print("\t".join([str(e["version"]), e["marketingVersion"], e["updateZipName"], e["updateMagnetLink"], "|".join(e.get("deleteFiles",[]))]))' "$hm")
     [[ -n "$plan" ]] || { say "already up to date"; exit 0; }
     dl="$game/updates"; mkdir -p "$dl"
     # Files this project puts in place (Metal renderer shims, x87 loader) that an update zip
     # may clobber. Saved and put back; Repair does the same thing more thoroughly.
     keep=(d3d8.dll d3d9.dll dxvk.conf dgVoodoo.conf)
+    total=$(print -r -- "$plan" | wc -l | tr -d ' '); n=0
     print -r -- "$plan" | while IFS=$'\t' read -r ver mv zip magnet dels; do
-      say "update $mv ($zip)"
+      n=$((n+1))
+      say "update $mv ($n/$total)"
       if [[ ! -f "$dl/$zip" ]]; then
         aria2c --dir="$dl" --seed-time=0 --bt-stop-timeout=600 --summary-interval=30 \
                --console-log-level=warn --enable-dht=true --allow-overwrite=true "$magnet" \
@@ -107,11 +114,18 @@ for e in json.load(sys.stdin):
         [[ -f "$ffxi/$f" ]] && cp "$ffxi/$f" "$tmpk/ffxi.$f"
       done
       say "extracting $zip"
-      ditto -x -k "$dl/$zip" "$game" || die "unzip of $zip failed"
+      # Unpack beside, then copy file by file: SquareEnix in the game dir is often a symlink to
+      # shared data, and ditto/cp/openrsync all refuse to write through a symlinked directory.
+      tmpx=$(mktemp -d)
+      ditto -x -k "$dl/$zip" "$tmpx" || { rm -rf "$tmpx"; die "unzip of $zip failed"; }
+      src="$tmpx"
       # Their zips are rooted at HorizonXI/ sometimes; flatten if so.
-      if [[ -d "$game/HorizonXI" && -f "$game/HorizonXI/version.json" ]]; then
-        ditto "$game/HorizonXI" "$game" && rm -rf "$game/HorizonXI"
-      fi
+      [[ -d "$tmpx/HorizonXI" && -f "$tmpx/HorizonXI/version.json" ]] && src="$tmpx/HorizonXI"
+      ( cd "$src" && find . -type f -print0 ) | while IFS= read -r -d '' f; do
+        f="${f#./}"
+        mkdir -p "$game/${f:h}" && cp -f "$src/$f" "$game/$f" || { rm -rf "$tmpx"; die "could not write $f"; }
+      done
+      rm -rf "$tmpx"
       if [[ -n "$dels" ]]; then
         for d in ${(s:|:)dels}; do rm -rf "$game/$d"; done
       fi
@@ -120,7 +134,7 @@ for e in json.load(sys.stdin):
         [[ -f "$tmpk/ffxi.$f" ]] && cp "$tmpk/ffxi.$f" "$ffxi/$f"
       done
       rm -rf "$tmpk"
-      print -r -- "{\n  \"version\": \"$mv\"\n}" > "$game/version.json"
+      printf '{\n  "version": "%s"\n}\n' "$mv" > "$game/version.json"
       say "now at $mv"
     done
     say "done — client is at $(installed_client)"

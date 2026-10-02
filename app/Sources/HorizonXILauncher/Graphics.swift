@@ -198,7 +198,7 @@ struct GraphicsSettings: Codable, Equatable {
     /// than whatever this app last wrote.
     static func read(from install: Install, profile: String) -> GraphicsSettings? {
         let url = install.gameDir.appendingPathComponent("config/boot/\(profile)")
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        guard let text = Credentials.readFile(at: url) else { return nil }
         var vals: [String: Int] = [:]
         var inSection = false
         for raw in TextFile.lines(of: text) {

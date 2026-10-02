@@ -307,6 +307,14 @@ struct Install: Identifiable, Hashable {
         return FileManager.default.fileExists(atPath: i.gameDir.path) ? i : nil
     }
 
+    /// The remembered install's wrapper, from defaults alone: nothing on disk is checked, so
+    /// it is cheap enough for every process scan (`OwnWine`).
+    static func rememberedWrapper() -> URL? {
+        guard let s = UserDefaults.standard.string(forKey: key) else { return nil }
+        let parts = s.components(separatedBy: "#")
+        return parts.count == 2 ? URL(fileURLWithPath: parts[0]) : nil
+    }
+
     func remember() {
         UserDefaults.standard.set(id, forKey: Self.key)
     }

@@ -18,29 +18,28 @@ enum Guide {
 
     /// Candidate source trees, first hit wins.
     ///
-    /// Prefer the live iCloud Code checkout, then a GitHub mirror beside it, then a copy
-    /// staged under Downloads, then a bundled copy inside this launcher's Resources (for a
-    /// future ship that vendors a snapshot). Never read from `/Applications/*.app` playable
-    /// trees as a source of truth for edits — those stay untouched this pass.
+    /// Prefer this launcher's bundled snapshot, then live Drive/iCloud checkouts and a Downloads
+    /// copy for development. Never read from `/Applications/*.app` playable trees as edit sources.
     private static var candidateSources: [URL] {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        let gdriveCode = home
-            .appendingPathComponent("Library/CloudStorage/GoogleDrive-danielalanbates@gmail.com/My Drive/Code")
         let icloudCode = home
             .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs/Code")
         let bundled = Bundle.main.resourceURL?
             .appendingPathComponent("Vanaguide", isDirectory: true)
-        return [
-            gdriveCode.appendingPathComponent("GitHub/vanaguide/Vanaguide", isDirectory: true),
-            gdriveCode.appendingPathComponent("GitHub/Vanaguide/Vanaguide", isDirectory: true),
-            gdriveCode.appendingPathComponent("vanaguide/Vanaguide", isDirectory: true),
-            gdriveCode.appendingPathComponent("Vanaguide/Vanaguide", isDirectory: true),
+        let drive = CodeFolders.googleDriveCodeRoots.flatMap { codeRoot in [
+            codeRoot.appendingPathComponent("GitHub/vanaguide/Vanaguide", isDirectory: true),
+            codeRoot.appendingPathComponent("GitHub/Vanaguide/Vanaguide", isDirectory: true),
+            codeRoot.appendingPathComponent("vanaguide/Vanaguide", isDirectory: true),
+            codeRoot.appendingPathComponent("Vanaguide/Vanaguide", isDirectory: true),
+        ] }
+        let fallbacks = [
             icloudCode.appendingPathComponent("Vanaguide/Vanaguide", isDirectory: true),
             icloudCode.appendingPathComponent("GitHub/vanaguide/Vanaguide", isDirectory: true),
             icloudCode.appendingPathComponent("GitHub/Vanaguide/Vanaguide", isDirectory: true),
             home.appendingPathComponent("Downloads/Vanaguide", isDirectory: true),
             home.appendingPathComponent("Downloads/vanaguide/Vanaguide", isDirectory: true),
-        ] + (bundled.map { [$0] } ?? [])
+        ]
+        return (bundled.map { [$0] } ?? []) + drive + fallbacks
     }
 
     /// Is a Vanaguide addon tree present somewhere we can copy from?
@@ -48,20 +47,45 @@ enum Guide {
 
     /// May this world run it at all?
     ///
-    /// Same gate as VanaVoice: allowlist servers get a hard no. Local LandSandBoat
-    /// (`AddonPolicies.localWorld`) and any `.unrestricted` / `.unknown` policy may install.
+    /// This project only permits the guide on its own local LandSandBoat world. An unknown
+    /// hosted-server policy is not permission to install an unapproved addon.
     static func allowed(by policy: AddonPolicy) -> Bool {
-        !policy.isRestricting || policy.allows("vanaguide")
+        if case .unrestricted = policy { return true }
+        return false
     }
 
     /// Directory that contains `Vanaguide.lua` (the Ashita addon root).
     static var addonSource: URL? {
         let fm = FileManager.default
         for u in candidateSources {
-            let entry = u.appendingPathComponent("Vanaguide.lua")
-            if fm.fileExists(atPath: entry.path) { return u }
+            guard isCompleteAddon(at: u, fileManager: fm) else { continue }
+            return u
         }
         return nil
+    }
+
+    static func isCompleteAddon(at source: URL, fileManager: FileManager) -> Bool {
+        let requiredFiles = [
+            "Vanaguide.lua", "core/guide.lua", "core/progress.lua", "core/story.lua",
+            "core/conditions.lua", "core/util.lua", "core/lookup.lua", "core/verify.lua",
+            "core/walk.lua", "guides/init.lua", "routing/zonegraph.lua", "routing/router.lua",
+            "routing/path.lua", "routing/zonepoints.lua", "routing/navgrid.lua",
+            "ui/arrow.lua", "ui/window.lua", "ui/line.lua", "ui/project.lua",
+            "data/zone_names.lua", "data/zonelines.lua", "data/zonepoints.lua",
+            "data/drops.lua", "data/gear.lua", "data/missions.lua", "data/nm.lua",
+            "data/quests.lua", "data/travel.lua", "data/vendors.lua",
+        ]
+        let filesExist = requiredFiles.allSatisfy {
+            fileManager.fileExists(atPath: source.appendingPathComponent($0).path)
+        }
+        let directoriesExist = ["guides", "data", "routing", "ui"].allSatisfy {
+            var isDirectory = ObjCBool(false)
+            return fileManager.fileExists(
+                atPath: source.appendingPathComponent($0, isDirectory: true).path,
+                isDirectory: &isDirectory
+            ) && isDirectory.boolValue
+        }
+        return filesExist && directoriesExist
     }
 
     /// Reuse Narration's boot-script resolution so a world that points `script=` at `lsb.txt`
@@ -72,8 +96,12 @@ enum Guide {
 
     /// Called on every launch. Never fatal: if any part fails the game still starts without
     /// the guide, exactly as it did before.
+    ///
+    /// `othersLive`: another client shares this game folder right now. Its addons stay on disk
+    /// (it may have them loaded); only this world's load line is taken out.
     static func prepare(_ install: Install, enabled: Bool, policy: AddonPolicy,
-                        profile: String = "horizonxi.ini", log: (String) -> Void) {
+                        profile: String = "horizonxi.ini", othersLive: Bool = false,
+                        log: (String) -> Void) {
         let fm = FileManager.default
         let script = scriptName(in: install, profile: profile)
         let scripts = install.gameDir.appendingPathComponent("scripts/\(script)")
@@ -83,7 +111,10 @@ enum Guide {
         // Server rules first: scrub leftovers from older manual installs or prior launcher
         // builds so an allowlist world never carries Vanaguide into a session.
         guard allowed(by: policy) else {
-            if fm.fileExists(atPath: dest.path) { try? fm.removeItem(at: dest) }
+            if fm.fileExists(atPath: dest.path) {
+                if othersLive { log("==> vanaguide: addons/\(addonDirName) kept on disk — another world is running") }
+                else { try? fm.removeItem(at: dest) }
+            }
             if removeLoadLine(from: scripts) || enabled {
                 log("==> vanaguide: not allowed here — this world runs an addon allowlist and "
                     + "Vanaguide is not on it")
@@ -92,7 +123,9 @@ enum Guide {
         }
 
         guard enabled else {
-            if removeLoadLine(from: scripts) { log("==> vanaguide: off") }
+            let removedAddon = !othersLive && fm.fileExists(atPath: dest.path)
+            if removedAddon { try? fm.removeItem(at: dest) }
+            if removeLoadLine(from: scripts) || removedAddon { log("==> vanaguide: off") }
             return
         }
         guard let src = addonSource else {
@@ -101,11 +134,15 @@ enum Guide {
             return
         }
 
-        if fm.fileExists(atPath: dest.path) { try? fm.removeItem(at: dest) }
-        do { try fm.copyItem(at: src, to: dest) }
-        catch {
-            log("==> vanaguide: could not install the addon — \(error.localizedDescription)")
-            return
+        // Replacing swaps the folder out from under a client that has it loaded.
+        if othersLive, isCompleteAddon(at: dest, fileManager: fm) {
+            log("==> vanaguide: another world is running; using the copy already installed")
+        } else {
+            do { try AddonInstaller.replaceDirectory(at: dest, with: src, preserving: ["data/nav"], fileManager: fm) }
+            catch {
+                log("==> vanaguide: could not install the addon — \(error.localizedDescription)")
+                return
+            }
         }
 
         addLoadLine(to: scripts)
@@ -114,22 +151,22 @@ enum Guide {
 
     /// Append the load line after everything AddonSuite manages.
     private static func addLoadLine(to scripts: URL) {
-        var text = (try? String(contentsOf: scripts, encoding: .utf8)) ?? "/load Addons\n"
+        var text = Credentials.readFile(at: scripts) ?? "/load Addons\n"
         guard !text.contains(loadLine) else { return }
         if !text.hasSuffix("\n") { text += "\n" }
         text += "\n\(marker)\n\(loadLine)\n"
-        try? text.write(to: scripts, atomically: true, encoding: .utf8)
+        Credentials.writeFile(text, to: scripts)
     }
 
     @discardableResult
     private static func removeLoadLine(from scripts: URL) -> Bool {
-        guard let text = try? String(contentsOf: scripts, encoding: .utf8),
+        guard let text = Credentials.readFile(at: scripts),
               text.contains(loadLine) else { return false }
         let kept = TextFile.lines(of: text).filter {
             let t = $0.trimmingCharacters(in: .whitespaces)
             return t != loadLine && t != marker
         }
-        try? kept.joined(separator: "\n").write(to: scripts, atomically: true, encoding: .utf8)
+        Credentials.writeFile(kept.joined(separator: "\n"), to: scripts)
         return true
     }
 }

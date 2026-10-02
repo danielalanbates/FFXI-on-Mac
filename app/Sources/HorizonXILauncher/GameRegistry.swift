@@ -54,21 +54,13 @@ enum GameRegistry {
         for cand in [polu, i.driveC.appendingPathComponent("polu.reg")] where fm.fileExists(atPath: cand.path) {
             wine(i, ["regedit", "/S", Install.winePath(cand, driveC: i.driveC)]); break
         }
-        try? target.write(to: marker(i), atomically: true, encoding: .utf8)
+        Credentials.writeFile(target, to: marker(i))
         RendererSetup.stopWineserver(i)
         return true
     }
 
     private static func wine(_ i: Install, _ args: [String]) {
-        let p = Process()
-        p.executableURL = i.wine
-        p.arguments = args
-        var env = ProcessInfo.processInfo.environment
-        env["WINEPREFIX"] = i.prefix.path; env["WINEDEBUG"] = "-all"
-        env.removeValue(forKey: "DYLD_FALLBACK_LIBRARY_PATH"); env.removeValue(forKey: "DYLD_LIBRARY_PATH")
-        p.environment = env
-        p.standardOutput = Pipe(); p.standardError = Pipe()
-        guard (try? p.run()) != nil else { return }
-        p.waitUntilExit()
+        let cmd = "export WINEPREFIX=\(Bridge.shellQuote(i.prefix.path)); export WINEDEBUG=-all; \(Bridge.shellQuote(i.wine.path)) " + args.map(Bridge.shellQuote).joined(separator: " ")
+        Bridge.runShell(cmd)
     }
 }

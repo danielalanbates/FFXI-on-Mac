@@ -44,3 +44,8 @@ Build: `meson setup --cross-file build-win32.txt --buildtype release builddir32 
 ninja -C builddir32 src/d3d9/d3d9.dll`, then `i686-w64-mingw32-strip -s`.
 
 The unpatched `dxvk-1.10.3-x32-d3d9.dll` is kept beside it for comparison.
+
+## libMoltenVK-1.4.2.dylib
+MoltenVK v1.4.2, unmodified macOS dylib from https://github.com/KhronosGroup/MoltenVK/releases/tag/v1.4.2
+(release tar SHA-256 f95765a6229cb7b915990a2890ce12ebe36a730b021545d3d52ae69ce4c4024e).
+Copyright The Brenwill Workshop Ltd. / Khronos Group. Licensed under the Apache License 2.0.

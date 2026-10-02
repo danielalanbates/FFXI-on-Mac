@@ -62,6 +62,7 @@ struct AddonSuite {
     static let pluginsStop  = "# --HORIZON_PLUGINS_STOP--"
     static let addonsStart  = "# --HORIZON_ADDONS_START--"
     static let addonsStop   = "# --HORIZON_ADDONS_STOP--"
+    private static let launcherManagedAddons: Set<String> = ["vanavoice", "vanaguide"]
 
     /// Plugins are DLLs and carry no readable metadata block, unlike addons, which declare
     /// theirs in Lua. Three of these are the plugin's own description string, read verbatim out
@@ -80,14 +81,15 @@ struct AddonSuite {
         "sequencer":  "Plays and manages animation sequences.",
     ]
 
-    static func scriptURL(_ i: Install) -> URL {
-        i.gameDir.appendingPathComponent("scripts/default.txt")
+    static func scriptURL(_ i: Install, profile: String = "horizonxi.ini") -> URL {
+        let script = Narration.scriptName(in: i, profile: profile)
+        return i.gameDir.appendingPathComponent("scripts/\(script)")
     }
 
     /// Everything installed, with the ones the script currently loads marked enabled.
-    static func scan(_ i: Install) -> [Item] {
+    static func scan(_ i: Install, profile: String = "horizonxi.ini") -> [Item] {
         let fm = FileManager.default
-        let text = (try? String(contentsOf: scriptURL(i), encoding: .utf8)) ?? ""
+        let text = Credentials.readFile(at: scriptURL(i, profile: profile)) ?? ""
         let onPlugins = Set(loadedNames(in: text, start: pluginsStart, stop: pluginsStop,
                                         prefix: "/load "))
         let onAddons = Set(loadedNames(in: text, start: addonsStart, stop: addonsStop,
@@ -114,6 +116,7 @@ struct AddonSuite {
                 guard fm.fileExists(atPath: k.path, isDirectory: &isDir), isDir.boolValue
                 else { continue }
                 let name = k.lastPathComponent
+                guard !launcherManagedAddons.contains(name.lowercased()) else { continue }
                 guard fm.fileExists(atPath: k.appendingPathComponent("\(name).lua").path)
                 else { continue }
                 let meta = metadata(ofLuaAt: k.appendingPathComponent("\(name).lua"))
@@ -150,9 +153,10 @@ struct AddonSuite {
     /// case nothing is written — better to do nothing than to guess where the block belongs in a
     /// file the server's own launcher also edits.
     @discardableResult
-    static func write(_ items: [Item], to install: Install) -> Bool {
-        let url = scriptURL(install)
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return false }
+    static func write(_ items: [Item], to install: Install,
+                      profile: String = "horizonxi.ini") -> Bool {
+        let url = scriptURL(install, profile: profile)
+        guard let text = Credentials.readFile(at: url) else { return false }
         let eol = TextFile.terminator(of: text)
         var lines = TextFile.lines(of: text)
 
@@ -171,8 +175,7 @@ struct AddonSuite {
               replace(&lines, start: pluginsStart, stop: pluginsStop, with: pluginBody)
         else { return false }
 
-        return (try? TextFile.join(lines, terminator: eol).write(to: url, atomically: true,
-                                                                 encoding: .utf8)) != nil
+        return Credentials.writeFile(TextFile.join(lines, terminator: eol), to: url)
     }
 
     /// Put the managed markers into a script that has none, so the launcher can own the load
@@ -188,7 +191,8 @@ struct AddonSuite {
             let t = line.trimmingCharacters(in: .whitespaces).lowercased()
             let isLoad = (t.hasPrefix("/load ") || t.hasPrefix("/addon load "))
                 && t != "/load winefix"
-            if isLoad {
+            let launcherManaged = t == "/addon load vanavoice" || t == "/addon load vanaguide"
+            if isLoad && !launcherManaged {
                 if insertAt == nil { insertAt = kept.count }
                 continue
             }
