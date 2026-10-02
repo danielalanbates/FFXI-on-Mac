@@ -12,6 +12,10 @@ final class Runner: ObservableObject {
     }
     /// True while update-client.sh is applying HorizonXI updates; lets the UI offer Stop.
     @Published var updatingHorizon = false
+    /// 0...1 across every pending update zip, and a short label ("2.0.4 · 1 of 2").
+    @Published var updateProgress: Double = 0
+    @Published var updateLabel = ""
+    private var updateStep = (n: 1, total: 1)
     @Published var busy = false {
         didSet { if busy != oldValue { Runner.busyCount += busy ? 1 : -1 } }
     }
@@ -189,6 +193,32 @@ final class Runner: ObservableObject {
     private var currentWorld = ""
 
     func appendChunk(_ s: String) {
+        var s = s
+        if updatingHorizon {
+            // aria2's readout becomes the progress bar instead of hundreds of log lines.
+            for line in s.split(whereSeparator: \.isNewline) {
+                let l = String(line)
+                if let m = l.range(of: #"==> update (\S+) \((\d+)/(\d+)\)"#, options: .regularExpression) {
+                    let parts = l[m].dropFirst(11).split(separator: " ")
+                    let nums = parts.last?.trimmingCharacters(in: CharacterSet(charactersIn: "()")).split(separator: "/") ?? []
+                    if nums.count == 2, let n = Int(nums[0]), let t = Int(nums[1]) {
+                        updateStep = (n, max(t, 1))
+                        updateLabel = "\(parts.first ?? "") · \(n) of \(t)"
+                    }
+                    updateProgress = Double(updateStep.n - 1) / Double(updateStep.total)
+                } else if let m = l.range(of: #"\((\d+)%\)"#, options: .regularExpression),
+                          let pct = Double(l[m].dropFirst().dropLast(2)) {
+                    updateProgress = (Double(updateStep.n - 1) + pct / 100 * 0.9) / Double(updateStep.total)
+                } else if l.contains("==> extracting") {
+                    updateProgress = (Double(updateStep.n - 1) + 0.9) / Double(updateStep.total)
+                }
+            }
+            s = s.split(separator: "\n", omittingEmptySubsequences: false)
+                .filter { l in let t = l.trimmingCharacters(in: .whitespaces)
+                          return !(t.hasPrefix("[#") || t.hasPrefix("***") || t.hasPrefix("====") || t.hasPrefix("FILE:") || t.hasPrefix("----")) }
+                .joined(separator: "\n")
+            if s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return }
+        }
         tee(s)
         // Every xiloader fork prints one of these and drops to an interactive menu no window shows.
         let failMarkers = ["Failed to login", "Bad json reply from remote", "Error from remote",
@@ -272,6 +302,7 @@ final class Runner: ObservableObject {
         }
         busy = true
         updatingHorizon = true
+        updateProgress = 0; updateLabel = ""; updateStep = (1, 1)
         appendLine("==> updating HorizonXI game files in \(install.gameDir.path)")
         var env: [String: String] = [:]
         // aria2c comes from Homebrew; a bundled app's PATH does not include it.

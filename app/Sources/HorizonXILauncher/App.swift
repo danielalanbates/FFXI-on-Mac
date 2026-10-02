@@ -295,7 +295,7 @@ struct ContentView: View {
                                        startPoint: .top, endPoint: .bottom))
                     .shadow(color: Vana.crystal.opacity(0.35), radius: 12, y: 2)
                 Text("FINAL FANTASY XI ON APPLE SILICON")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                     .tracking(3.5)
                     .foregroundStyle(Vana.gold)
                 updateBanner
@@ -336,15 +336,15 @@ struct ContentView: View {
     private var serverPicker: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("WORLD").font(.caption).tracking(2.5).foregroundStyle(Vana.gold)
+                Text("WORLD").font(.system(size: 12)).tracking(2.5).foregroundStyle(Vana.gold)
                 Spacer()
                 if store.selected?.verified == true {
                     Label("verified", systemImage: "checkmark.seal.fill")
-                        .labelStyle(.iconOnly).font(.caption2)
+                        .labelStyle(.iconOnly).font(.system(size: 12))
                         .foregroundStyle(Vana.crystal)
                         .help("This project logs into this server successfully.")
                 } else {
-                    Image(systemName: "questionmark.circle").font(.caption2)
+                    Image(systemName: "questionmark.circle").font(.system(size: 12))
                         .foregroundStyle(Vana.muted)
                         .help("This project has not logged into this server itself yet.")
                 }
@@ -374,7 +374,7 @@ struct ContentView: View {
             // Setup & Diagnostics; only the one thing that actually blocks Play stays visible.
             if let s = store.selected, !s.local, s.host.isEmpty {
                 Text("No login host set for \(s.name) — add it under Setup & Diagnostics.")
-                    .font(.caption2).foregroundStyle(Vana.ember)
+                    .font(.system(size: 12)).foregroundStyle(Vana.ember)
                     .fixedSize(horizontal: false, vertical: true)
             }
         // A world other than HorizonXI with no folder of its own would be run out of HorizonXI's
@@ -448,8 +448,11 @@ struct ContentView: View {
     @ViewBuilder private var gameUpdateBanner: some View {
         if runner.updatingHorizon {
             HStack(spacing: 10) {
-                ProgressView().controlSize(.small)
-                Text("Updating HorizonXI…").font(.caption).foregroundStyle(Vana.text)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Updating HorizonXI \(runner.updateLabel)  \(Int(runner.updateProgress * 100))%")
+                        .font(.system(size: 12)).foregroundStyle(Vana.text)
+                    ProgressView(value: runner.updateProgress).tint(Vana.gold)
+                }
                 Spacer()
                 Button("Stop") { runner.stopHorizonUpdate() }.controlSize(.small)
             }
@@ -462,7 +465,7 @@ struct ContentView: View {
             HStack(spacing: 10) {
                 Image(systemName: "arrow.down.circle.fill").foregroundStyle(Vana.gold)
                 Text("HorizonXI \(latest) is available (you have \(have))")
-                    .font(.caption).foregroundStyle(Vana.text)
+                    .font(.system(size: 12)).foregroundStyle(Vana.text)
                 Spacer()
                 Button("Update") { runner.updateHorizon(i) { _ in recheck(); Task { await fetchHorizonLatest() } } }
                     .buttonStyle(.borderedProminent).controlSize(.small)
@@ -495,8 +498,8 @@ struct ContentView: View {
             HStack(spacing: 10) {
                 Image(systemName: "arrow.down.circle.fill").foregroundStyle(Vana.gold)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Update \(release.version) is ready").font(.caption).foregroundStyle(Vana.text)
-                    Text("Restart to finish installing it.").font(.caption2).foregroundStyle(Vana.muted)
+                    Text("Update \(release.version) is ready").font(.system(size: 12)).foregroundStyle(Vana.text)
+                    Text("Restart to finish installing it.").font(.system(size: 12)).foregroundStyle(Vana.muted)
                 }
                 Spacer()
                 Button("Restart") { updater.restartToUpdate() }
@@ -509,14 +512,14 @@ struct ContentView: View {
         case .downloading(let frac):
             HStack(spacing: 8) {
                 ProgressView(value: frac).frame(width: 120)
-                Text("Downloading update… \(Int(frac * 100))%").font(.caption2).foregroundStyle(Vana.muted)
+                Text("Downloading update… \(Int(frac * 100))%").font(.system(size: 12)).foregroundStyle(Vana.muted)
             }.padding(.top, 6)
         case .staging:
-            Text("Preparing update…").font(.caption2).foregroundStyle(Vana.muted).padding(.top, 6)
+            Text("Preparing update…").font(.system(size: 12)).foregroundStyle(Vana.muted).padding(.top, 6)
         case .failed(let msg):
             // Only worth showing when it is about an update that exists, not routine offline noise.
             if msg.contains("available") {
-                Text(msg).font(.caption2).foregroundStyle(Vana.ember)
+                Text(msg).font(.system(size: 12)).foregroundStyle(Vana.ember)
                     .fixedSize(horizontal: false, vertical: true).padding(.top, 6)
             }
         case .idle, .checking:
@@ -540,10 +543,11 @@ struct ContentView: View {
 
     @ViewBuilder
     private var newsBanner: some View {
-        let items = feeds.bannerItems(for: store.selected, policy: addonPolicy)
+        // Only real news fetched from the server. The built-in blurbs (era, emulator lineage,
+        // connection notes, addon counts) were filler and are no longer rotated here.
+        let items = feeds.bannerItems(for: store.selected, policy: addonPolicy).filter(\.fetched)
         if items.isEmpty {
-            Text("running natively — no virtual machine")
-                .font(.callout).foregroundStyle(Vana.muted).padding(.top, 4)
+            EmptyView()
         } else {
             let item = items[min(bannerIndex, items.count - 1) % items.count]
             HStack(alignment: .top, spacing: 8) {
@@ -555,7 +559,7 @@ struct ContentView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     if let url = item.url {
                         Link("Open \(url.host ?? "page")", destination: url)
-                            .font(.caption2).foregroundStyle(Vana.gold)
+                            .font(.system(size: 12)).foregroundStyle(Vana.gold)
                     }
                 }
                 Spacer(minLength: 0)
@@ -622,14 +626,14 @@ struct ContentView: View {
         switch policy {
         case .unknown:
             Text(Self.unknownPolicyNote(serverName))
-                .font(.caption2).foregroundStyle(Vana.ember)
+                .font(.system(size: 12)).foregroundStyle(Vana.ember)
                 .fixedSize(horizontal: false, vertical: true)
         case let .unrestricted(reason):
-            Text(reason).font(.caption2).foregroundStyle(Vana.muted)
+            Text(reason).font(.system(size: 12)).foregroundStyle(Vana.muted)
                 .fixedSize(horizontal: false, vertical: true)
         case let .allowlist(_, source):
             Text(Self.allowlistNote(serverName, hidden: hidden, source: source))
-                .font(.caption2).foregroundStyle(Vana.muted)
+                .font(.system(size: 12)).foregroundStyle(Vana.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -645,7 +649,7 @@ struct ContentView: View {
             if !detail.isEmpty || !byline.isEmpty {
                 Text(detail.isEmpty ? byline
                                     : (byline.isEmpty ? detail : "\(detail)  ·  \(byline)"))
-                    .font(.caption2).foregroundStyle(Vana.muted)
+                    .font(.system(size: 12)).foregroundStyle(Vana.muted)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.leading, 2)
             }
@@ -659,12 +663,12 @@ struct ContentView: View {
             Text("Addons & plugins").font(.headline)
             Text("Written to scripts/default.txt, between the launcher-managed markers. Anything "
                  + "you added by hand outside those blocks is left alone.")
-                .font(.caption).foregroundStyle(Vana.muted)
+                .font(.system(size: 12)).foregroundStyle(Vana.muted)
 
             addonPolicyNote
 
             if !addonWarning.isEmpty {
-                Text(addonWarning).font(.caption2).foregroundStyle(Vana.ember)
+                Text(addonWarning).font(.system(size: 12)).foregroundStyle(Vana.ember)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -675,8 +679,8 @@ struct ContentView: View {
                     if !LocalWorldAddons.isInstalled(e, in: i) {
                         HStack(alignment: .top) {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(e.title).font(.caption).bold()
-                                Text(e.blurb).font(.caption2).foregroundStyle(Vana.muted)
+                                Text(e.title).font(.system(size: 12)).bold()
+                                Text(e.blurb).font(.system(size: 12)).foregroundStyle(Vana.muted)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             Spacer()
@@ -722,7 +726,7 @@ struct ContentView: View {
             // hid everything. Each of those needs a different thing done about it.
             if addonItems.isEmpty {
                 Text(emptyAddonReason)
-                    .font(.caption).foregroundStyle(Vana.ember)
+                    .font(.system(size: 12)).foregroundStyle(Vana.ember)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.vertical, 6)
             }
@@ -748,7 +752,7 @@ struct ContentView: View {
                 if !addonPolicy.isRestricting && addonItems.contains(where: { !addonPolicy.allows($0.name) }) {
                     Section("Not on \(store.selected?.name ?? "this server")'s approved list") {
                         Text(unlistedNote)
-                            .font(.caption2).foregroundStyle(Vana.ember)
+                            .font(.system(size: 12)).foregroundStyle(Vana.ember)
                             .fixedSize(horizontal: false, vertical: true)
                         ForEach($addonItems.filter {
                             !addonPolicy.allows($0.wrappedValue.name)
@@ -814,7 +818,7 @@ struct ContentView: View {
             Text("Graphics").font(.headline)
             Text("Applied to \(store.selected?.bootProfile ?? "the boot profile") the next time "
                  + "you press Play.")
-                .font(.caption).foregroundStyle(Vana.muted)
+                .font(.system(size: 12)).foregroundStyle(Vana.muted)
 
             Picker("Resolution", selection: Binding(
                 get: { "\(graphics.width)x\(graphics.height)" },
@@ -843,7 +847,7 @@ struct ContentView: View {
             Text("Resize the game window however you like; the next Play opens at that size, "
                  + "drawn at full detail. FFXI cannot redraw at a new size while running, so a "
                  + "window enlarged mid-game is stretched until the next launch.")
-                .font(.caption2).foregroundStyle(Vana.muted)
+                .font(.system(size: 12)).foregroundStyle(Vana.muted)
                 .fixedSize(horizontal: false, vertical: true)
             Toggle("Match interface to render resolution", isOn: $graphics.uiFollowsResolution)
             if !graphics.uiFollowsResolution {
@@ -860,7 +864,7 @@ struct ContentView: View {
                 Text("FFXI draws the interface at this resolution and scales it up to the "
                      + "window, so a lower number means bigger menus and text. The world is "
                      + "still drawn at the render resolution above.")
-                    .font(.caption2).foregroundStyle(Vana.muted)
+                    .font(.system(size: 12)).foregroundStyle(Vana.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -917,7 +921,7 @@ struct ContentView: View {
                     Spacer()
                     if local.busy {
                         ProgressView().controlSize(.small)
-                        Text(local.activity).font(.caption2).foregroundStyle(Vana.muted)
+                        Text(local.activity).font(.system(size: 12)).foregroundStyle(Vana.muted)
                     }
                 }
 
@@ -934,7 +938,7 @@ struct ContentView: View {
                              ? String(format: "%.1f GB free on this disk", s.freeGB)
                              : String(format: "%.1f GB free · about %.0f GB needed",
                                       s.freeGB, s.needGB))
-                            .font(.caption)
+                            .font(.system(size: 12))
                             .foregroundStyle((s.spaceOK || s.ready) ? Vana.text : Vana.ember)
                     }
 
@@ -945,7 +949,7 @@ struct ContentView: View {
                                + "database and the compiler. Free up space, then set up."
                              : "Below the recommended \(Int(s.needGB)) GB but above the "
                                + "\(Int(s.floorGB)) GB minimum. Setup will run, and may run tight.")
-                            .font(.caption2).foregroundStyle(Vana.ember)
+                            .font(.system(size: 12)).foregroundStyle(Vana.ember)
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
@@ -958,7 +962,7 @@ struct ContentView: View {
                         Text("Setting up downloads Homebrew packages and the LandSandBoat source, "
                              + "imports the game database and compiles the server. Budget half an "
                              + "hour or more the first time; it can be re-run if it stops.")
-                            .font(.caption2).foregroundStyle(Vana.muted)
+                            .font(.system(size: 12)).foregroundStyle(Vana.muted)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     row("Location", s.root)
@@ -972,7 +976,7 @@ struct ContentView: View {
                             .disabled(local.busy || (s.belowFloor && !forceSetup))
                             if s.belowFloor {
                                 Toggle("Set up anyway", isOn: $forceSetup)
-                                    .toggleStyle(.checkbox).font(.caption2)
+                                    .toggleStyle(.checkbox).font(.system(size: 12))
                                     .foregroundStyle(Vana.muted)
                             }
                         }
@@ -988,7 +992,7 @@ struct ContentView: View {
                     .padding(.top, 2)
                 } else {
                     Text("checking what is installed…")
-                        .font(.caption2).foregroundStyle(Vana.muted)
+                        .font(.system(size: 12)).foregroundStyle(Vana.muted)
                 }
             }
             .padding(14)
@@ -1006,8 +1010,8 @@ struct ContentView: View {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Vana.ember)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(perf.renderer.title) is experimental")
-                        .font(.caption).foregroundStyle(Vana.text)
-                    Text(perf.renderer.blurb).font(.caption2).foregroundStyle(Vana.muted)
+                        .font(.system(size: 12)).foregroundStyle(Vana.text)
+                    Text(perf.renderer.blurb).font(.system(size: 12)).foregroundStyle(Vana.muted)
                 }
             }
             .padding(10)
@@ -1032,7 +1036,7 @@ struct ContentView: View {
 
             Text("Measured on this Mac with Metal/DXVK: rendering is correct, fog included, "
                  + "at 4K with every setting at maximum — see docs/MAX4K.md.")
-                .font(.caption2).foregroundStyle(Vana.muted)
+                .font(.system(size: 12)).foregroundStyle(Vana.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(14)
@@ -1063,7 +1067,7 @@ struct ContentView: View {
                 Text(s.accountHow.isEmpty
                      ? "\(s.name) publishes no signup route this project could find."
                      : s.accountHow)
-                    .font(.caption).foregroundStyle(Vana.muted)
+                    .font(.system(size: 12)).foregroundStyle(Vana.muted)
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 10) {
@@ -1073,14 +1077,14 @@ struct ContentView: View {
                     if s.accountURL.isEmpty, s.accountHow.contains("loader window") {
                         Label("Created in the loader window when you press Play",
                               systemImage: "terminal")
-                            .font(.caption).foregroundStyle(Vana.crystalDim)
+                            .font(.system(size: 12)).foregroundStyle(Vana.crystalDim)
                     }
                     if let u = URL(string: s.accountURL), !s.accountURL.isEmpty {
                         Button {
                             NSWorkspace.shared.open(u)
                         } label: {
                             Label(Self.signupVerb(for: s), systemImage: "arrow.up.forward.square")
-                                .font(.caption)
+                                .font(.system(size: 12))
                         }
                         .buttonStyle(.borderedProminent).tint(Vana.goldDim)
                         .help(u.absoluteString)
@@ -1089,7 +1093,7 @@ struct ContentView: View {
                        s.discordURL != s.accountURL {
                         Button { NSWorkspace.shared.open(d) } label: {
                             Label("Discord", systemImage: "bubble.left.and.bubble.right")
-                                .font(.caption)
+                                .font(.system(size: 12))
                         }
                         .buttonStyle(.bordered).tint(Vana.crystalDim)
                         .help(d.absoluteString)
@@ -1103,10 +1107,10 @@ struct ContentView: View {
                 Button { withAnimation(.easeInOut(duration: 0.18)) { showAllSignups.toggle() } } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 9, weight: .semibold))
+                            .font(.system(size: 11, weight: .semibold))
                             .rotationEffect(.degrees(showAllSignups ? 90 : 0))
                         Text(showAllSignups ? "Every other world" : "Every other world")
-                            .font(.caption2)
+                            .font(.system(size: 12))
                         Spacer(minLength: 0)
                     }
                     .foregroundStyle(Vana.crystalDim)
@@ -1143,22 +1147,22 @@ struct ContentView: View {
     @ViewBuilder
     private func signupRow(_ other: Server) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(other.name).font(.caption).foregroundStyle(Vana.text)
+            Text(other.name).font(.system(size: 12)).foregroundStyle(Vana.text)
                 .frame(width: 104, alignment: .leading)
             if let u = URL(string: other.accountURL), !other.accountURL.isEmpty {
                 Link(Self.signupVerb(for: other), destination: u)
-                    .font(.caption2).foregroundStyle(Vana.gold)
+                    .font(.system(size: 12)).foregroundStyle(Vana.gold)
                     .help(other.accountHow.isEmpty ? u.absoluteString : other.accountHow)
             } else {
                 Text(other.accountHow.contains("loader window")
                      ? "in the loader window" : "no signup published")
-                    .font(.caption2).foregroundStyle(Vana.muted)
+                    .font(.system(size: 12)).foregroundStyle(Vana.muted)
                     .help(other.accountHow)
             }
             Spacer(minLength: 0)
             if let d = URL(string: other.discordURL), !other.discordURL.isEmpty,
                other.discordURL != other.accountURL {
-                Link("Discord", destination: d).font(.caption2).foregroundStyle(Vana.crystalDim)
+                Link("Discord", destination: d).font(.system(size: 12)).foregroundStyle(Vana.crystalDim)
             }
         }
     }
@@ -1178,9 +1182,9 @@ struct ContentView: View {
 
     private func row(_ k: String, _ v: String) -> some View {
         HStack(spacing: 8) {
-            Text(k.uppercased()).font(.system(size: 9)).tracking(1.2)
+            Text(k.uppercased()).font(.system(size: 11)).tracking(1.2)
                 .foregroundStyle(Vana.crystalDim).frame(width: 84, alignment: .leading)
-            Text(v).font(.caption).foregroundStyle(Vana.text)
+            Text(v).font(.system(size: 12)).foregroundStyle(Vana.text)
             Spacer()
         }
     }
@@ -1191,8 +1195,8 @@ struct ContentView: View {
                 HStack(alignment: .top, spacing: 8) {
                     Circle().fill(color(c.state)).frame(width: 7, height: 7).padding(.top, 5)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(c.title).font(.caption).foregroundStyle(Vana.text)
-                        Text(c.detail).font(.caption2).foregroundStyle(Vana.muted)
+                        Text(c.title).font(.system(size: 12)).foregroundStyle(Vana.text)
+                        Text(c.detail).font(.system(size: 12)).foregroundStyle(Vana.muted)
                             .textSelection(.enabled)
                     }
                 }
@@ -1206,7 +1210,7 @@ struct ContentView: View {
             ScrollViewReader { sp in
                 ScrollView {
                     Text(runner.log.isEmpty ? "ready." : runner.log)
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(Vana.muted)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
@@ -1232,7 +1236,7 @@ struct ContentView: View {
             Rectangle().fill(Vana.stroke).frame(height: 1)
 
             HStack {
-                Text("ACCOUNT").font(.caption).tracking(2.5).foregroundStyle(Vana.gold)
+                Text("ACCOUNT").font(.system(size: 12)).tracking(2.5).foregroundStyle(Vana.gold)
                 Spacer()
                 Button { refresh() } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(.borderless).foregroundStyle(Vana.muted)
@@ -1249,7 +1253,7 @@ struct ContentView: View {
             field("Account name", text: $user, secure: false, disabled: store.selected?.local == true)
             field("Password", text: $pass, secure: true, disabled: store.selected?.local == true)
             Toggle("Remember me", isOn: $remember)
-                .toggleStyle(.checkbox).font(.caption).foregroundStyle(Vana.muted)
+                .toggleStyle(.checkbox).font(.system(size: 12)).foregroundStyle(Vana.muted)
                 .help("Remembered in a mode-600 file in Application Support. The game loader also receives it in its command line.")
 
             if installs.count > 1 {
@@ -1273,10 +1277,10 @@ struct ContentView: View {
                 Button("Graphics…") { openGraphics() }
                 Button("Addons…") { openAddons() }
             }
-            .font(.caption)
+            .font(.system(size: 12))
 
             if !notice.isEmpty {
-                Text(notice).font(.caption2).foregroundStyle(Vana.gold)
+                Text(notice).font(.system(size: 12)).foregroundStyle(Vana.gold)
             }
 
             Rectangle().fill(Vana.stroke).frame(height: 1)
@@ -1286,14 +1290,14 @@ struct ContentView: View {
             DisclosureGroup(isExpanded: $showDetails) {
                 VStack(alignment: .leading, spacing: 6) {
                     if let s = store.selected, !s.local {
-                        Text("SERVER CONNECTION").font(.caption2).tracking(2).foregroundStyle(Vana.muted)
+                        Text("SERVER CONNECTION").font(.system(size: 12)).tracking(2).foregroundStyle(Vana.muted)
                         TextField("login host", text: Binding(
                             get: { s.host }, set: { var c = s; c.host = $0; store.update(c) }))
-                            .textFieldStyle(.roundedBorder).font(.caption2)
+                            .textFieldStyle(.roundedBorder).font(.system(size: 12))
                         HStack(spacing: 6) {
                             TextField("boot profile .ini", text: Binding(
                                 get: { s.bootProfile }, set: { var c = s; c.bootProfile = $0; store.update(c) }))
-                                .textFieldStyle(.roundedBorder).font(.caption2)
+                                .textFieldStyle(.roundedBorder).font(.system(size: 12))
                             if !Server.builtins.contains(where: { $0.name == s.name }) {
                                 Button(role: .destructive) { store.remove(s) } label: {
                                     Image(systemName: "trash")
@@ -1316,11 +1320,6 @@ struct ContentView: View {
                         .disabled(!Guide.isAvailable || !Guide.allowed(by: addonPolicy))
                         .help(vanaguideHelp)
                     Toggle("Large address aware", isOn: $perf.largeAddressAware)
-                    Toggle("Fast lens flares (skip occlusion wait) — glitches", isOn: $perf.flareReadbackNoWait)
-                        .help("Roughly doubles the frame rate: FFXI stops the whole frame four "
-                              + "times to read back a 16×16 visibility test. But it hands the game "
-                              + "a buffer the GPU has not finished writing, so NPCs blink in and "
-                              + "out about once a second. Off until that is fixed properly.")
                     Toggle("Show frame rate (Metal HUD)", isOn: $perf.metalHUD)
                     Divider()
                     RetroAchievementsSection(ra: ra, gameDir: active?.gameDir,
@@ -1368,7 +1367,7 @@ struct ContentView: View {
                     .padding(.top, 4)
 
                 }
-                .font(.caption)
+                .font(.system(size: 12))
                 .foregroundStyle(Vana.muted)
                 .padding(.top, 8)
                 .onChange(of: perf.msync) { _ in perf.save() }
@@ -1380,7 +1379,7 @@ struct ContentView: View {
                 .onChange(of: perf.enableVanaguide) { _ in perf.save() }
                 .onChange(of: perf.metalHUD) { _ in perf.save() }
             } label: {
-                Text("SETUP & DIAGNOSTICS").font(.caption).tracking(2.5)
+                Text("SETUP & DIAGNOSTICS").font(.system(size: 12)).tracking(2.5)
                     .foregroundStyle(Vana.gold)
             }
 
@@ -1414,7 +1413,7 @@ struct ContentView: View {
 
             HStack(spacing: 5) {
                 Circle().fill(scanning ? Vana.gold : (blocked ? Vana.ember : Vana.crystal)).frame(width: 6, height: 6)
-                Text(statusText).font(.caption2).foregroundStyle(Vana.muted)
+                Text(statusText).font(.system(size: 12)).foregroundStyle(Vana.muted)
             }
         }
         .padding(22)
@@ -1425,21 +1424,21 @@ struct ContentView: View {
 
     private var rendererSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("RENDERER").font(.caption).tracking(2.5).foregroundStyle(Vana.gold)
+            Text("RENDERER").font(.system(size: 12)).tracking(2.5).foregroundStyle(Vana.gold)
             Picker("", selection: $perf.renderer) {
                 ForEach(Renderer.allCases) { r in Text(r.title).tag(r) }
             }
             .labelsHidden()
             .onChange(of: perf.renderer) { _ in perf.save() }
             Text(perf.renderer.blurb)
-                .font(.caption2).foregroundStyle(Vana.muted).fixedSize(horizontal: false, vertical: true)
+                .font(.system(size: 12)).foregroundStyle(Vana.muted).fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private func field(_ title: String, text: Binding<String>, secure: Bool,
                        disabled: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title.uppercased()).font(.caption2).tracking(1.5).foregroundStyle(Vana.muted)
+            Text(title.uppercased()).font(.system(size: 12)).tracking(1.5).foregroundStyle(Vana.muted)
             Group {
                 if secure { SecureField("", text: text) } else { TextField("", text: text) }
             }
@@ -1457,7 +1456,7 @@ struct ContentView: View {
     private var worldRow: some View {
                 HStack(spacing: 8) {
                     Image(systemName: "diamond.fill")
-                        .font(.system(size: 10))
+                        .font(.system(size: 12))
                         .foregroundStyle(Vana.crystal)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(store.selected?.name ?? "Choose a world")
@@ -1465,16 +1464,16 @@ struct ContentView: View {
                             .foregroundStyle(Vana.text)
                             .lineLimit(1)
                         if let era = store.selected?.era, !era.isEmpty {
-                            Text(era).font(.caption2).foregroundStyle(Vana.muted).lineLimit(1)
+                            Text(era).font(.system(size: 12)).foregroundStyle(Vana.muted).lineLimit(1)
                         }
                     }
                     Spacer(minLength: 4)
                     // Say it in words. The chevron-in-a-circle this replaced still read as
                     // decoration to a first-time user; a labelled gold pill does not.
                     HStack(spacing: 4) {
-                        Text("CHANGE WORLD").font(.system(size: 9, weight: .bold)).tracking(1)
+                        Text("CHANGE WORLD").font(.system(size: 11, weight: .bold)).tracking(1).lineLimit(1).fixedSize()
                         Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 9, weight: .bold))
+                            .font(.system(size: 11, weight: .bold))
                     }
                     .foregroundStyle(Color.black.opacity(0.85))
                     .padding(.horizontal, 8).padding(.vertical, 5)
@@ -1500,14 +1499,14 @@ struct ContentView: View {
     /// is remembered per world in servers.json.
     private func gameDataCard(for s: Server, install i: Install) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("GAME DATA").font(.caption).tracking(2.5).foregroundStyle(Vana.gold)
+            Text("GAME DATA").font(.system(size: 12)).tracking(2.5).foregroundStyle(Vana.gold)
             Text(s.dataPath.isEmpty
                  ? (i.hasGame ? "\(s.name) has no folder of its own yet — Play would use HorizonXI's files, which \(s.name)'s login server may reject."
                               : "\(s.name)'s game files are not installed yet.")
                  : "Nothing playable at \(s.dataPath).")
-                .font(.caption2).foregroundStyle(Vana.muted).fixedSize(horizontal: false, vertical: true)
+                .font(.system(size: 12)).foregroundStyle(Vana.muted).fixedSize(horizontal: false, vertical: true)
             if !s.installNote.isEmpty {
-                Text(s.installNote).font(.caption2).foregroundStyle(Vana.muted)
+                Text(s.installNote).font(.system(size: 12)).foregroundStyle(Vana.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
             // Three buttons never fit this panel's width: they rendered as "Downloa…",
@@ -1541,7 +1540,7 @@ struct ContentView: View {
                         .help("The classic route: run HorizonXI's installer inside the wrapper.")
                 }
                 }
-            }.font(.caption).lineLimit(1)
+            }.font(.system(size: 12)).lineLimit(1)
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.25)))
@@ -1683,24 +1682,24 @@ struct ContentView: View {
         let live = sessions.live
         if !live.isEmpty || !elsewhere.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
-                Text("RUNNING").font(.caption2).tracking(2).foregroundStyle(Vana.muted)
+                Text("RUNNING").font(.system(size: 12)).tracking(2).foregroundStyle(Vana.muted)
                 ForEach(live, id: \.id) { s in
                     HStack(spacing: 6) {
                         Circle().fill(Vana.crystal).frame(width: 6, height: 6)
-                        Text(s.id).font(.caption).foregroundStyle(Vana.text)
+                        Text(s.id).font(.system(size: 12)).foregroundStyle(Vana.text)
                         Spacer()
                         Button("Stop") { s.runner.stop() }
-                            .font(.caption)
+                            .font(.system(size: 12))
                             .help("Ends \(s.id)'s client only. Other worlds keep running.")
                     }
                 }
                 ForEach(elsewhere, id: \.host) { e in
                     HStack(spacing: 6) {
                         Circle().fill(Vana.muted).frame(width: 6, height: 6)
-                        Text(e.name).font(.caption).foregroundStyle(Vana.text)
+                        Text(e.name).font(.system(size: 12)).foregroundStyle(Vana.text)
                         Spacer()
                         Text("pid \(e.pids.map(String.init).joined(separator: ","))")
-                            .font(.caption).foregroundStyle(Vana.muted)
+                            .font(.system(size: 12)).foregroundStyle(Vana.muted)
                             .help("Started outside this window (another launcher, or by hand). Stop it from there.")
                     }
                 }

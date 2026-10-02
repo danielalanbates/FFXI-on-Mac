@@ -94,7 +94,7 @@ struct PerfSettings: Codable {
         disableAppNap = b(.disableAppNap, true)
         fpsDivisorOne = b(.fpsDivisorOne, true)
         followSoundOutput = b(.followSoundOutput, true)
-        flareReadbackNoWait = b(.flareReadbackNoWait, false)
+        flareReadbackNoWait = false   // option removed: NPCs blink with it on
         largeAddressAware = b(.largeAddressAware, true)
         narrateCutscenes = b(.narrateCutscenes, false)
         enableVanaguide = b(.enableVanaguide, false)

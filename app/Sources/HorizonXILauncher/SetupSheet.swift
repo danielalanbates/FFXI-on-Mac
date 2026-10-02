@@ -36,7 +36,7 @@ struct SetupSheet: View {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(s.title).font(.callout.weight(.medium))
                                 .foregroundStyle(current == s ? Vana.gold : Vana.text)
-                            Text(s.detail).font(.caption).foregroundStyle(Vana.muted)
+                            Text(s.detail).font(.system(size: 12)).foregroundStyle(Vana.muted)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         Spacer()
@@ -51,7 +51,7 @@ struct SetupSheet: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 2) {
                             ForEach(Array(lines.enumerated()), id: \.offset) { _, l in
-                                Text(l).font(.system(size: 11, design: .monospaced))
+                                Text(l).font(.system(size: 13, design: .monospaced))
                                     .foregroundStyle(Vana.muted)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
@@ -65,7 +65,7 @@ struct SetupSheet: View {
             }
 
             if let failure {
-                Text(failure).font(.caption).foregroundStyle(Vana.ember)
+                Text(failure).font(.system(size: 12)).foregroundStyle(Vana.ember)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -78,7 +78,7 @@ struct SetupSheet: View {
                          : "FFXI is Square Enix's, so it comes from your server rather than from "
                            + "here. Download HorizonXI's Windows installer, then hand it over "
                            + "below — it runs inside the drive that was just created.")
-                        .font(.caption).foregroundStyle(Vana.muted)
+                        .font(.system(size: 12)).foregroundStyle(Vana.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }

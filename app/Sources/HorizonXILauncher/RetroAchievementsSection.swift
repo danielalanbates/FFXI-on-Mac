@@ -17,14 +17,14 @@ struct RetroAchievementsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("RETROACHIEVEMENTS").font(.caption2).tracking(2)
+            Text("RETROACHIEVEMENTS").font(.system(size: 12)).tracking(2)
             TextField("RetroAchievements username", text: $user)
-                .textFieldStyle(.roundedBorder).font(.caption2)
+                .textFieldStyle(.roundedBorder).font(.system(size: 12))
                 .onSubmit { RetroAchievements.username = user }
                 .onChange(of: user) { RetroAchievements.username = $0 }
             HStack(spacing: 6) {
                 SecureField(keySaved ? "web API key saved in Keychain" : "web API key", text: $keyEntry)
-                    .textFieldStyle(.roundedBorder).font(.caption2)
+                    .textFieldStyle(.roundedBorder).font(.system(size: 12))
                 Button("Save") {
                     let k = keyEntry.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !k.isEmpty else { return }
@@ -50,7 +50,7 @@ struct RetroAchievementsSection: View {
                   + "the macOS Keychain and only ever sent to retroachievements.org; the game never "
                   + "sees it.")
             TextField("extra set ids (optional)", text: $extraIDs)
-                .textFieldStyle(.roundedBorder).font(.caption2)
+                .textFieldStyle(.roundedBorder).font(.system(size: 12))
                 .onSubmit { RetroAchievements.extraSetIDs = RetroAchievements.parseSetIDs(extraIDs) }
                 .help("Built in: \(RetroAchievements.builtinSets.map { "\($0.id) \($0.title)" }.joined(separator: ", ")).")
             HStack(spacing: 8) {
@@ -60,17 +60,17 @@ struct RetroAchievementsSection: View {
                     ra.refresh(.manual, gameDir: gameDir, log: log)
                 }
                 .disabled(ra.busy || gameDir == nil)
-                if !keyNote.isEmpty { Text(keyNote).font(.caption2) }
+                if !keyNote.isEmpty { Text(keyNote).font(.system(size: 12)) }
             }
-            Text(ra.status).font(.caption2).fixedSize(horizontal: false, vertical: true)
+            Text(ra.status).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
             if let e = ra.lastError {
-                Text(e).font(.caption2).foregroundStyle(Vana.ember)
+                Text(e).font(.system(size: 12)).foregroundStyle(Vana.ember)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Text("Progress is fetched by the launcher and written next to Vanaguide's config; "
                  + "the game itself never goes online for it. On HorizonXI, view it in Vanaguide "
                  + "Companion.")
-                .font(.caption2).foregroundStyle(Vana.muted)
+                .font(.system(size: 12)).foregroundStyle(Vana.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .onAppear { ra.showExisting(gameDir: gameDir) }

@@ -98,8 +98,10 @@ for e in json.load(sys.stdin):
     # Files this project puts in place (Metal renderer shims, x87 loader) that an update zip
     # may clobber. Saved and put back; Repair does the same thing more thoroughly.
     keep=(d3d8.dll d3d9.dll dxvk.conf dgVoodoo.conf)
+    total=$(print -r -- "$plan" | wc -l | tr -d ' '); n=0
     print -r -- "$plan" | while IFS=$'\t' read -r ver mv zip magnet dels; do
-      say "update $mv ($zip)"
+      n=$((n+1))
+      say "update $mv ($n/$total)"
       if [[ ! -f "$dl/$zip" ]]; then
         aria2c --dir="$dl" --seed-time=0 --bt-stop-timeout=600 --summary-interval=30 \
                --console-log-level=warn --enable-dht=true --allow-overwrite=true "$magnet" \
@@ -112,11 +114,18 @@ for e in json.load(sys.stdin):
         [[ -f "$ffxi/$f" ]] && cp "$ffxi/$f" "$tmpk/ffxi.$f"
       done
       say "extracting $zip"
-      ditto -x -k "$dl/$zip" "$game" || die "unzip of $zip failed"
+      # Unpack beside, then copy file by file: SquareEnix in the game dir is often a symlink to
+      # shared data, and ditto/cp/openrsync all refuse to write through a symlinked directory.
+      tmpx=$(mktemp -d)
+      ditto -x -k "$dl/$zip" "$tmpx" || { rm -rf "$tmpx"; die "unzip of $zip failed"; }
+      src="$tmpx"
       # Their zips are rooted at HorizonXI/ sometimes; flatten if so.
-      if [[ -d "$game/HorizonXI" && -f "$game/HorizonXI/version.json" ]]; then
-        ditto "$game/HorizonXI" "$game" && rm -rf "$game/HorizonXI"
-      fi
+      [[ -d "$tmpx/HorizonXI" && -f "$tmpx/HorizonXI/version.json" ]] && src="$tmpx/HorizonXI"
+      ( cd "$src" && find . -type f -print0 ) | while IFS= read -r -d '' f; do
+        f="${f#./}"
+        mkdir -p "$game/${f:h}" && cp -f "$src/$f" "$game/$f" || { rm -rf "$tmpx"; die "could not write $f"; }
+      done
+      rm -rf "$tmpx"
       if [[ -n "$dels" ]]; then
         for d in ${(s:|:)dels}; do rm -rf "$game/$d"; done
       fi
