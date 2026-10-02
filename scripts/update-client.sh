@@ -81,13 +81,18 @@ import json,sys; d=json.load(sys.stdin)["installData"]; print(d["baseGameMagnetL
     hm=$(horizon_marketing); [[ -n "$hm" ]] || die "no version.json in $game — is this a HorizonXI install?"
     say "installed HorizonXI $hm, asking api.horizonxi.com what is newer"
     # ver= takes the *marketing* version; the API answers with everything after it.
+    # The API stopped honouring ver= (2026-10: it returns every update since 1.1.1), so filter
+    # here too -- applying an old zip over a newer client would roll its files back.
     plan=$(fetch_json "$API/update-game?ver=$hm" | python3 -c '
 import json,sys
+def v(s): return tuple(int(x) if x.isdigit() else 0 for x in s.split("."))
+have=v(sys.argv[1])
 seen=set()
 for e in json.load(sys.stdin):
+    if v(e["marketingVersion"]) <= have: continue
     if e["updateZipName"] in seen: continue
     seen.add(e["updateZipName"])
-    print("\t".join([str(e["version"]), e["marketingVersion"], e["updateZipName"], e["updateMagnetLink"], "|".join(e.get("deleteFiles",[]))]))')
+    print("\t".join([str(e["version"]), e["marketingVersion"], e["updateZipName"], e["updateMagnetLink"], "|".join(e.get("deleteFiles",[]))]))' "$hm")
     [[ -n "$plan" ]] || { say "already up to date"; exit 0; }
     dl="$game/updates"; mkdir -p "$dl"
     # Files this project puts in place (Metal renderer shims, x87 loader) that an update zip

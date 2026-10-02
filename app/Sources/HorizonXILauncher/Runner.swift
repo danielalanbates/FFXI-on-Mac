@@ -10,6 +10,8 @@ final class Runner: ObservableObject {
     @Published var running = false {
         didSet { if !running { Runner.playing[ObjectIdentifier(self)] = nil } }
     }
+    /// True while update-client.sh is applying HorizonXI updates; lets the UI offer Stop.
+    @Published var updatingHorizon = false
     @Published var busy = false {
         didSet { if busy != oldValue { Runner.busyCount += busy ? 1 : -1 } }
     }
@@ -269,6 +271,7 @@ final class Runner: ObservableObject {
             appendLine("!! update-client.sh not found in the bundle"); done(false); return
         }
         busy = true
+        updatingHorizon = true
         appendLine("==> updating HorizonXI game files in \(install.gameDir.path)")
         var env: [String: String] = [:]
         // aria2c comes from Homebrew; a bundled app's PATH does not include it.
@@ -278,9 +281,21 @@ final class Runner: ObservableObject {
               env: env, cwd: Self.scratchDir) { [weak self] code in
             self?.endMaintenance()
             self?.busy = false
+            self?.updatingHorizon = false
             self?.appendLine("==> update exited \(code)")
             done(code == 0)
         }
+    }
+
+    /// Stop a running HorizonXI update. aria2c resumes from its .aria2 file next time, and a zip
+    /// is only extracted once fully downloaded, so stopping mid-download leaves the client as it was.
+    func stopHorizonUpdate() {
+        guard updatingHorizon, let p = proc, p.isRunning else { return }
+        let k = Process(); k.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        k.arguments = ["-TERM", "-P", String(p.processIdentifier)]
+        try? k.run(); k.waitUntilExit()
+        p.terminate()
+        appendLine("==> update stopped")
     }
 
     /// Run CatsEyeXI's own launcher inside the prefix (scripts/catseye-launcher.sh). Their

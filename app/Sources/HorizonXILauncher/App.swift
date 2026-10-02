@@ -169,6 +169,7 @@ struct ContentView: View {
     @State private var commandsReady = false
     @State private var forwardRunning = false
     @State private var showSetup = false
+    @State private var horizonLatest: String?
     private var fdaBlocked: Bool { checks.contains(where: { $0.id == "fda" && $0.state == .bad }) }
     // Starts open when FFXI_ON_MAC_SHOW_SIGNUPS=1, so this project can screenshot the expanded
     // list without driving a synthetic click into the window (see docs/SERVERS-WORKLOG.md).
@@ -277,6 +278,7 @@ struct ContentView: View {
             // Check GitHub Releases and, if there is a newer build, download it automatically.
             // The update is only *applied* when the user presses Restart (updateBanner).
             updater.start()
+            await fetchHorizonLatest()
         }
     }
 
@@ -297,6 +299,7 @@ struct ContentView: View {
                     .tracking(3.5)
                     .foregroundStyle(Vana.gold)
                 updateBanner
+                gameUpdateBanner
                 newsBanner
                 populationLine
             }
@@ -440,6 +443,52 @@ struct ContentView: View {
     /// Shown only when an update has finished downloading and is staged: one line and a Restart
     /// button. While a download is in flight it shows quiet progress; otherwise it renders nothing,
     /// so the normal launcher is undisturbed.
+    /// HorizonXI game update, shown at the top of the news only when the installed client is
+    /// actually behind what api.horizonxi.com publishes (or while an update is running).
+    @ViewBuilder private var gameUpdateBanner: some View {
+        if runner.updatingHorizon {
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text("Updating HorizonXI…").font(.caption).foregroundStyle(Vana.text)
+                Spacer()
+                Button("Stop") { runner.stopHorizonUpdate() }.controlSize(.small)
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Vana.gold.opacity(0.12)))
+            .padding(.top, 6)
+        } else if store.selected?.name == "HorizonXI", let i = active,
+                  let have = ClientVersion.horizonVersion(in: i), let latest = horizonLatest,
+                  Updater.isNewer(latest, than: have) {
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.down.circle.fill").foregroundStyle(Vana.gold)
+                Text("HorizonXI \(latest) is available (you have \(have))")
+                    .font(.caption).foregroundStyle(Vana.text)
+                Spacer()
+                Button("Update") { runner.updateHorizon(i) { _ in recheck(); Task { await fetchHorizonLatest() } } }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+                    .disabled(runner.busy)
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Vana.gold.opacity(0.12)))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Vana.gold.opacity(0.35), lineWidth: 1))
+            .padding(.top, 6)
+        }
+    }
+
+    /// Newest HorizonXI client version their launcher API publishes. Quiet on failure.
+    private func fetchHorizonLatest() async {
+        var req = URLRequest(url: URL(string: "https://api.horizonxi.com/api/v1/launcher/install-game")!)
+        req.setValue("FFXI-on-Mac launcher", forHTTPHeaderField: "User-Agent")
+        req.timeoutInterval = 20
+        guard let (d, r) = try? await URLSession.shared.data(for: req),
+              (r as? HTTPURLResponse)?.statusCode == 200,
+              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
+        let ups = o["updateData"] as? [[String: Any]] ?? []
+        let v = (ups.last?["marketingVersion"] as? String)
+            ?? ((o["installData"] as? [String: Any])?["baseGameMarketingVersion"] as? String)
+        if let v { horizonLatest = v }
+    }
+
     @ViewBuilder private var updateBanner: some View {
         switch updater.state {
         case .ready(let release):
