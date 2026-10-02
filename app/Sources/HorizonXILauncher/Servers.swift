@@ -214,7 +214,7 @@ struct Server: Codable, Identifiable, Hashable {
                verified: true,
                note: "The server this project was built and tested against.",
                era: "Chains of Promathia · 75 cap", population: 9495, pinned: true, codebase: .landSandBoat,
-               installURL: "https://horizonxi.com/play", installKind: .horizonTorrent,
+               installURL: "https://horizonxi.com/play-now", installKind: .horizonTorrent,
                installNote: "HorizonXI's own client, fetched the way their launcher does it: a 9.4 GB torrent, then their updates. Needs aria2 (brew install aria2).",
                accountURL: "https://horizonxi.com/register",
                accountHow: "Sign up on horizonxi.com, then log in here with that account.",

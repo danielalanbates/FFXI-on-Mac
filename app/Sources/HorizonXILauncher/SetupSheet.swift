@@ -86,7 +86,7 @@ struct SetupSheet: View {
             HStack {
                 if done && !gameFound {
                     Button("Open HorizonXI's download page") {
-                        NSWorkspace.shared.open(URL(string: "https://horizonxi.com/play")!)
+                        NSWorkspace.shared.open(URL(string: "https://horizonxi.com/play-now")!)
                     }
                     Button("Install the game…") { chooseInstaller() }
                         .buttonStyle(.borderedProminent)
