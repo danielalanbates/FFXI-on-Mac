@@ -59,11 +59,12 @@ enum Narration {
     }
 
     static var addonSource: URL? {
+        let bundled = URL(fileURLWithPath: appPath).appendingPathComponent("Contents/Resources/vanavoice")
+        if FileManager.default.fileExists(atPath: bundled.path) { return bundled }
         let home = FileManager.default.homeDirectoryForCurrentUser
         let gdrive = home.appendingPathComponent("Library/CloudStorage/GoogleDrive-danielalanbates@gmail.com/My Drive/Code/GitHub/vanavoice/addon/vanavoice")
         if FileManager.default.fileExists(atPath: gdrive.path) { return gdrive }
-        let u = URL(fileURLWithPath: appPath).appendingPathComponent("Contents/Resources/vanavoice")
-        return FileManager.default.fileExists(atPath: u.path) ? u : nil
+        return nil
     }
 
     /// Called on every launch. Never fatal: if any part of this fails the game still starts,
@@ -78,6 +79,7 @@ enum Narration {
         // gets the addon removed, not merely left uninstalled, in case an older build of this
         // launcher (or the player) put it there.
         guard allowed(by: policy) else {
+            terminateNarrator()
             let dest = install.gameDir.appendingPathComponent("addons/vanavoice", isDirectory: true)
             if fm.fileExists(atPath: dest.path) { try? fm.removeItem(at: dest) }
             if removeLoadLine(from: scripts) || enabled {
@@ -88,6 +90,7 @@ enum Narration {
         }
 
         guard enabled else {
+            terminateNarrator()
             if removeLoadLine(from: scripts) { log("==> narration: off") }
             return
         }
@@ -146,6 +149,16 @@ enum Narration {
         NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: appPath),
                                            configuration: cfg) { _, error in
             if let error { NSLog("VanaVoice launch failed: \(error.localizedDescription)") }
+        }
+    }
+
+    /// Stop the narrator process if it is running. VanaVoice only runs alongside an active game
+    /// when the player specifically selected narration for that session.
+    static func terminateNarrator() {
+        let apps = NSWorkspace.shared.runningApplications
+            .filter { $0.bundleIdentifier == "org.batesai.vanavoice" }
+        for app in apps {
+            app.terminate()
         }
     }
 }

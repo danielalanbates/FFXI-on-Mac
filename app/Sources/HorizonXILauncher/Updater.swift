@@ -4,11 +4,8 @@ import Combine
 
 /// Self-update from the project's GitHub Releases.
 ///
-/// On launch (and every few hours after) this asks the GitHub API for the latest release, and if
-/// its version is newer than the running app it downloads that release's `.dmg` **automatically**,
-/// mounts it, stages the new `.app` beside the current one, and flips to `.ready`. The UI then
-/// shows a banner with a Restart button — the update is never applied out from under the user;
-/// pressing Restart swaps the bundle and relaunches.
+/// On launch (and every few hours after) this checks the latest public release. A newer version
+/// is offered in the UI; downloading and restarting each require a deliberate click.
 ///
 /// Everything here is public data over plain HTTPS (no token). Nothing runs with elevated
 /// privileges: the app replaces its own bundle, which the user owns because they installed it.
@@ -22,6 +19,7 @@ final class Updater: ObservableObject {
     enum State: Equatable {
         case idle                     // nothing to do / up to date
         case checking
+        case available(Release)       // newer release found; no download started
         case downloading(Double)      // 0...1
         case staging
         case ready(Release)           // downloaded and staged; waiting for the user to restart
@@ -70,8 +68,17 @@ final class Updater: ObservableObject {
         }
     }
 
-    /// Manual "Check for updates" — same path, but reports "up to date" rather than staying silent.
+    /// A manual check uses the same quiet result when the app is current.
     func checkNow() { Task { await checkAndMaybeDownload(manual: true) } }
+
+    /// Called only when the player accepts the offered update.
+    func downloadAvailable() {
+        guard case .available(let release) = state else { return }
+        Task {
+            do { try await download(release) }
+            catch { state = .failed("Couldn't download update: \(error.localizedDescription)") }
+        }
+    }
 
     // MARK: - Check + download
 
@@ -100,13 +107,13 @@ final class Updater: ObservableObject {
                 state = .failed("Version \(release.version) is available, but this copy can't update itself here. Download it from the project's Releases page.")
                 return
             }
-            // Already staged from a previous run this session? Jump straight to ready.
+            // A staged update from a previous run may be offered directly for restart.
             if let staged = Self.stagedApp(for: release.version) {
                 state = .ready(release)
                 _ = staged
                 return
             }
-            try await download(release)
+            state = .available(release)
         } catch is CancellationError {
             state = .idle
         } catch {
@@ -129,7 +136,8 @@ final class Updater: ObservableObject {
         // Prefer the .dmg; that is what every release ships.
         guard let dmg = assets.first(where: { ($0["name"] as? String)?.lowercased().hasSuffix(".dmg") == true }),
               let urlStr = dmg["browser_download_url"] as? String,
-              let url = URL(string: urlStr) else { return nil }
+              let url = URL(string: urlStr), url.scheme == "https",
+              url.host == "github.com" else { return nil }
         let version = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
         let notes = (obj["body"] as? String) ?? ""
         return Release(version: version, tag: tag, dmgURL: url, notes: notes)
@@ -206,6 +214,16 @@ final class Updater: ObservableObject {
             let dest = stageDir.appendingPathComponent("FFXI-on-Mac.app")
             let cp = run("/usr/bin/ditto", [app.path, dest.path])
             guard cp.status == 0 else { throw Err("could not copy the update out of the disk image") }
+            guard run("/usr/bin/codesign", ["--verify", "--strict", "--deep", dest.path]).status == 0 else {
+                try? fm.removeItem(at: dest)
+                throw Err("the update app's code signature is invalid")
+            }
+            let currentTeam = teamID(Bundle.main.bundlePath)
+            let updateTeam = teamID(dest.path)
+            if let currentTeam, currentTeam != updateTeam {
+                try? fm.removeItem(at: dest)
+                throw Err("the update was signed by a different developer")
+            }
             // Downloaded => quarantined; strip it so the relaunch does not re-prompt Gatekeeper.
             _ = run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", dest.path])
         }.value
@@ -270,6 +288,14 @@ final class Updater: ObservableObject {
     // MARK: - Small helpers
 
     struct Err: LocalizedError { let m: String; init(_ m: String) { self.m = m }; var errorDescription: String? { m } }
+
+    nonisolated private static func teamID(_ path: String) -> String? {
+        let output = run("/usr/bin/codesign", ["-dv", "--verbose=4", path]).out
+        return output.split(whereSeparator: \.isNewline)
+            .first(where: { $0.hasPrefix("TeamIdentifier=") })
+            .map { String($0.dropFirst("TeamIdentifier=".count)) }
+            .flatMap { $0 == "not set" ? nil : $0 }
+    }
 
     @discardableResult
     nonisolated private static func run(_ exe: String, _ args: [String]) -> (status: Int32, out: String) {

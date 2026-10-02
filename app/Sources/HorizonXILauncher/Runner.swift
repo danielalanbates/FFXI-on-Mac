@@ -732,6 +732,7 @@ final class Runner: ObservableObject {
     }
 
     func stop(_ install: Install) {
+        Narration.terminateNarrator()
         if let pid = gamePID, Detach.isAlive(pid) { kill(pid, SIGTERM) }
         proc?.terminate()
         let k = Process()
@@ -779,7 +780,10 @@ final class Runner: ObservableObject {
         appendLine("==> started detached, pid \(pid)")
         Task.detached {
             while Detach.isAlive(pid) { try? await Task.sleep(nanoseconds: 500_000_000) }
-            await MainActor.run { done(0) }
+            await MainActor.run {
+                Narration.terminateNarrator()
+                done(0)
+            }
         }
         // Tail the file: poll is plenty (the pane is human-read), and unlike a pipe it cannot
         // block the writer.
@@ -830,7 +834,10 @@ final class Runner: ObservableObject {
             Task { @MainActor [weak self] in self?.appendChunk(s) }
         }
         p.terminationHandler = { pr in
-            Task { @MainActor in done(pr.terminationStatus) }
+            Task { @MainActor in
+                Narration.terminateNarrator()
+                done(pr.terminationStatus)
+            }
         }
         do {
             try p.run()

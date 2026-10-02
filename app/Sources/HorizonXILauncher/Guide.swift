@@ -11,6 +11,8 @@ import Foundation
 /// CatsEyeXI, FFEra, and any other allowlist world the launcher refuses to install it and
 /// removes any leftover copy, same safety model as `Narration.swift` for VanaVoice.
 enum Guide {
+    static let companionPath = "/Applications/Vanaguide.app"
+    static var companionAvailable: Bool { FileManager.default.fileExists(atPath: companionPath) }
     static let loadLine = "/addon load vanaguide"
     static let marker = "# Vanaguide quest guide"
     /// Folder name matches `vanaguide/tools/install.sh` (`addons/Vanaguide`).
@@ -18,10 +20,7 @@ enum Guide {
 
     /// Candidate source trees, first hit wins.
     ///
-    /// Prefer the live iCloud Code checkout, then a GitHub mirror beside it, then a copy
-    /// staged under Downloads, then a bundled copy inside this launcher's Resources (for a
-    /// future ship that vendors a snapshot). Never read from `/Applications/*.app` playable
-    /// trees as a source of truth for edits — those stay untouched this pass.
+    /// Prefer the bundled, tested snapshot; fall back to source checkouts for older builds.
     private static var candidateSources: [URL] {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let gdriveCode = home
@@ -31,6 +30,7 @@ enum Guide {
         let bundled = Bundle.main.resourceURL?
             .appendingPathComponent("Vanaguide", isDirectory: true)
         return [
+            bundled,
             gdriveCode.appendingPathComponent("GitHub/vanaguide/Vanaguide", isDirectory: true),
             gdriveCode.appendingPathComponent("GitHub/Vanaguide/Vanaguide", isDirectory: true),
             gdriveCode.appendingPathComponent("vanaguide/Vanaguide", isDirectory: true),
@@ -40,7 +40,7 @@ enum Guide {
             icloudCode.appendingPathComponent("GitHub/Vanaguide/Vanaguide", isDirectory: true),
             home.appendingPathComponent("Downloads/Vanaguide", isDirectory: true),
             home.appendingPathComponent("Downloads/vanaguide/Vanaguide", isDirectory: true),
-        ] + (bundled.map { [$0] } ?? [])
+        ].compactMap { $0 }
     }
 
     /// Is a Vanaguide addon tree present somewhere we can copy from?

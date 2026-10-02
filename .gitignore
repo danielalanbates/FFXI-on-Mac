@@ -31,4 +31,8 @@ accounts.json
 **/accounts.json
 *.bak
 *.macos26.bak
-
+.env
+.env.*
+**/config/boot/*.ini
+**/config/boot/*.xml
+*api-key*.txt
