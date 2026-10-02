@@ -8,8 +8,20 @@ import AppKit
 final class Runner: ObservableObject {
     @Published var log: String = ""
     @Published var running = false {
-        didSet { if !running { Runner.playing[ObjectIdentifier(self)] = nil } }
+        didSet {
+            if !running { Runner.playing[ObjectIdentifier(self)] = nil; starting = false }
+            else if !oldValue {
+                // Wine boots its prefix before the game window appears; after a Repair that takes
+                // ~30-60s and looks like a hang unless the UI says so.
+                starting = true
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 90_000_000_000)
+                    self?.starting = false
+                }
+            }
+        }
     }
+    @Published var starting = false
     /// True while update-client.sh is applying HorizonXI updates; lets the UI offer Stop.
     @Published var updatingHorizon = false
     /// 0...1 across every pending update zip, and a short label ("2.0.4 · 1 of 2").

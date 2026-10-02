@@ -180,6 +180,8 @@ struct ContentView: View {
 
     private var statusText: String {
         if scanning { return "looking for your install…" }
+        if runner.starting { return "starting the game — the first launch after a Repair can take a minute" }
+        if runner.running { return "game running" }
         if selected == nil { return "nothing installed yet" }
         if let i = active, !i.hasGame { return "wine is ready — \(store.selected?.name ?? "the game")'s data is not installed" }
         return blocked ? "setup incomplete" : "ready to play"
