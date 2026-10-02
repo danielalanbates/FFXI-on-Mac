@@ -32,16 +32,21 @@ The script:
 1. `GET api.horizonxi.com/api/v1/launcher/update-game?ver=<installed marketing version>` — a
    list of `{version, marketingVersion, updateZipName, updateMagnetLink, deleteFiles}`.
 2. Fetches each zip with **aria2c** (Homebrew) from the magnet — HorizonXI distributes updates
-   only as torrents (their Electron launcher uses webtorrent). Zip sizes: 2.0.0 = 402 MB,
-   2.0.1 = 1.7 MB, 2.0.2 = 12.5 MB, 2.0.3 = 24 KB. Earlier ones (1.1–1.9.2) publish no size.
+   only as torrents (their Electron launcher uses webtorrent). The script gives metadata three
+   60-second attempts in separate aria2 processes, saves the resulting `.torrent`, then starts
+   the resumable file transfer. Restarting aria2 between attempts also lets it repair and reload
+   its DHT routing cache. Zip sizes: 2.0.0 = 402 MB, 2.0.1 = 1.7 MB, 2.0.2 = 12.5 MB,
+   2.0.3 = 24 KB, 2.0.4 = 522 KB. Earlier ones (1.1–1.9.2) publish no size.
 3. `ditto -x -k` over the game dir, deletes `deleteFiles`, restores this project's
    d3d8/d3d9/dxvk.conf/dgVoodoo.conf shims, writes `version.json`.
 
 `update-client.sh check <dir>` prints `installed=… horizon=… latest=…`.
 
-**Status: unverified end to end.** A test fetch of the 24 KB 2.0.3 magnet with aria2c did not
-complete metadata exchange within 100 s (few seeders / DHT bootstrap). The script resumes on
-re-run (`--allow-overwrite`, aria2 control files in `HorizonXI/updates/`). If torrents keep
+**Status: unverified end to end.** On 2026-09-02 a base-client magnet fetched its 175 KB of
+metadata from two seeders in 21 seconds after an earlier aria2 process had stalled before metadata
+and reported a corrupt user-wide DHT cache. The separate metadata phase now retries that failure
+and reuses the saved torrent on later runs. The same test found no seeder for the 2.0.4 update in
+25 seconds; retries improve discovery but cannot repair an unseeded torrent. If torrents keep
 stalling, the honest fallback is HorizonXI's own launcher on Windows/Parallels and copying the
 game folder back — or run their launcher under wine (`drive_c/HorizonXI-Launcher/`, Electron;
 untested here).

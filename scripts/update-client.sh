@@ -18,7 +18,8 @@
 #     update a CatsEye client. It can only tell you the version is wrong (see `check`) and the
 #     required version comes from their public server settings.
 #
-# Every step is idempotent: re-running after a stall resumes the aria2 download.
+# Every step is idempotent: re-running after a stall resumes the aria2 download. Torrent
+# metadata is cached separately so a retry does not have to find the same peer again.
 set -euo pipefail
 
 say() { print -r -- "==> $*"; }
@@ -26,6 +27,8 @@ die() { print -r -- "!! $*" >&2; exit 1; }
 
 API="https://api.horizonxi.com/api/v1/launcher"
 UA="FFXI-on-Mac launcher"
+typeset -r TORRENT_METADATA_ATTEMPTS=3
+typeset -r TORRENT_METADATA_TIMEOUT=60
 
 game="${2:-}"
 [[ "${1:-}" == install && -n "$game" ]] && mkdir -p "$game"
@@ -46,6 +49,61 @@ horizon_marketing() {
 
 fetch_json() { curl -fsSL -A "$UA" --max-time 20 "$1"; }
 
+# aria2 cannot create the destination file until it has fetched the torrent metadata. Keep that
+# peer-discovery step short and retry it in a fresh process: aria2 repairs a bad DHT routing file
+# when it exits, so the next attempt reloads the repaired copy instead of sitting silent for 30
+# minutes. Once metadata is available, download from the saved .torrent so the large transfer
+# never has to repeat the fragile magnet handshake.
+download_torrent() {
+  local magnet="$1" archive="$2" dl="$3" stall_timeout="$4" summary_interval="$5"
+  local info_hash="${magnet#*xt=urn:btih:}"
+  info_hash="${info_hash%%&*}"
+  [[ "$info_hash" =~ '^[[:xdigit:]]{40}$' ]] \
+    || die "HorizonXI returned an invalid torrent link for $archive"
+
+  local torrent="$dl/${info_hash:l}.torrent"
+  local have_metadata=false
+
+  if [[ -s "$torrent" ]]; then
+    if aria2c --show-files "$torrent" >/dev/null 2>&1; then
+      say "using saved torrent metadata for $archive"
+      have_metadata=true
+    else
+      say "discarding invalid saved torrent metadata for $archive"
+      rm -f "$torrent"
+    fi
+  elif [[ -e "$torrent" ]]; then
+    rm -f "$torrent"
+  fi
+
+  if [[ "$have_metadata" != true ]]; then
+    local attempt
+    for (( attempt = 1; attempt <= TORRENT_METADATA_ATTEMPTS; attempt++ )); do
+      say "finding peers for $archive (attempt $attempt/$TORRENT_METADATA_ATTEMPTS, up to ${TORRENT_METADATA_TIMEOUT}s)"
+      if aria2c --dir="$dl" --seed-time=0 --bt-metadata-only=true --bt-save-metadata=true \
+           --stop="$TORRENT_METADATA_TIMEOUT" --bt-stop-timeout="$TORRENT_METADATA_TIMEOUT" \
+           --summary-interval=10 --console-log-level=warn --enable-dht=true "$magnet" \
+           && [[ -s "$torrent" ]]; then
+        have_metadata=true
+        break
+      fi
+      if (( attempt < TORRENT_METADATA_ATTEMPTS )); then
+        say "no metadata received; refreshing peer data and trying again"
+      fi
+    done
+  fi
+
+  [[ "$have_metadata" == true ]] \
+    || die "no peer supplied metadata for $archive after $TORRENT_METADATA_ATTEMPTS attempts; try again later"
+
+  say "metadata ready; downloading $archive"
+  aria2c --dir="$dl" --seed-time=0 --bt-stop-timeout="$stall_timeout" \
+         --summary-interval="$summary_interval" --console-log-level=warn --enable-dht=true \
+         --allow-overwrite=true "$torrent" \
+    || die "torrent download of $archive failed or stalled; run again to resume"
+  [[ -f "$dl/$archive" ]] || die "aria2 finished but $archive is not in $dl"
+}
+
 case "${1:-}" in
   check)
     inst=$(installed_client); hm=$(horizon_marketing)
@@ -64,10 +122,7 @@ import json,sys; d=json.load(sys.stdin)["installData"]; print(d["baseGameMagnetL
     [[ -n "$magnet" ]] || die "could not read the install manifest from api.horizonxi.com"
     dl="$game/updates"; mkdir -p "$dl"
     say "fetching $base ($mv) by torrent into $dl — this is ~9.4 GB"
-    aria2c --dir="$dl" --seed-time=0 --bt-stop-timeout=1800 --summary-interval=60 \
-           --console-log-level=warn --enable-dht=true --allow-overwrite=true "$magnet" \
-      || die "torrent download failed or stalled — run again to resume"
-    [[ -f "$dl/$base" ]] || die "aria2 finished but $base is not in $dl"
+    download_torrent "$magnet" "$base" "$dl" 1800 60
     say "extracting $base"
     ditto -x -k "$dl/$base" "$game" || die "unzip failed"
     if [[ -d "$game/HorizonXI" && ! -f "$game/version.json" ]]; then ditto "$game/HorizonXI" "$game" && rm -rf "$game/HorizonXI"; fi
@@ -96,10 +151,7 @@ for e in json.load(sys.stdin):
     print -r -- "$plan" | while IFS=$'\t' read -r ver mv zip magnet dels; do
       say "update $mv ($zip)"
       if [[ ! -f "$dl/$zip" ]]; then
-        aria2c --dir="$dl" --seed-time=0 --bt-stop-timeout=600 --summary-interval=30 \
-               --console-log-level=warn --enable-dht=true --allow-overwrite=true "$magnet" \
-          || die "torrent download of $zip failed or stalled — run again to resume, or use HorizonXI's own launcher"
-        [[ -f "$dl/$zip" ]] || die "aria2 finished but $zip is not in $dl"
+        download_torrent "$magnet" "$zip" "$dl" 600 30
       fi
       tmpk=$(mktemp -d)
       for f in $keep; do
