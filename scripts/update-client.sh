@@ -71,7 +71,7 @@ import json,sys; d=json.load(sys.stdin)["installData"]; print(d["baseGameMagnetL
     say "extracting $base"
     ditto -x -k "$dl/$base" "$game" || die "unzip failed"
     if [[ -d "$game/HorizonXI" && ! -f "$game/version.json" ]]; then ditto "$game/HorizonXI" "$game" && rm -rf "$game/HorizonXI"; fi
-    [[ -f "$game/version.json" ]] || print -r -- "{\n  \"version\": \"$mv\"\n}" > "$game/version.json"
+    [[ -f "$game/version.json" ]] || printf '{\n  "version": "%s"\n}\n' "$mv" > "$game/version.json"
     say "base client in place — applying updates"
     exec "$0" horizon "$game"
     ;;
@@ -134,7 +134,7 @@ for e in json.load(sys.stdin):
         [[ -f "$tmpk/ffxi.$f" ]] && cp "$tmpk/ffxi.$f" "$ffxi/$f"
       done
       rm -rf "$tmpk"
-      print -r -- "{\n  \"version\": \"$mv\"\n}" > "$game/version.json"
+      printf '{\n  "version": "%s"\n}\n' "$mv" > "$game/version.json"
       say "now at $mv"
     done
     say "done — client is at $(installed_client)"
