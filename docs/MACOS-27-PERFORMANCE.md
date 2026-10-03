@@ -90,6 +90,16 @@ failed-handshake case was a 19x loss when AOT was disabled, so keep the stock
 Rosetta default until one controlled local-world comparison proves the complete
 launch path and a normal play session stays visually correct.
 
+On 2026-10-03 the newer upstream sidecar built at `4048fcf` reported `supported`
+from `--probe` against this Mac's installed Rosetta runtime. The upstream
+`wine-cx-26.3.0-7` archive was downloaded and unpacked only in a disposable
+Downloads dependency lab; its SHA-256 matched GitHub's release digest
+`4009323ede6aa430563d5451c13a735221df0f91c394a7d99c3c3426a0b3454e`.
+This is artifact and runtime compatibility evidence, not a successful HorizonXI
+launch. Do not copy that Wine over the playable tree on this basis. Daniel has
+explicitly withheld permission for independent game FPS testing; any game A/B
+comparison must wait for his authorization and be confined to a local world.
+
 [mtld3d 0.11](https://github.com/athei/mtld3d/releases/tag/v0.11.0) is a newer
 direct D3D9-to-Metal candidate, but its documented requirements list macOS 15
 and 26, and this project's DXVK readback and cursor paths have not been checked
