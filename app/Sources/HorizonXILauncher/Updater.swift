@@ -241,10 +241,8 @@ final class Updater: ObservableObject {
 
     // MARK: - Install + relaunch
 
-    /// Swap the running bundle for the staged one and relaunch. Because an app cannot overwrite
-    /// itself while running, this hands the job to a tiny detached shell script that waits for
-    /// this process to exit, ditto's the new bundle over the old path, and reopens it — then the
-    /// app quits itself.
+    /// Swap the running bundle for the staged one and relaunch. A detached helper waits for this
+    /// process to exit, verifies a copy beside the current app, then swaps it with rollback.
     func restartToUpdate() {
         guard case .ready(let release) = state,
               let staged = Self.stagedApp(for: release.version),
@@ -254,22 +252,20 @@ final class Updater: ObservableObject {
             state = .failed("Couldn't verify the update: \(error.localizedDescription)")
             return
         }
+        guard LiveClients.snapshot().clients.isEmpty else {
+            state = .failed("Finish your game before restarting for the update.")
+            return
+        }
         let current = Bundle.main.bundlePath
         let pid = ProcessInfo.processInfo.processIdentifier
 
         let script = Self.workDir().appendingPathComponent("apply-update.sh")
-        let body = """
-        #!/bin/zsh
-        # Wait for FFXI on Mac (pid \(pid)) to quit, then swap in the update and relaunch.
-        for i in {1..600}; do kill -0 \(pid) 2>/dev/null || break; sleep 0.5; done
-        /usr/bin/ditto "\(staged.path)" "\(current)" || exit 1
-        /usr/bin/xattr -dr com.apple.quarantine "\(current)" 2>/dev/null
-        /bin/rm -rf "\(staged.deletingLastPathComponent().path)"
-        /usr/bin/open "\(current)"
-        /bin/rm -f "\(script.path)"
-        """
         do {
-            try body.write(to: script, atomically: true, encoding: .utf8)
+            guard let bundled = Bundle.main.url(forResource: "apply-update", withExtension: "sh") else {
+                throw Err("update helper is missing")
+            }
+            try? FileManager.default.removeItem(at: script)
+            try FileManager.default.copyItem(at: bundled, to: script)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
         } catch {
             state = .failed("Couldn't prepare the update: \(error.localizedDescription)")
@@ -277,7 +273,7 @@ final class Updater: ObservableObject {
         }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        p.arguments = [script.path]
+        p.arguments = [script.path, String(pid), staged.path, current, Self.workDir().path]
         do { try p.run() } catch {
             state = .failed("Couldn't start the update: \(error.localizedDescription)")
             return

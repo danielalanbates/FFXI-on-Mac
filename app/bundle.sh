@@ -109,6 +109,7 @@ cp "$REPO/scripts/install.sh"        "$APP/Contents/Resources/install.sh"
 cp "$REPO/scripts/fix-wine-rpath.sh" "$APP/Contents/Resources/fix-wine-rpath.sh"
 cp "$REPO/scripts/lsb-server.sh"     "$APP/Contents/Resources/lsb-server.sh"
 cp "$REPO/scripts/update-client.sh"  "$APP/Contents/Resources/update-client.sh"
+cp "$HERE/Resources/apply-update.sh" "$APP/Contents/Resources/apply-update.sh"
 cp "$REPO/scripts/catseye-launcher.sh" "$APP/Contents/Resources/catseye-launcher.sh"
 cp "$REPO/scripts/retail-client.sh"    "$APP/Contents/Resources/retail-client.sh"
 chmod +x "$APP/Contents/Resources/"*.sh

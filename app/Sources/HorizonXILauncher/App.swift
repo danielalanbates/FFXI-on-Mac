@@ -506,6 +506,10 @@ struct ContentView: View {
                 Spacer()
                 Button("Restart") { updater.restartToUpdate() }
                     .buttonStyle(.borderedProminent).controlSize(.small)
+                    .disabled(!sessions.live.isEmpty || !sessions.elsewhere.isEmpty)
+                    .help(!sessions.live.isEmpty || !sessions.elsewhere.isEmpty
+                          ? "Finish your game before restarting for the update."
+                          : "Install the ready update and reopen the launcher.")
             }
             .padding(10)
             .background(RoundedRectangle(cornerRadius: 8).fill(Vana.gold.opacity(0.12)))
