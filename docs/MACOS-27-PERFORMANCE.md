@@ -186,6 +186,14 @@ The internal data volume fell to roughly 2.3 GB free during this check, while
 swap remained around 6 GB and Google Drive/File Provider plus another game
 were active. This is a separate resource-pressure concern for future gameplay
 verification, not evidence that Wine or a rendering dependency regressed.
+On 2026-10-03, with no FFXI client running and the launcher at 0% CPU, three
+short `ps` samples showed `suggestd` near 98-99% CPU, `fileproviderd` at
+29-78%, and `corespotlightd` at 25-68%. This is sustained background load
+across those samples, but it does not establish which service caused game lag
+or whether those processes remain busy during play. Internal free space was
+about 10 GB and the external x10 volume about 64 GB (98% used). Check these
+processes and memory pressure again during a user-authorized game session
+before attributing the regression to Wine or changing system-wide indexing.
 
 The last game-session log (2026-10-02) was only about 163 KB, but after login
 it contained 1,556 repeated `ConvertFormat: Unknown format encountered: 65`
