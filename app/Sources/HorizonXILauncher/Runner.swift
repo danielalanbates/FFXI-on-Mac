@@ -408,20 +408,29 @@ final class Runner: ObservableObject {
         defer { busy = false; endMaintenance() }
         guard await Task.detached(operation: { Self.prefixStale(install) }).value else { return }
         appendLine("==> updating Wine's configuration (one time, about 20 s)")
-        // Wine's update progress is a native Wine window. Hide only Wine processes launched for
-        // this update, once each; never hide Terminal or any unrelated application.
+        // Wine's update progress is a native Wine window. A Wine process may activate after its
+        // launch notification, so also hide it if it comes forward while maintenance is running.
+        // Match only this install's Wine tree; never hide Terminal or another application.
         let wineRoot = Self.playWine(install).deletingLastPathComponent()
             .deletingLastPathComponent().standardizedFileURL.path + "/"
-        let observer = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main
-        ) { note in
+        let notifications = NSWorkspace.shared.notificationCenter
+        let hideMaintenanceWine: @Sendable (Notification) -> Void = { note in
             guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                   let path = app.executableURL?.standardizedFileURL.path,
                   path.hasPrefix(wineRoot) else { return }
             app.hide()
         }
+        let launchObserver = notifications.addObserver(
+            forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main,
+            using: hideMaintenanceWine
+        )
+        let activateObserver = notifications.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main,
+            using: hideMaintenanceWine
+        )
         let ok = await Task.detached { Self.updatePrefix(install) }.value
-        NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        notifications.removeObserver(launchObserver)
+        notifications.removeObserver(activateObserver)
         appendLine(ok ? "==> Wine is up to date" : "!! Wine prefix update did not finish")
     }
 

@@ -121,6 +121,15 @@ the patched Wine's `wine.inf` mtime (`1787146421`). This checks the idle launch
 path without opening a game. It does not verify the Wine window behavior after
 a genuinely stale prefix or measure gameplay speed.
 
+The launcher now hides its own Wine application on both launch and subsequent
+activation during prefix maintenance, because Wine can bring the update window
+forward after the process first appears. The release build compiled, and the
+local beta passed app notarization, stapling, strict deep code-signature
+verification, and Gatekeeper assessment before installation. The previous
+notarized app is archived in Downloads. The new installed app opened once with
+no Wine process observed five seconds later. A genuinely stale-prefix update
+has not been exercised, and no game FPS test was run.
+
 1. If logged in, type `/shutdown` in game chat and wait for the client to exit. Do not kill it.
 2. Install the signed local beta, keeping the previous playable app archived in Downloads.
 3. Cold-launch once and confirm no Wine update window. Confirm the prefix timestamp stays at
