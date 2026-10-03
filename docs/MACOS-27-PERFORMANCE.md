@@ -174,6 +174,13 @@ the background prefix check waited for the full volume discovery, leaving a
 window where Wine could start its own foreground update. This ordering change
 compiled in a release build; it has not been exercised with a stale installed
 prefix or an actual game launch.
+The beta for commit `0e9a93e` is staged at
+`/Users/daniel/Downloads/horizonxi-work/beta-0e9a93e/FFXI-on-Mac.app`.
+Apple accepted notarization submission `066a692e-bd6e-4f81-bbb6-06da8c5af8a3`;
+the app was stapled and passed strict signature and Gatekeeper checks. The
+installed launcher was still running, so this beta was **not** copied to
+`/Applications/FFXI-on-Mac.app`. When the launcher and all clients have exited
+normally, archive the installed app in Downloads and install this beta.
 
 The internal data volume fell to roughly 2.3 GB free during this check, while
 swap remained around 6 GB and Google Drive/File Provider plus another game
