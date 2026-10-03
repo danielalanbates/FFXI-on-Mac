@@ -47,6 +47,21 @@ with `pgrep -fl "FFXI-on-Mac|horizon-loader|wine"` first and wait for an idle mo
 The GitHub release is the opposite: slow, gated, at most weekly. Fast local .app,
 rare public release.
 
+## Current source and safe handoff
+
+The current GitHub project is `danielalanbates/FFXI-on-Mac`. Its Google Drive checkout is
+`My Drive/Code/GitHub/FFXI-on-Mac`; the `HorizonXI-on-Mac` folders are older project history.
+Use a worktree in Downloads for local builds, then push reviewed commits to the existing PR and
+sync the Drive checkout. Keep beta bundles in Downloads until the running launcher and every game
+client have exited. If a character is logged in, enter `/shutdown` in game chat and wait for the
+client to exit before replacing `/Applications/FFXI-on-Mac.app`. Never kill a live game process to
+make room for an install. Never test addons on hosted servers; use the local LandSandBoat world.
+
+The updater reads GitHub Releases, so branch commits and beta builds do not prompt public users
+to restart. Cut a new release only after the stability checks above pass. Confirm that the
+downloaded app has the expected bundle ID, release version, valid code signature, and signing
+team before the launcher offers Restart.
+
 ## Why this note exists
 This project has repeatedly reached a good state mid-session and then lost it to the
 next round of experiments. Cutting a release at the stable point is what makes the
