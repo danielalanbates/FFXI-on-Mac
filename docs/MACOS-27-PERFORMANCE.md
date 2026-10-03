@@ -140,6 +140,23 @@ validate the hide behavior. Its source is retained under Downloads in
 the generated prefix was removed after stopping its own wineserver. No FFXI
 client or FPS measurement was involved. Do not repeat this test automatically.
 
+Subsequent static inspection found a concrete flaw in the hide predicate:
+`playWine` selects `/Volumes/Games/FFXI/wine-coop`, a symlink to the same tree
+under `/Volumes/x10/Video Games/Mac/FFXI/wine-coop`. Wine processes report
+the latter path. `standardizedFileURL` left the symlink unresolved, so the old
+prefix comparison returned false for the actual Wine executable; resolving
+symlinks on both sides makes it true. The archived one-shot diagnostic has the
+same old predicate and therefore cannot validate the new one. A disposable
+`swift -e` comparison verified false before and true after resolution. This
+explains why the previous launch-only hide hook could miss Wine, but an actual
+stale-prefix window check on the installed app remains pending.
+The resolved-path fix compiled in the release build. The replacement local beta
+passed app notarization, stapling, strict signature verification and Gatekeeper,
+was installed with the prior app archived in Downloads, and launched once with
+no Wine process seen after five seconds. The installed executable's SHA-256
+matched the notarized beta. None of these checks exercises a genuinely stale
+prefix or game performance.
+
 The internal data volume fell to roughly 2.3 GB free during this check, while
 swap remained around 6 GB and Google Drive/File Provider plus another game
 were active. This is a separate resource-pressure concern for future gameplay

@@ -411,12 +411,14 @@ final class Runner: ObservableObject {
         // Wine's update progress is a native Wine window. A Wine process may activate after its
         // launch notification, so also hide it if it comes forward while maintenance is running.
         // Match only this install's Wine tree; never hide Terminal or another application.
+        // The configured /Volumes/Games path is a symlink into /Volumes/x10, while macOS
+        // reports the launched Wine executable at the resolved path.
         let wineRoot = Self.playWine(install).deletingLastPathComponent()
-            .deletingLastPathComponent().standardizedFileURL.path + "/"
+            .deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL.path + "/"
         let notifications = NSWorkspace.shared.notificationCenter
         let hideMaintenanceWine: @Sendable (Notification) -> Void = { note in
             guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-                  let path = app.executableURL?.standardizedFileURL.path,
+                  let path = app.executableURL?.resolvingSymlinksInPath().standardizedFileURL.path,
                   path.hasPrefix(wineRoot) else { return }
             app.hide()
         }
