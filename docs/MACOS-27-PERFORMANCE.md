@@ -71,6 +71,39 @@ document `--probe` and macOS 27 support.
 
 ## Next verification when the game is idle
 
+### Dependency review, 2026-10-03
+
+The Mac still has athei's `wine-cx-26.3.0-1` cooperative Wine. Upstream's
+[`cx-26.3.0-6`](https://github.com/athei/wine-build/releases/tag/cx-26.3.0-6)
+keeps no-execute enabled under Rosetta for 32-bit programs without `NX_COMPAT`,
+which upstream says otherwise crawl. The HorizonXI `horizon-loader.exe`, `pol.exe`,
+`xiloader.exe`, and `Ashita-cli.exe` inspected here all report `DllCharacteristics
+0x8140` with `NX_COMPAT`, so that specific fix is not established as the cause
+of this game's slowdown. A module loaded later could differ. Do not replace the
+shared playable Wine tree based on this release note alone.
+
+The current [x87sidecar](https://github.com/athei/x87sidecar/releases/tag/v1.7.0)
+documents macOS 27 support and cooperative attachment through patched Wine.
+Our bundled sidecar accelerated an isolated 32-bit Wine x87 benchmark on 27.0.1,
+but that does not show it attached to `horizon-loader.exe`. The older in-world
+failed-handshake case was a 19x loss when AOT was disabled, so keep the stock
+Rosetta default until one controlled local-world comparison proves the complete
+launch path and a normal play session stays visually correct.
+
+[mtld3d 0.11](https://github.com/athei/mtld3d/releases/tag/v0.11.0) is a newer
+direct D3D9-to-Metal candidate, but its documented requirements list macOS 15
+and 26, and this project's DXVK readback and cursor paths have not been checked
+against it. It belongs in a separate local experiment, not in the installed app
+or public release yet.
+
+At this check the 8 GB Mac had about 6.7 GB of swap in use, a second game was
+using more than one CPU core, and the game volume was 98% full (about 64 GB free).
+Those are concurrent resource pressures, not proof of a macOS dependency failure.
+Do not compare FPS while that load is present, and do not close the other apps to
+manufacture an idle test. Once the Mac is naturally idle, measure the shipped
+Play path with its FPS log on a local world at the same scene before and after
+any dependency change. Keep addons off hosted worlds.
+
 1. If logged in, type `/shutdown` in game chat and wait for the client to exit. Do not kill it.
 2. Install the signed local beta, keeping the previous playable app archived in Downloads.
 3. Cold-launch once and confirm no Wine update window. Confirm the prefix timestamp stays at
