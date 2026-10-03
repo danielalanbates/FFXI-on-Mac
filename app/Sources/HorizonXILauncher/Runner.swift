@@ -360,7 +360,9 @@ final class Runner: ObservableObject {
     /// configuration" -- with Mono/Gecko install prompts -- in front of the game. Do that update
     /// here, quietly, while nothing is running, so Play never meets it.
     nonisolated static func prefixStale(_ install: Install) -> Bool {
-        let inf = install.sharedSupport.appendingPathComponent("wine/share/wine/wine.inf")
+        // The wine Play really runs (see launch): its wine.inf is the one it compares against.
+        let inf = playWine(install).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("share/wine/wine.inf")
         guard let m = (try? FileManager.default.attributesOfItem(atPath: inf.path))?[.modificationDate] as? Date
         else { return false }
         let ts = install.prefix.appendingPathComponent(".update-timestamp")
@@ -370,16 +372,19 @@ final class Runner: ObservableObject {
         return Int(first) != Int(m.timeIntervalSince1970)
     }
 
+    nonisolated static func playWine(_ install: Install) -> URL { X87Sidecar.patchedWine() ?? install.wine }
+
     /// Runs `wineboot -u` with Mono and Gecko disabled (their installers are what ask questions).
     nonisolated static func updatePrefix(_ install: Install) {
         var env = ProcessInfo.processInfo.environment
         env["WINEPREFIX"] = install.prefix.path; env["WINEDEBUG"] = "-all"
         env["WINEDLLOVERRIDES"] = "mscoree,mshtml="
         env.removeValue(forKey: "DYLD_FALLBACK_LIBRARY_PATH"); env.removeValue(forKey: "DYLD_LIBRARY_PATH")
-        let p = Process(); p.executableURL = install.wine; p.arguments = ["wineboot", "-u"]; p.environment = env
+        let wine = playWine(install)
+        let p = Process(); p.executableURL = wine; p.arguments = ["wineboot", "-u"]; p.environment = env
         p.standardOutput = Pipe(); p.standardError = Pipe()
         try? p.run(); p.waitUntilExit()
-        let k = Process(); k.executableURL = install.wineserver; k.arguments = ["-w"]
+        let k = Process(); k.executableURL = wine.deletingLastPathComponent().appendingPathComponent("wineserver"); k.arguments = ["-w"]
         k.environment = ["WINEPREFIX": install.prefix.path]
         try? k.run(); k.waitUntilExit()
     }

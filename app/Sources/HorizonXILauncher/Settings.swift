@@ -90,7 +90,8 @@ struct PerfSettings: Codable {
         msync = b(.msync, true)
         esync = b(.esync, false)
         silenceWineDebug = b(.silenceWineDebug, true)
-        metalHUD = false  // overlay removed from the UI; an old saved "on" must not resurface
+        // Development only: no UI toggle, and an old saved "on" must not resurface on a player's game.
+        metalHUD = ProcessInfo.processInfo.environment["HXI_METAL_HUD"] == "1"
         disableAppNap = b(.disableAppNap, true)
         fpsDivisorOne = b(.fpsDivisorOne, true)
         followSoundOutput = b(.followSoundOutput, true)
