@@ -149,6 +149,11 @@ struct PerfSettings: Codable {
         // surfaces <= 32 px. See patches/dxvk-1.10.3-horizonxi-fencewait.patch.
         env["D3D9_RT_READBACK_FENCE"] = "32"
         env["MVK_CONFIG_USE_COMMAND_POOLING"] = "1"
+        // The last macOS 27 session emitted thousands of identical DXVK/MoltenVK warnings
+        // after login. They are still available when explicitly requested for diagnostics,
+        // but routine play should not spend time writing them or redrawing the log pane.
+        env["DXVK_LOG_LEVEL"] = ProcessInfo.processInfo.environment["DXVK_LOG_LEVEL"] ?? "error"
+        env["MVK_CONFIG_LOG_LEVEL"] = ProcessInfo.processInfo.environment["MVK_CONFIG_LOG_LEVEL"] ?? "1"
         env.removeValue(forKey: "MTL_HUD_ENABLED")  // never on a player's game
         // Only our patched d3d9.dll reads this; harmless (silently ignored) on the other
         // renderer pathways.

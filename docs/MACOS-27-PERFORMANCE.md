@@ -162,6 +162,24 @@ swap remained around 6 GB and Google Drive/File Provider plus another game
 were active. This is a separate resource-pressure concern for future gameplay
 verification, not evidence that Wine or a rendering dependency regressed.
 
+The last game-session log (2026-10-02) was only about 163 KB, but after login
+it contained 1,556 repeated `ConvertFormat: Unknown format encountered: 65`
+lines from DXVK and 529 MoltenVK warnings. This is log/UI noise and extra
+formatting and file writes; its contribution to frame time is unmeasured. The
+launcher now defaults to `DXVK_LOG_LEVEL=error` and `MVK_CONFIG_LOG_LEVEL=1`
+for routine play, preserving errors while suppressing those warnings. Both
+upstream projects document these controls: [DXVK logging](https://github.com/doitsujin/dxvk/blob/master/README.md#debugging)
+and [MoltenVK configuration](https://github.com/KhronosGroup/MoltenVK/blob/main/Docs/MoltenVK_Configuration_Parameters.md#mvk_config_log_level).
+An explicit environment setting or the launcher's extra environment lines can
+restore more detailed logs when diagnosing a failure. This is a logging change,
+not a verified FPS improvement; no game was launched to test it.
+The release build compiled, and the updated local beta passed notarization,
+stapling, strict signature verification, and Gatekeeper before installation.
+The previous app was archived in Downloads. The installed launcher opened once
+with no Wine or FFXI client process observed five seconds later; its executable
+matched the notarized beta by SHA-256. The quiet logging behavior itself has
+not been exercised in a game session.
+
 1. If logged in, type `/shutdown` in game chat and wait for the client to exit. Do not kill it.
 2. Install the signed local beta, keeping the previous playable app archived in Downloads.
 3. Cold-launch once and confirm no Wine update window. Confirm the prefix timestamp stays at
