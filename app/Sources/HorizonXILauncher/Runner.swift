@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import Combine
 import AppKit
 
@@ -1185,8 +1186,7 @@ final class Runner: ObservableObject {
                 .joined(separator: "\n") + "\n"
         for name in ["last-spawn.txt", "last-spawn-\(Self.fileSafe(session)).txt"] {
             let file = support.appendingPathComponent(name)
-            try? dump.write(to: file, atomically: true, encoding: .utf8)
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+            Self.writePrivateDiagnostic(dump, to: file)
         }
         // Detached, in its own session, so quitting the launcher does not take the game with
         // it. That means no Process object and no terminationHandler -- the child is not ours
@@ -1228,6 +1228,32 @@ final class Runner: ObservableObject {
         // detached pid is remembered so `stop` can still end the session on request.
         gamePID = pid
         return pid
+    }
+
+    /// Keep launch diagnostics private from their first byte, including on the first launch.
+    /// Foundation's atomic String.write creates a replacement file with default permissions
+    /// before the following chmod, briefly exposing paths and user-supplied settings.
+    private static func writePrivateDiagnostic(_ text: String, to file: URL) {
+        let temp = file.deletingLastPathComponent()
+            .appendingPathComponent(".last-spawn-\(UUID().uuidString).tmp")
+        let fd = open(temp.path, O_WRONLY | O_CREAT | O_EXCL, mode_t(0o600))
+        guard fd >= 0 else { return }
+        defer { unlink(temp.path) }
+        guard fchmod(fd, mode_t(0o600)) == 0 else { close(fd); return }
+        let data = Data(text.utf8)
+        let written = data.withUnsafeBytes { bytes -> Bool in
+            guard let base = bytes.baseAddress else { return true }
+            var offset = 0
+            while offset < bytes.count {
+                let n = write(fd, base.advanced(by: offset), bytes.count - offset)
+                if n < 0 && errno == EINTR { continue }
+                if n <= 0 { return false }
+                offset += n
+            }
+            return true
+        }
+        guard close(fd) == 0, written else { return }
+        _ = rename(temp.path, file.path)
     }
 
     /// Two sessions tailing one stdout file would each show the other's output.

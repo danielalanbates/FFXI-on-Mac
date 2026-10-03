@@ -17,6 +17,11 @@ splits on all whitespace, uses the same Wine build for registry edits and Play, 
 the updater's own Wine app when a real one-time prefix update is needed. Build verification is
 complete; a cold launch after the current game session ends must confirm no update window.
 
+With the client idle on 2026-10-02, a read-only `reg query` through the patched Wine and active
+prefix exited 0, found PlayOnline's `0001` value, and left `.update-timestamp` at
+`1787146421\r\n` (the patched `wine.inf` mtime). This checks the Wine/prefix pairing; it does
+not exercise the renderer or registry writes, the launcher UI, or actual gameplay.
+
 ## Performance evidence and limits
 
 - The running game log shows DXVK 1.10.3+ through MoltenVK 1.4.2 on the Apple M1 GPU.
