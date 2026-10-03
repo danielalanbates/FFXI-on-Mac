@@ -367,7 +367,9 @@ final class Runner: ObservableObject {
         else { return false }
         let ts = install.prefix.appendingPathComponent(".update-timestamp")
         guard let txt = try? String(contentsOf: ts, encoding: .utf8) else { return true }
-        let first = txt.split(whereSeparator: { $0 == " " || $0 == "\n" }).first.map(String.init) ?? ""
+        // Wine writes CRLF here. Splitting only on "\n" leaves a trailing "\r", so Int fails
+        // and we run wineboot -u again on every launch, bringing its progress window forward.
+        let first = txt.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? ""
         if first == "disable" { return false }
         return Int(first) != Int(m.timeIntervalSince1970)
     }
@@ -375,18 +377,23 @@ final class Runner: ObservableObject {
     nonisolated static func playWine(_ install: Install) -> URL { X87Sidecar.patchedWine() ?? install.wine }
 
     /// Runs `wineboot -u` with Mono and Gecko disabled (their installers are what ask questions).
-    nonisolated static func updatePrefix(_ install: Install) {
+    nonisolated static func updatePrefix(_ install: Install) -> Bool {
         var env = ProcessInfo.processInfo.environment
         env["WINEPREFIX"] = install.prefix.path; env["WINEDEBUG"] = "-all"
         env["WINEDLLOVERRIDES"] = "mscoree,mshtml="
+        env["WINEBOOT_HIDE_DIALOG"] = "1"
         env.removeValue(forKey: "DYLD_FALLBACK_LIBRARY_PATH"); env.removeValue(forKey: "DYLD_LIBRARY_PATH")
         let wine = playWine(install)
         let p = Process(); p.executableURL = wine; p.arguments = ["wineboot", "-u"]; p.environment = env
-        p.standardOutput = Pipe(); p.standardError = Pipe()
-        try? p.run(); p.waitUntilExit()
+        p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return false }
+        p.waitUntilExit()
         let k = Process(); k.executableURL = wine.deletingLastPathComponent().appendingPathComponent("wineserver"); k.arguments = ["-w"]
         k.environment = ["WINEPREFIX": install.prefix.path]
-        try? k.run(); k.waitUntilExit()
+        k.standardOutput = FileHandle.nullDevice; k.standardError = FileHandle.nullDevice
+        guard (try? k.run()) != nil else { return false }
+        k.waitUntilExit()
+        return p.terminationStatus == 0 && k.terminationStatus == 0
     }
 
     /// Background check at launcher start and after a Repair. Skipped while any client runs.
@@ -394,8 +401,21 @@ final class Runner: ObservableObject {
         guard !running, LiveClients.snapshot().clients.isEmpty else { return }
         guard await Task.detached(operation: { Self.prefixStale(install) }).value else { return }
         appendLine("==> updating Wine's configuration (one time, about 20 s)")
-        await Task.detached { Self.updatePrefix(install) }.value
-        appendLine("==> Wine is up to date")
+        // Wine's update progress is a native Wine window. Hide only Wine processes launched for
+        // this update, once each; never hide Terminal or any unrelated application.
+        let wineRoot = Self.playWine(install).deletingLastPathComponent()
+            .deletingLastPathComponent().standardizedFileURL.path + "/"
+        let observer = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main
+        ) { note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  let path = app.executableURL?.standardizedFileURL.path,
+                  path.hasPrefix(wineRoot) else { return }
+            app.hide()
+        }
+        let ok = await Task.detached { Self.updatePrefix(install) }.value
+        NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        appendLine(ok ? "==> Wine is up to date" : "!! Wine prefix update did not finish")
     }
 
     /// Make sure the wrapper's installer prefix exists (see `Install.installerPrefix`). Slow the
@@ -931,14 +951,11 @@ final class Runner: ObservableObject {
             appendLine("!! falling back to the wrapper's own wine — expect the client to exit "
                        + "about a second after login (docs/WINE-BUILD.md)")
         }
-        // Every registry edit above (renderer, SquareEnix path) went through the *wrapper's*
-        // wine, which leaves the wrapper's wineserver alive on this prefix for ~3 s after its
-        // last client. The game runs on the cooperative wine, a different protocol -- and
-        // joining that server is "wine client error: version mismatch 856/1809" followed by a
-        // refused login (2026-08-27, two launches in a row). Wait for it to be gone first;
-        // Never with a client running: that wineserver is the one it plays on.
+        // Registry edits now use this same wine build, so they do not bounce the prefix between
+        // two wine.inf versions. Still wait for its server to flush before launching the client;
+        // never stop it when another client is running.
         if !clientsLive, RendererSetup.stopWineserver(install) {
-            appendLine("==> wrapper wineserver stopped; the game starts its own")
+            appendLine("==> wineserver stopped; the game starts its own")
         }
         let spawned = spawnViaShell(exe,
               args: args,
@@ -1139,8 +1156,6 @@ final class Runner: ObservableObject {
         let out = FileManager.default.temporaryDirectory
             .appendingPathComponent("ffxi-on-mac-game-\(getpid())-\(Self.fileSafe(session)).log")
         FileManager.default.createFile(atPath: out.path, contents: nil)
-        let quoted = ([exe.path] + args).map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }
-            .joined(separator: " ")
         var e = ProcessInfo.processInfo.environment
         for (k, v) in env { e[k] = v }
         // The RetroAchievements key never reaches the game (or last-spawn.txt).
@@ -1150,10 +1165,24 @@ final class Runner: ObservableObject {
         // last-spawn.txt is always the newest launch; each session also keeps its own.
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("HorizonXI-on-Mac", isDirectory: true)
+        // Record only launch settings useful for a renderer comparison. Inheriting the whole
+        // environment wrote unrelated session identifiers and could write user-supplied secrets
+        // from extraEnv into a world-readable diagnostics file.
+        let diagnosticKeys: Set<String> = [
+            "CX_ROOT", "D3D9_RT_READBACK_FENCE", "D3DMETAL_FRAMEWORK_PATH",
+            "DXVK_STATE_CACHE_PATH", "DYLD_FALLBACK_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
+            "FFXI_FPS_DIVISOR", "LSAppNapIsDisabled", "MVK_CONFIG_FAST_MATH_ENABLED",
+            "MVK_CONFIG_USE_COMMAND_POOLING", "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS",
+            "ROSETTA_X87_PATH", "WINEDEBUG", "WINEESYNC", "WINEMSYNC", "WINEPREFIX",
+            "WINE_LARGE_ADDRESS_AWARE"
+        ]
         let dump = "exe: \(exe.path)\nargs: \(args)\ncwd: \(cwd.path)\n"
-            + e.keys.sorted().map { "\($0)=\(e[$0] ?? "")" }.joined(separator: "\n") + "\n"
+            + diagnosticKeys.sorted().compactMap { key in e[key].map { "\(key)=\($0)" } }
+                .joined(separator: "\n") + "\n"
         for name in ["last-spawn.txt", "last-spawn-\(Self.fileSafe(session)).txt"] {
-            try? dump.write(to: support.appendingPathComponent(name), atomically: true, encoding: .utf8)
+            let file = support.appendingPathComponent(name)
+            try? dump.write(to: file, atomically: true, encoding: .utf8)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
         }
         // Detached, in its own session, so quitting the launcher does not take the game with
         // it. That means no Process object and no terminationHandler -- the child is not ours

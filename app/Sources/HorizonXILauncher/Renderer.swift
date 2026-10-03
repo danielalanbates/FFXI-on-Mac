@@ -438,6 +438,8 @@ enum RendererSetup {
     /// Returns whether a wineserver was actually running when asked, so callers can say so.
     @discardableResult
     static func stopWineserver(_ i: Install) -> Bool {
+        let wine = Runner.playWine(i)
+        let wineserver = wine.deletingLastPathComponent().appendingPathComponent("wineserver")
         let chk = Process()
         chk.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
         chk.arguments = ["-x", "wineserver"]
@@ -445,7 +447,7 @@ enum RendererSetup {
         var wasUp = false
         if (try? chk.run()) != nil { chk.waitUntilExit(); wasUp = chk.terminationStatus == 0 }
 
-        let killCmd = "export WINEPREFIX=\(Bridge.shellQuote(i.prefix.path)); \(Bridge.shellQuote(i.wineserver.path)) -k"
+        let killCmd = "export WINEPREFIX=\(Bridge.shellQuote(i.prefix.path)); \(Bridge.shellQuote(wineserver.path)) -k"
         Bridge.runShell(killCmd)
 
         // `-k` only *sends* the kill; the server then flushes the registry and exits on its own
@@ -453,7 +455,7 @@ enum RendererSetup {
         // (spinning disk) the flush can outlive it — and a game spawned while the old server is
         // still dying gets torn down with it about a second after login ("Closing…", every
         // world, 2026-08-19). `wineserver -w` blocks until the server has actually terminated.
-        let waitCmd = "export WINEPREFIX=\(Bridge.shellQuote(i.prefix.path)); \(Bridge.shellQuote(i.wineserver.path)) -w"
+        let waitCmd = "export WINEPREFIX=\(Bridge.shellQuote(i.prefix.path)); \(Bridge.shellQuote(wineserver.path)) -w"
         Bridge.runShell(waitCmd)
         return wasUp
     }
@@ -467,7 +469,7 @@ enum RendererSetup {
     }
 
     private static func wine(_ i: Install, _ args: [String]) {
-        let cmd = "export WINEPREFIX=\(Bridge.shellQuote(i.prefix.path)); export WINEDEBUG=-all; \(Bridge.shellQuote(i.wine.path)) " + args.map(Bridge.shellQuote).joined(separator: " ")
+        let cmd = "export WINEPREFIX=\(Bridge.shellQuote(i.prefix.path)); export WINEDEBUG=-all; export WINEBOOT_HIDE_DIALOG=1; \(Bridge.shellQuote(Runner.playWine(i).path)) " + args.map(Bridge.shellQuote).joined(separator: " ")
         Bridge.runShell(cmd)
     }
 }
