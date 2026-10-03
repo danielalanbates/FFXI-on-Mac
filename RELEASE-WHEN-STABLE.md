@@ -37,6 +37,17 @@ Not "it launched once." All of these, verified, not assumed:
 5. Say plainly in the notes what was verified and what wasn't. No "works" claims that
    were not actually tested.
 
+The v3.9 download is Developer ID signed but unnotarized: both its app and disk image fail
+Gatekeeper with `source=Unnotarized Developer ID`. For the next public release, use
+`HXI_SIGN_ID=<certificate SHA-1> ./scripts/package.sh <output-dir>` and require successful
+app and disk-image notarization, stapling, and `spctl` acceptance before uploading the image.
+`package.sh` must fail without the signing identity and leave an existing release image intact.
+An unpublished 3.9 packaging preflight on 2026-10-02 passed Apple's app and disk-image
+notarization, stapling, `codesign --verify --strict --deep`, and Gatekeeper checks, including the
+app copied back out of the image. It lives only in Downloads under `horizonxi-work/release-audit/`;
+the GitHub v3.9 asset remains the earlier unnotarized download. This checks the release pipeline,
+not the gameplay stability gates above.
+
 ## The local .app is a different thing from the release
 `/Applications/FFXI-on-Mac.app` must stay playable at ALL times — Daniel plays on it
 during development. It tracks the working tree: rebuild and reinstall it (`app/bundle.sh`,
@@ -46,6 +57,37 @@ with `pgrep -fl "FFXI-on-Mac|horizon-loader|wine"` first and wait for an idle mo
 
 The GitHub release is the opposite: slow, gated, at most weekly. Fast local .app,
 rare public release.
+
+## Current source and safe handoff
+
+The current GitHub project is `danielalanbates/FFXI-on-Mac`. Its Google Drive checkout is
+`My Drive/Code/GitHub/FFXI-on-Mac`; the `HorizonXI-on-Mac` folders are older project history.
+Use a worktree in Downloads for local builds, then push reviewed commits to the existing PR and
+sync the Drive checkout. Keep beta bundles in Downloads until the running launcher and every game
+client have exited. If a character is logged in, enter `/shutdown` in game chat and wait for the
+client to exit before replacing `/Applications/FFXI-on-Mac.app`. Never kill a live game process to
+make room for an install. Never test addons on hosted servers; use the local LandSandBoat world.
+
+As of 2026-10-03 the Drive checkout's `.git/HEAD` is a File Provider placeholder
+(`isDownloaded=0`), and reading it times out. Running Git there can silently
+walk up to an unrelated repository in the home folder. Verify `git rev-parse
+--show-toplevel` returns the Drive checkout before using it. Until its Git
+metadata is available offline, the `quiet-wine-update` worktree in Downloads
+and GitHub PR #36 are the authoritative branch state; do not treat a Git command
+that reports the home folder as a successful Drive sync. Keep this checkout
+pending rather than copying only source files into an unusable Git working tree.
+An isolated 2026-10-03 attempt to request just `.git/HEAD` through macOS
+`NSFileProviderManager` found the Google Drive item and domain but returned
+`NSFileProviderErrorDomain -2001` ("The application cannot be used right now")
+for both domain enumeration and the explicit download request. Its one-shot
+source is archived in Downloads under `horizonxi-work/archive-local-test/`.
+Use Finder's Google Drive **Available offline** action when the provider is
+working, then verify `.git/HEAD` can be read before running Git in that folder.
+
+The updater reads GitHub Releases, so branch commits and beta builds do not prompt public users
+to restart. Cut a new release only after the stability checks above pass. Confirm that the
+downloaded app has the expected bundle ID, release version, valid code signature, and signing
+team before the launcher offers Restart.
 
 ## Why this note exists
 This project has repeatedly reached a good state mid-session and then lost it to the

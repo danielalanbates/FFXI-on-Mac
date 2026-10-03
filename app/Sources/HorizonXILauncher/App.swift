@@ -265,6 +265,10 @@ struct ContentView: View {
             if selected == nil, let remembered = Install.remembered() {
                 selected = remembered
                 installs = [remembered]
+                // A forwarded --play must not reach Wine before its prefix is current.
+                // This normally returns immediately; a stale prefix is updated once
+                // under Runner's maintenance lock before commands are consumed.
+                await runner.syncPrefixIfStale(remembered)
             }
             // Press Play as soon as the install is known. For Shortcuts/Stream Deck users, and
             // for this project's own unattended tests (see docs/SERVERS-WORKLOG.md).
@@ -506,6 +510,10 @@ struct ContentView: View {
                 Spacer()
                 Button("Restart") { updater.restartToUpdate() }
                     .buttonStyle(.borderedProminent).controlSize(.small)
+                    .disabled(!sessions.live.isEmpty || !sessions.elsewhere.isEmpty)
+                    .help(!sessions.live.isEmpty || !sessions.elsewhere.isEmpty
+                          ? "Finish your game before restarting for the update."
+                          : "Install the ready update and reopen the launcher.")
             }
             .padding(10)
             .background(RoundedRectangle(cornerRadius: 8).fill(Vana.gold.opacity(0.12)))
@@ -832,26 +840,29 @@ struct ContentView: View {
                     Text(r.0).tag("\(r.1)x\(r.2)")
                 }
             }
+            .help("World rendering size. Higher values look sharper and use more GPU power.")
             Picker("Texture resolution", selection: $graphics.textureResolution) {
                 ForEach([512, 1024, 2048, 4096], id: \.self) { Text(String($0)).tag($0) }
             }
+            .help("Detail of world textures. Higher values use more graphics memory.")
             Picker("Mip mapping", selection: $graphics.mipMapping) {
                 ForEach(0...4, id: \.self) { Text($0 == 0 ? "Off" : String($0)).tag($0) }
             }
+            .help("Smooths distant textures. Higher values use stronger filtering.")
             Picker("Textures", selection: $graphics.textureCompression) {
                 Text("Uncompressed").tag(0)
                 Text("Compressed").tag(2)
             }
+            .help("Compressed uses less graphics memory; uncompressed preserves texture quality.")
             Toggle("Bump mapping", isOn: $graphics.bumpMapping)
+                .help("Adds raised-looking detail to some surfaces.")
             Toggle("Environmental animation", isOn: $graphics.environmentAnimation)
+                .help("Animates effects such as water and weather.")
             Divider()
             Toggle("Remember window size", isOn: $graphics.rememberWindowSize)
-            Text("Resize the game window however you like; the next Play opens at that size, "
-                 + "drawn at full detail. FFXI cannot redraw at a new size while running, so a "
-                 + "window enlarged mid-game is stretched until the next launch.")
-                .font(.system(size: 12)).foregroundStyle(Vana.muted)
-                .fixedSize(horizontal: false, vertical: true)
+                .help("Opens at the last window size on the next Play. Resizing during play stretches the image until then.")
             Toggle("Match interface to render resolution", isOn: $graphics.uiFollowsResolution)
+                .help("Draws menus and text at the world resolution. Turn off to choose a larger interface.")
             if !graphics.uiFollowsResolution {
                 Picker("Interface resolution", selection: Binding(
                     get: { "\(graphics.uiWidth)x\(graphics.uiHeight)" },
@@ -863,17 +874,16 @@ struct ContentView: View {
                         Text(r.0).tag("\(r.1)x\(r.2)")
                     }
                 }
-                Text("FFXI draws the interface at this resolution and scales it up to the "
-                     + "window, so a lower number means bigger menus and text. The world is "
-                     + "still drawn at the render resolution above.")
-                    .font(.system(size: 12)).foregroundStyle(Vana.muted)
-                    .fixedSize(horizontal: false, vertical: true)
+                .help("Lower values make menus and text larger without changing world detail.")
             }
 
             HStack {
                 Button("Low") { graphics = .lowSpec }
+                    .help("Lower resolution and texture memory use.")
                 Button("Balanced") { graphics = .balanced }
+                    .help("1080p with standard texture detail.")
                 Button("Max (4K)") { graphics = .max4K }
+                    .help("4K with maximum texture detail. Uses more graphics memory.")
                 Spacer()
                 Button("Cancel") { showGraphics = false }
                 Button("Apply") {
@@ -1322,7 +1332,6 @@ struct ContentView: View {
                         .disabled(!Guide.isAvailable || !Guide.allowed(by: addonPolicy))
                         .help(vanaguideHelp)
                     Toggle("Large address aware", isOn: $perf.largeAddressAware)
-                    Toggle("Show frame rate (Metal HUD)", isOn: $perf.metalHUD)
                     Divider()
                     RetroAchievementsSection(ra: ra, gameDir: active?.gameDir,
                                              log: { runner.appendLine($0) })
@@ -1676,7 +1685,7 @@ struct ContentView: View {
         .keyboardShortcut(.defaultAction)
         // Only the *absence* of an install should block Play. Once we have one — remembered
         // or found — a still-running background rescan must not hold the user up.
-        .disabled(selected == nil || (selectedRunning && !playAgain) || blocked)
+        .disabled(selected == nil || (selectedRunning && !playAgain) || blocked || runner.busy)
     }
 
     /// Every world playing right now, each with its own Stop. Stopping one never stops another.
@@ -1970,6 +1979,7 @@ struct ContentView: View {
         }
         selected?.remember()
         await recheckAsync()
+        if let i = selected { await runner.syncPrefixIfStale(i) }
     }
 
     private func recheck() { Task { await recheckAsync() } }

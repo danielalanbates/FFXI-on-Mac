@@ -60,7 +60,7 @@ enum GameRegistry {
     }
 
     private static func wine(_ i: Install, _ args: [String]) {
-        let cmd = "export WINEPREFIX=\(Bridge.shellQuote(i.prefix.path)); export WINEDEBUG=-all; \(Bridge.shellQuote(i.wine.path)) " + args.map(Bridge.shellQuote).joined(separator: " ")
+        let cmd = "export WINEPREFIX=\(Bridge.shellQuote(i.prefix.path)); export WINEDEBUG=-all; export WINEBOOT_HIDE_DIALOG=1; \(Bridge.shellQuote(Runner.playWine(i).path)) " + args.map(Bridge.shellQuote).joined(separator: " ")
         Bridge.runShell(cmd)
     }
 }

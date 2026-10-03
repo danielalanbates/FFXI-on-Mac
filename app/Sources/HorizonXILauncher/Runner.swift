@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import Combine
 import AppKit
 
@@ -292,6 +293,7 @@ final class Runner: ObservableObject {
             self?.endMaintenance()
             self?.busy = false
             self?.appendLine("==> repair exited \(code)")
+            if code == 0, let self { Task { await self.syncPrefixIfStale(install) } }
         }
     }
 
@@ -352,6 +354,86 @@ final class Runner: ObservableObject {
         let link = games.appendingPathComponent(name)
         try? FileManager.default.removeItem(at: link)
         try? FileManager.default.createSymbolicLink(at: link, withDestinationURL: URL(fileURLWithPath: dataPath))
+    }
+
+    /// Wine compares the prefix's `.update-timestamp` with `wine.inf`'s mtime at every start and,
+    /// when they differ (a new wrapper, a Repair, a copied drive), stops to "update the Wine
+    /// configuration" -- with Mono/Gecko install prompts -- in front of the game. Do that update
+    /// here, quietly, while nothing is running, so Play never meets it.
+    nonisolated static func prefixStale(_ install: Install) -> Bool {
+        // The wine Play really runs (see launch): its wine.inf is the one it compares against.
+        let inf = playWine(install).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("share/wine/wine.inf")
+        guard let m = (try? FileManager.default.attributesOfItem(atPath: inf.path))?[.modificationDate] as? Date
+        else { return false }
+        let ts = install.prefix.appendingPathComponent(".update-timestamp")
+        guard let txt = try? String(contentsOf: ts, encoding: .utf8) else { return true }
+        // Wine writes CRLF here. Splitting only on "\n" leaves a trailing "\r", so Int fails
+        // and we run wineboot -u again on every launch, bringing its progress window forward.
+        let first = txt.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? ""
+        if first == "disable" { return false }
+        return Int(first) != Int(m.timeIntervalSince1970)
+    }
+
+    nonisolated static func playWine(_ install: Install) -> URL { X87Sidecar.patchedWine() ?? install.wine }
+
+    /// Runs `wineboot -u` with Mono and Gecko disabled (their installers are what ask questions).
+    nonisolated static func updatePrefix(_ install: Install) -> Bool {
+        var env = ProcessInfo.processInfo.environment
+        env["WINEPREFIX"] = install.prefix.path; env["WINEDEBUG"] = "-all"
+        env["WINEDLLOVERRIDES"] = "mscoree,mshtml="
+        env["WINEBOOT_HIDE_DIALOG"] = "1"
+        env.removeValue(forKey: "DYLD_FALLBACK_LIBRARY_PATH"); env.removeValue(forKey: "DYLD_LIBRARY_PATH")
+        let wine = playWine(install)
+        let p = Process(); p.executableURL = wine; p.arguments = ["wineboot", "-u"]; p.environment = env
+        p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return false }
+        p.waitUntilExit()
+        let k = Process(); k.executableURL = wine.deletingLastPathComponent().appendingPathComponent("wineserver"); k.arguments = ["-w"]
+        k.environment = ["WINEPREFIX": install.prefix.path]
+        k.standardOutput = FileHandle.nullDevice; k.standardError = FileHandle.nullDevice
+        guard (try? k.run()) != nil else { return false }
+        k.waitUntilExit()
+        return p.terminationStatus == 0 && k.terminationStatus == 0
+    }
+
+    /// Background check at launcher start and after a Repair. Skipped while any client runs.
+    func syncPrefixIfStale(_ install: Install) async {
+        guard !running, LiveClients.snapshot().clients.isEmpty else { return }
+        guard await Task.detached(operation: { Self.prefixStale(install) }).value else { return }
+        // A stale prefix is shared maintenance. Hold the same lock as Play and Repair so a
+        // click during wineboot cannot start the client against half-updated registry files.
+        guard claimForMaintenance("Wine prefix update") else { return }
+        busy = true
+        defer { busy = false; endMaintenance() }
+        guard await Task.detached(operation: { Self.prefixStale(install) }).value else { return }
+        appendLine("==> updating Wine's configuration (one time, about 20 s)")
+        // Wine's update progress is a native Wine window. A Wine process may activate after its
+        // launch notification, so also hide it if it comes forward while maintenance is running.
+        // Match only this install's Wine tree; never hide Terminal or another application.
+        // The configured /Volumes/Games path is a symlink into /Volumes/x10, while macOS
+        // reports the launched Wine executable at the resolved path.
+        let wineRoot = Self.playWine(install).deletingLastPathComponent()
+            .deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL.path + "/"
+        let notifications = NSWorkspace.shared.notificationCenter
+        let hideMaintenanceWine: @Sendable (Notification) -> Void = { note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  let path = app.executableURL?.resolvingSymlinksInPath().standardizedFileURL.path,
+                  path.hasPrefix(wineRoot) else { return }
+            app.hide()
+        }
+        let launchObserver = notifications.addObserver(
+            forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main,
+            using: hideMaintenanceWine
+        )
+        let activateObserver = notifications.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main,
+            using: hideMaintenanceWine
+        )
+        let ok = await Task.detached { Self.updatePrefix(install) }.value
+        notifications.removeObserver(launchObserver)
+        notifications.removeObserver(activateObserver)
+        appendLine(ok ? "==> Wine is up to date" : "!! Wine prefix update did not finish")
     }
 
     /// Make sure the wrapper's installer prefix exists (see `Install.installerPrefix`). Slow the
@@ -735,6 +817,20 @@ final class Runner: ObservableObject {
             appendLine("!! " + why)
             return why
         }
+        // The startup check can still be between its stale read and maintenance lock when
+        // someone clicks Play. Check again while holding the launch lock: never hand a stale
+        // prefix to Wine, whose own update opens a foreground progress window.
+        if Self.prefixStale(install) {
+            let why = g.clientsLive
+                ? "Finish the running game before Wine updates its configuration, then press Play."
+                : "Wine needs to update its configuration. Press Play again when it finishes."
+            appendLine("i  " + why)
+            if !g.clientsLive {
+                // Runs after this call returns and its defer releases the launch lock.
+                Task { await syncPrefixIfStale(install) }
+            }
+            return why
+        }
         // The caller's writes to shared client files (pivot.ini branding, the boot profile's
         // account line), now that the lock is held and the gate has passed: a refused launch
         // rewrites nothing another world is using. Before `hostKey`, which reads the `--server`
@@ -825,7 +921,19 @@ final class Runner: ObservableObject {
         // wrapper is one bundle for every world, so with several playing it names them all.
         let playingWorlds = Set(Runner.playing.values.map(\.world)).sorted().joined(separator: " + ")
         DockIcon.apply(to: install, world: playingWorlds) { [weak self] in self?.appendLine($0) }
-        var env = perf.environment(for: install, x87: useX87, world: worldName)
+        // Cooperative x87 has not been shown to install its JIT hook on macOS 27. On 26.5.2
+        // this exact failure cost 19x in the measured rules scene (docs/X87-WALL.md). Keep the
+        // last playable fallback, stock Rosetta, until a local-world A/B proves the new helper.
+        let x87Enabled = useX87 && (ProcessInfo.processInfo.operatingSystemVersion.majorVersion < 27
+                                    || ProcessInfo.processInfo.environment["FFXI_ON_MAC_X87"] == "1")
+        var env = perf.environment(for: install, x87: x87Enabled, world: worldName)
+        if !x87Enabled {
+            env.removeValue(forKey: "ROSETTA_X87_PATH")
+            env.removeValue(forKey: "ROSETTA_DISABLE_AOT")
+        }
+        if useX87 && !x87Enabled {
+            appendLine("i  macOS 27: x87 sidecar off until its in-world speed is verified")
+        }
         if g.sync != wantSync {
             env["WINEMSYNC"] = g.sync == .msync ? "1" : "0"
             env["WINEESYNC"] = g.sync == .esync ? "1" : "0"
@@ -838,25 +946,13 @@ final class Runner: ObservableObject {
                                                           log: { [weak self] in self?.appendLine($0) }) {
             env["CX_ROOT"] = cx.path
         }
-        // x87 acceleration, two generations:
-        //  * Cooperative (preferred): x87sidecar --cooperative launching the patched CX wine
-        //    (athei/wine-build at COOP_WINE). Every wine process — including horizon-loader,
-        //    a *grandchild* via Ashita — does its own handshake and flushes its own i-cache,
-        //    which is the only reliable way since macOS 26.5.2's Rosetta. No entitlements.
-        //  * attach-by-pid (legacy, x87sidecar_entitled in Resources): broken on 26.5.2 —
-        //    cross-process i-cache flush is unreliable, the client page-faults minutes after
-        //    attach. Kept only as a fallback for older macOS; the binary is currently NOT
-        //    bundled for that reason.
-        // ROSETTA_DISABLE_AOT only pays off when a sidecar actually patches x87; without one
-        // it forces Rosetta's slow path and costs ~half the stock frame rate (measured
-        // 2026-08-19: ~5 fps vs ~11 stock). Set it only when acceleration will engage.
-        // A world may have to run without x87 acceleration (see Server.x87).
-        // x87 acceleration rides on ROSETTA_X87_PATH now (set in PerfSettings.environment), so
-        // there is nothing to wrap here: wine re-execs every i386 process through the sidecar
-        // itself, including the client Ashita spawns. See Settings.swift for the measurements.
+        // The patched wine can re-exec i386 children through the cooperative sidecar via
+        // ROSETTA_X87_PATH. A live sidecar only proves that it launched, not that the client's
+        // x87 hook engaged; the failed-hook measurements in docs/X87-WALL.md are severe.
+        // Keep macOS 27 on stock Rosetta until a local-world A/B validates acceleration.
         if !useX87 {
             appendLine("i  x87 acceleration is off for this world — its client exits at boot with it on.")
-        } else if X87Sidecar.coopBinary() == nil {
+        } else if x87Enabled && X87Sidecar.coopBinary() == nil {
             appendLine("!! x87sidecar-coop missing from the bundle — the client will run at "
                        + "Rosetta's stock x87 speed (single-digit fps in-world).")
         }
@@ -880,21 +976,18 @@ final class Runner: ObservableObject {
             exe = wine
             args = [injector, bootFile]
             appendLine("==> wine: \(wine.path)"
-                       + (useX87 && X87Sidecar.coopBinary() != nil ? " + x87 sidecar" : ""))
+                       + (x87Enabled && X87Sidecar.coopBinary() != nil ? " + x87 sidecar" : ""))
         } else {
             exe = install.wine
             args = [injector, bootFile]
             appendLine("!! falling back to the wrapper's own wine — expect the client to exit "
                        + "about a second after login (docs/WINE-BUILD.md)")
         }
-        // Every registry edit above (renderer, SquareEnix path) went through the *wrapper's*
-        // wine, which leaves the wrapper's wineserver alive on this prefix for ~3 s after its
-        // last client. The game runs on the cooperative wine, a different protocol -- and
-        // joining that server is "wine client error: version mismatch 856/1809" followed by a
-        // refused login (2026-08-27, two launches in a row). Wait for it to be gone first;
-        // Never with a client running: that wineserver is the one it plays on.
+        // Registry edits now use this same wine build, so they do not bounce the prefix between
+        // two wine.inf versions. Still wait for its server to flush before launching the client;
+        // never stop it when another client is running.
         if !clientsLive, RendererSetup.stopWineserver(install) {
-            appendLine("==> wrapper wineserver stopped; the game starts its own")
+            appendLine("==> wineserver stopped; the game starts its own")
         }
         let spawned = spawnViaShell(exe,
               args: args,
@@ -1095,21 +1188,36 @@ final class Runner: ObservableObject {
         let out = FileManager.default.temporaryDirectory
             .appendingPathComponent("ffxi-on-mac-game-\(getpid())-\(Self.fileSafe(session)).log")
         FileManager.default.createFile(atPath: out.path, contents: nil)
-        let quoted = ([exe.path] + args).map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }
-            .joined(separator: " ")
         var e = ProcessInfo.processInfo.environment
         for (k, v) in env { e[k] = v }
+        if env["ROSETTA_X87_PATH"] == nil {
+            e.removeValue(forKey: "ROSETTA_X87_PATH")
+            e.removeValue(forKey: "ROSETTA_DISABLE_AOT")
+        }
         // The RetroAchievements key never reaches the game (or last-spawn.txt).
         e.removeValue(forKey: RetroAchievements.envKey)
-        // Record exactly what was spawned. Diffing this against a hand-run that works is how
-        // the launch-death and Gaia XI exits were bisected; it costs one small file per launch.
+        // Record the launch path and relevant performance settings. Diffing these against a
+        // hand-run helped bisect launch failures without retaining the full inherited environment.
         // last-spawn.txt is always the newest launch; each session also keeps its own.
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("HorizonXI-on-Mac", isDirectory: true)
+        // Record only launch settings useful for a renderer comparison. Inheriting the whole
+        // environment wrote unrelated session identifiers and could write user-supplied secrets
+        // from extraEnv into a world-readable diagnostics file.
+        let diagnosticKeys: Set<String> = [
+            "CX_ROOT", "D3D9_RT_READBACK_FENCE", "D3DMETAL_FRAMEWORK_PATH",
+            "DXVK_STATE_CACHE_PATH", "DYLD_FALLBACK_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
+            "FFXI_FPS_DIVISOR", "LSAppNapIsDisabled", "MVK_CONFIG_FAST_MATH_ENABLED",
+            "MVK_CONFIG_USE_COMMAND_POOLING", "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS",
+            "ROSETTA_X87_PATH", "WINEDEBUG", "WINEESYNC", "WINEMSYNC", "WINEPREFIX",
+            "WINE_LARGE_ADDRESS_AWARE"
+        ]
         let dump = "exe: \(exe.path)\nargs: \(args)\ncwd: \(cwd.path)\n"
-            + e.keys.sorted().map { "\($0)=\(e[$0] ?? "")" }.joined(separator: "\n") + "\n"
+            + diagnosticKeys.sorted().compactMap { key in e[key].map { "\(key)=\($0)" } }
+                .joined(separator: "\n") + "\n"
         for name in ["last-spawn.txt", "last-spawn-\(Self.fileSafe(session)).txt"] {
-            try? dump.write(to: support.appendingPathComponent(name), atomically: true, encoding: .utf8)
+            let file = support.appendingPathComponent(name)
+            Self.writePrivateDiagnostic(dump, to: file)
         }
         // Detached, in its own session, so quitting the launcher does not take the game with
         // it. That means no Process object and no terminationHandler -- the child is not ours
@@ -1151,6 +1259,32 @@ final class Runner: ObservableObject {
         // detached pid is remembered so `stop` can still end the session on request.
         gamePID = pid
         return pid
+    }
+
+    /// Keep launch diagnostics private from their first byte, including on the first launch.
+    /// Foundation's atomic String.write creates a replacement file with default permissions
+    /// before the following chmod, briefly exposing paths and user-supplied settings.
+    private static func writePrivateDiagnostic(_ text: String, to file: URL) {
+        let temp = file.deletingLastPathComponent()
+            .appendingPathComponent(".last-spawn-\(UUID().uuidString).tmp")
+        let fd = open(temp.path, O_WRONLY | O_CREAT | O_EXCL, mode_t(0o600))
+        guard fd >= 0 else { return }
+        defer { unlink(temp.path) }
+        guard fchmod(fd, mode_t(0o600)) == 0 else { close(fd); return }
+        let data = Data(text.utf8)
+        let written = data.withUnsafeBytes { bytes -> Bool in
+            guard let base = bytes.baseAddress else { return true }
+            var offset = 0
+            while offset < bytes.count {
+                let n = write(fd, base.advanced(by: offset), bytes.count - offset)
+                if n < 0 && errno == EINTR { continue }
+                if n <= 0 { return false }
+                offset += n
+            }
+            return true
+        }
+        guard close(fd) == 0, written else { return }
+        _ = rename(temp.path, file.path)
     }
 
     /// Two sessions tailing one stdout file would each show the other's output.

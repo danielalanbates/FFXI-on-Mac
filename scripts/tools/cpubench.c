@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <windows.h>
 #include <stdlib.h>
+#include <string.h>
 
 static double now_s(void) {
   LARGE_INTEGER f, c;
@@ -39,14 +40,16 @@ static double bench_double(void) {
   return s;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
   double t;
-  FILE *out = fopen("C:\\cpubench.txt", "w");
+  /* --stdout keeps a one-off Wine comparison from writing into the playable prefix. */
+  int to_stdout = argc > 1 && strcmp(argv[1], "--stdout") == 0;
+  FILE *out = to_stdout ? stdout : fopen("C:\\cpubench.txt", "w");
   if (out == NULL) out = stdout;
   t = now_s(); volatile uint64_t r1 = bench_int();    fprintf(out, "int64    %7.3f s\n", now_s() - t);
   t = now_s(); volatile double   r2 = bench_x87();    fprintf(out, "x87/long %7.3f s\n", now_s() - t);
   t = now_s(); volatile double   r3 = bench_double(); fprintf(out, "double   %7.3f s\n", now_s() - t);
   (void) r1; (void) r2; (void) r3;
-  fclose(out);
+  if (out == stdout) fflush(out); else fclose(out);
   return 0;
 }

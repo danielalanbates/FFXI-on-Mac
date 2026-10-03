@@ -17,7 +17,7 @@ import Combine
 @MainActor
 final class Updater: ObservableObject {
     /// owner/repo the releases come from. One place to change if the repo ever moves.
-    static let repo = "danielalanbates/HorizonXI-on-Mac"
+    static let repo = "danielalanbates/FFXI-on-Mac"
 
     enum State: Equatable {
         case idle                     // nothing to do / up to date
@@ -102,9 +102,11 @@ final class Updater: ObservableObject {
             }
             // Already staged from a previous run this session? Jump straight to ready.
             if let staged = Self.stagedApp(for: release.version) {
-                state = .ready(release)
-                _ = staged
-                return
+                if (try? Self.validate(app: staged, version: release.version)) != nil {
+                    state = .ready(release)
+                    return
+                }
+                try? FileManager.default.removeItem(at: staged.deletingLastPathComponent())
             }
             try await download(release)
         } catch is CancellationError {
@@ -122,10 +124,14 @@ final class Updater: ObservableObject {
         req.setValue("FFXI-on-Mac", forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 20
         let (data, resp) = try await URLSession.shared.data(for: req)
-        guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+        guard let http = resp as? HTTPURLResponse else { throw Err("GitHub returned no HTTP response") }
+        // A rate limit or server error is not evidence that this app is current.
+        guard http.statusCode == 200 else { throw Err("GitHub update check failed (HTTP \(http.statusCode))") }
         guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let tag = obj["tag_name"] as? String,
-              let assets = obj["assets"] as? [[String: Any]] else { return nil }
+              let assets = obj["assets"] as? [[String: Any]] else {
+            throw Err("GitHub returned an invalid release")
+        }
         // Prefer the .dmg; that is what every release ships.
         guard let dmg = assets.first(where: { ($0["name"] as? String)?.lowercased().hasSuffix(".dmg") == true }),
               let urlStr = dmg["browser_download_url"] as? String,
@@ -179,6 +185,31 @@ final class Updater: ObservableObject {
         return FileManager.default.fileExists(atPath: app.path) ? app : nil
     }
 
+    /// Accept only this app's signed release, at the version GitHub advertised. A cached bundle
+    /// is checked again on every launch, since it can outlive the process that downloaded it.
+    nonisolated private static func validate(app: URL, version: String) throws {
+        let expectedID = Bundle.main.bundleIdentifier ?? "org.batesai.horizonxi-on-mac"
+        guard let bundle = Bundle(url: app),
+              bundle.bundleIdentifier == expectedID,
+              bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String == version else {
+            throw Err("update app identity or version does not match the release")
+        }
+        guard run("/usr/bin/codesign", ["--verify", "--strict", "--deep", app.path]).status == 0 else {
+            throw Err("update app signature is invalid")
+        }
+        func teamID(_ path: String) -> String? {
+            let result = run("/usr/bin/codesign", ["-dv", "--verbose=4", path])
+            guard result.status == 0 else { return nil }
+            return result.out.split(separator: "\n")
+                .first(where: { $0.hasPrefix("TeamIdentifier=") })?
+                .replacingOccurrences(of: "TeamIdentifier=", with: "")
+        }
+        guard let currentTeam = teamID(Bundle.main.bundlePath), !currentTeam.isEmpty,
+              teamID(app.path) == currentTeam else {
+            throw Err("update app is not signed by this developer")
+        }
+    }
+
     /// Mount the dmg, copy the `.app` out of it into `staged-<version>/`, strip its quarantine
     /// flag, and detach. Runs off the main actor (hdiutil + ditto are blocking).
     nonisolated private static func stage(dmg: URL, version: String) async throws {
@@ -206,6 +237,7 @@ final class Updater: ObservableObject {
             let dest = stageDir.appendingPathComponent("FFXI-on-Mac.app")
             let cp = run("/usr/bin/ditto", [app.path, dest.path])
             guard cp.status == 0 else { throw Err("could not copy the update out of the disk image") }
+            try validate(app: dest, version: version)
             // Downloaded => quarantined; strip it so the relaunch does not re-prompt Gatekeeper.
             _ = run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", dest.path])
         }.value
@@ -213,30 +245,31 @@ final class Updater: ObservableObject {
 
     // MARK: - Install + relaunch
 
-    /// Swap the running bundle for the staged one and relaunch. Because an app cannot overwrite
-    /// itself while running, this hands the job to a tiny detached shell script that waits for
-    /// this process to exit, ditto's the new bundle over the old path, and reopens it — then the
-    /// app quits itself.
+    /// Swap the running bundle for the staged one and relaunch. A detached helper waits for this
+    /// process to exit, verifies a copy beside the current app, then swaps it with rollback.
     func restartToUpdate() {
         guard case .ready(let release) = state,
               let staged = Self.stagedApp(for: release.version),
               Self.canSelfUpdate else { return }
+        do { try Self.validate(app: staged, version: release.version) }
+        catch {
+            state = .failed("Couldn't verify the update: \(error.localizedDescription)")
+            return
+        }
+        guard LiveClients.snapshot().clients.isEmpty else {
+            state = .failed("Finish your game before restarting for the update.")
+            return
+        }
         let current = Bundle.main.bundlePath
         let pid = ProcessInfo.processInfo.processIdentifier
 
         let script = Self.workDir().appendingPathComponent("apply-update.sh")
-        let body = """
-        #!/bin/zsh
-        # Wait for FFXI on Mac (pid \(pid)) to quit, then swap in the update and relaunch.
-        for i in {1..600}; do kill -0 \(pid) 2>/dev/null || break; sleep 0.5; done
-        /usr/bin/ditto "\(staged.path)" "\(current)" || exit 1
-        /usr/bin/xattr -dr com.apple.quarantine "\(current)" 2>/dev/null
-        /bin/rm -rf "\(staged.deletingLastPathComponent().path)"
-        /usr/bin/open "\(current)"
-        /bin/rm -f "\(script.path)"
-        """
         do {
-            try body.write(to: script, atomically: true, encoding: .utf8)
+            guard let bundled = Bundle.main.url(forResource: "apply-update", withExtension: "sh") else {
+                throw Err("update helper is missing")
+            }
+            try? FileManager.default.removeItem(at: script)
+            try FileManager.default.copyItem(at: bundled, to: script)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
         } catch {
             state = .failed("Couldn't prepare the update: \(error.localizedDescription)")
@@ -244,7 +277,7 @@ final class Updater: ObservableObject {
         }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        p.arguments = [script.path]
+        p.arguments = [script.path, String(pid), staged.path, current, Self.workDir().path]
         do { try p.run() } catch {
             state = .failed("Couldn't start the update: \(error.localizedDescription)")
             return
@@ -278,8 +311,9 @@ final class Updater: ObservableObject {
         p.arguments = args
         let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
         guard (try? p.run()) != nil else { return (-1, "") }
-        p.waitUntilExit()
+        // Drain before waiting: a failed codesign or hdiutil call can exceed the pipe buffer.
         let d = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
         return (p.terminationStatus, String(data: d, encoding: .utf8) ?? "")
     }
 }

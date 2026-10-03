@@ -1,6 +1,7 @@
 .DS_Store
 *.log
 app/.build/
+.build/
 app/build/
 dist/
 
@@ -31,4 +32,3 @@ accounts.json
 **/accounts.json
 *.bak
 *.macos26.bak
-
