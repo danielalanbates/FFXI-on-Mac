@@ -102,9 +102,11 @@ final class Updater: ObservableObject {
             }
             // Already staged from a previous run this session? Jump straight to ready.
             if let staged = Self.stagedApp(for: release.version) {
-                state = .ready(release)
-                _ = staged
-                return
+                if (try? Self.validate(app: staged, version: release.version)) != nil {
+                    state = .ready(release)
+                    return
+                }
+                try? FileManager.default.removeItem(at: staged.deletingLastPathComponent())
             }
             try await download(release)
         } catch is CancellationError {
@@ -179,6 +181,31 @@ final class Updater: ObservableObject {
         return FileManager.default.fileExists(atPath: app.path) ? app : nil
     }
 
+    /// Accept only this app's signed release, at the version GitHub advertised. A cached bundle
+    /// is checked again on every launch, since it can outlive the process that downloaded it.
+    nonisolated private static func validate(app: URL, version: String) throws {
+        let expectedID = Bundle.main.bundleIdentifier ?? "org.batesai.horizonxi-on-mac"
+        guard let bundle = Bundle(url: app),
+              bundle.bundleIdentifier == expectedID,
+              bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String == version else {
+            throw Err("update app identity or version does not match the release")
+        }
+        guard run("/usr/bin/codesign", ["--verify", "--strict", "--deep", app.path]).status == 0 else {
+            throw Err("update app signature is invalid")
+        }
+        func teamID(_ path: String) -> String? {
+            let result = run("/usr/bin/codesign", ["-dv", "--verbose=4", path])
+            guard result.status == 0 else { return nil }
+            return result.out.split(separator: "\n")
+                .first(where: { $0.hasPrefix("TeamIdentifier=") })?
+                .replacingOccurrences(of: "TeamIdentifier=", with: "")
+        }
+        guard let currentTeam = teamID(Bundle.main.bundlePath), !currentTeam.isEmpty,
+              teamID(app.path) == currentTeam else {
+            throw Err("update app is not signed by this developer")
+        }
+    }
+
     /// Mount the dmg, copy the `.app` out of it into `staged-<version>/`, strip its quarantine
     /// flag, and detach. Runs off the main actor (hdiutil + ditto are blocking).
     nonisolated private static func stage(dmg: URL, version: String) async throws {
@@ -206,6 +233,7 @@ final class Updater: ObservableObject {
             let dest = stageDir.appendingPathComponent("FFXI-on-Mac.app")
             let cp = run("/usr/bin/ditto", [app.path, dest.path])
             guard cp.status == 0 else { throw Err("could not copy the update out of the disk image") }
+            try validate(app: dest, version: version)
             // Downloaded => quarantined; strip it so the relaunch does not re-prompt Gatekeeper.
             _ = run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", dest.path])
         }.value
@@ -221,6 +249,11 @@ final class Updater: ObservableObject {
         guard case .ready(let release) = state,
               let staged = Self.stagedApp(for: release.version),
               Self.canSelfUpdate else { return }
+        do { try Self.validate(app: staged, version: release.version) }
+        catch {
+            state = .failed("Couldn't verify the update: \(error.localizedDescription)")
+            return
+        }
         let current = Bundle.main.bundlePath
         let pid = ProcessInfo.processInfo.processIdentifier
 
