@@ -174,6 +174,12 @@ the background prefix check waited for the full volume discovery, leaving a
 window where Wine could start its own foreground update. This ordering change
 compiled in a release build; it has not been exercised with a stale installed
 prefix or an actual game launch.
+Play also checks staleness while holding its launch lock, before changing
+shared client files or spawning Wine. If stale, it refuses that click and
+schedules prefix maintenance after releasing the lock; the user can press Play
+after maintenance finishes. This closes the manual-click race with startup
+maintenance. The release build compiled, but the real stale-prefix UI behavior
+is still unverified on the installed app.
 The beta for commit `0e9a93e` is staged at
 `/Users/daniel/Downloads/horizonxi-work/beta-0e9a93e/FFXI-on-Mac.app`.
 Apple accepted notarization submission `066a692e-bd6e-4f81-bbb6-06da8c5af8a3`;

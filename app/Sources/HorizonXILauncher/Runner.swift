@@ -817,6 +817,20 @@ final class Runner: ObservableObject {
             appendLine("!! " + why)
             return why
         }
+        // The startup check can still be between its stale read and maintenance lock when
+        // someone clicks Play. Check again while holding the launch lock: never hand a stale
+        // prefix to Wine, whose own update opens a foreground progress window.
+        if Self.prefixStale(install) {
+            let why = g.clientsLive
+                ? "Finish the running game before Wine updates its configuration, then press Play."
+                : "Wine needs to update its configuration. Press Play again when it finishes."
+            appendLine("i  " + why)
+            if !g.clientsLive {
+                // Runs after this call returns and its defer releases the launch lock.
+                Task { await syncPrefixIfStale(install) }
+            }
+            return why
+        }
         // The caller's writes to shared client files (pivot.ini branding, the boot profile's
         // account line), now that the lock is held and the gate has passed: a refused launch
         // rewrites nothing another world is using. Before `hostKey`, which reads the `--server`
