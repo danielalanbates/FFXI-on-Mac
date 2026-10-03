@@ -1681,7 +1681,7 @@ struct ContentView: View {
         .keyboardShortcut(.defaultAction)
         // Only the *absence* of an install should block Play. Once we have one — remembered
         // or found — a still-running background rescan must not hold the user up.
-        .disabled(selected == nil || (selectedRunning && !playAgain) || blocked)
+        .disabled(selected == nil || (selectedRunning && !playAgain) || blocked || runner.busy)
     }
 
     /// Every world playing right now, each with its own Stop. Stopping one never stops another.

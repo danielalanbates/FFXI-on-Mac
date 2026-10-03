@@ -14,7 +14,9 @@ The game also used two Wine builds on the same prefix. Renderer and PlayOnline r
 ran the wrapper Wine (`wine.inf` mtime 1775860812), then Play used the patched cooperative Wine
 (`wine.inf` mtime 1787146421). Each build could mark the prefix stale for the other. The fix
 splits on all whitespace, uses the same Wine build for registry edits and Play, and hides only
-the updater's own Wine app when a real one-time prefix update is needed. Build verification is
+the updater's own Wine app when a real one-time prefix update is needed. A genuine prefix update
+now holds the shared maintenance lock and disables Play until it finishes, so the client cannot
+start while Wine is rewriting the prefix. Build verification is
 complete; a cold launch after the current game session ends must confirm no update window.
 
 With the client idle on 2026-10-02, a read-only `reg query` through the patched Wine and active

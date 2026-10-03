@@ -401,6 +401,12 @@ final class Runner: ObservableObject {
     func syncPrefixIfStale(_ install: Install) async {
         guard !running, LiveClients.snapshot().clients.isEmpty else { return }
         guard await Task.detached(operation: { Self.prefixStale(install) }).value else { return }
+        // A stale prefix is shared maintenance. Hold the same lock as Play and Repair so a
+        // click during wineboot cannot start the client against half-updated registry files.
+        guard claimForMaintenance("Wine prefix update") else { return }
+        busy = true
+        defer { busy = false; endMaintenance() }
+        guard await Task.detached(operation: { Self.prefixStale(install) }).value else { return }
         appendLine("==> updating Wine's configuration (one time, about 20 s)")
         // Wine's update progress is a native Wine window. Hide only Wine processes launched for
         // this update, once each; never hide Terminal or any unrelated application.
