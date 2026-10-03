@@ -90,8 +90,7 @@ struct PerfSettings: Codable {
         msync = b(.msync, true)
         esync = b(.esync, false)
         silenceWineDebug = b(.silenceWineDebug, true)
-        // Development only: no UI toggle, and an old saved "on" must not resurface on a player's game.
-        metalHUD = ProcessInfo.processInfo.environment["HXI_METAL_HUD"] == "1"
+        metalHUD = false
         disableAppNap = b(.disableAppNap, true)
         fpsDivisorOne = b(.fpsDivisorOne, true)
         followSoundOutput = b(.followSoundOutput, true)
@@ -150,7 +149,7 @@ struct PerfSettings: Codable {
         // surfaces <= 32 px. See patches/dxvk-1.10.3-horizonxi-fencewait.patch.
         env["D3D9_RT_READBACK_FENCE"] = "32"
         env["MVK_CONFIG_USE_COMMAND_POOLING"] = "1"
-        if metalHUD { env["MTL_HUD_ENABLED"] = "1" }
+        env.removeValue(forKey: "MTL_HUD_ENABLED")  // never on a player's game
         // Only our patched d3d9.dll reads this; harmless (silently ignored) on the other
         // renderer pathways.
         if fpsDivisorOne { env["FFXI_FPS_DIVISOR"] = "1" }
