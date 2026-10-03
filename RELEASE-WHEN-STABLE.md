@@ -76,6 +76,13 @@ metadata is available offline, the `quiet-wine-update` worktree in Downloads
 and GitHub PR #36 are the authoritative branch state; do not treat a Git command
 that reports the home folder as a successful Drive sync. Keep this checkout
 pending rather than copying only source files into an unusable Git working tree.
+An isolated 2026-10-03 attempt to request just `.git/HEAD` through macOS
+`NSFileProviderManager` found the Google Drive item and domain but returned
+`NSFileProviderErrorDomain -2001` ("The application cannot be used right now")
+for both domain enumeration and the explicit download request. Its one-shot
+source is archived in Downloads under `horizonxi-work/archive-local-test/`.
+Use Finder's Google Drive **Available offline** action when the provider is
+working, then verify `.git/HEAD` can be read before running Git in that folder.
 
 The updater reads GitHub Releases, so branch commits and beta builds do not prompt public users
 to restart. Cut a new release only after the stability checks above pass. Confirm that the
