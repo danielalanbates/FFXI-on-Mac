@@ -4,8 +4,8 @@ You do not need Terminal. You do not need to know what Wine is. You press four b
 
 ## The short version
 
-1. **Drag *FFXI on Mac* into your Applications folder** and open it. Apple signed and notarised
-   it, so it opens normally — no scary warning, no right-click trick.
+1. **Drag *FFXI on Mac* into your Applications folder** and open it. Version 3.9 is signed but
+   not notarized; its release notes explain the extra first-open step if macOS blocks it.
 2. **Press *Install wine…*** on the front screen. About five minutes. It asks for your Mac
    password once (that's Rosetta, Apple's own translation layer). Four steps go green and you're
    done with it forever.

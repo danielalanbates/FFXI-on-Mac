@@ -5,11 +5,11 @@ no Terminal.
 
 <div align="center">
 
-### [⬇️ Download FFXI on Mac (.dmg)](https://github.com/danielalanbates/HorizonXI-on-Mac/releases/latest)
+### [⬇️ Download FFXI on Mac (.dmg)](https://github.com/danielalanbates/FFXI-on-Mac/releases/latest)
 
-[![Download](https://img.shields.io/badge/Download-FFXI%20on%20Mac-2ea44f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/danielalanbates/HorizonXI-on-Mac/releases/latest)
+[![Download](https://img.shields.io/badge/Download-FFXI%20on%20Mac-2ea44f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/danielalanbates/FFXI-on-Mac/releases/latest)
 
-5 MB · Apple Silicon · macOS 13 or later · signed and notarised by Apple, so it just opens
+Apple Silicon · macOS 13 or later · v3.9 is signed but not notarized
 
 </div>
 
@@ -22,8 +22,8 @@ It can also run a server on your own Mac if you want to play offline.
 
 ## How to play — the whole thing
 
-1. **Open the `.dmg` and drag *FFXI on Mac* into Applications.** Open it. No right-click trick,
-   no security warning — Apple signed and notarised it.
+1. **Open the `.dmg` and drag *FFXI on Mac* into Applications.** Version 3.9 is signed but not
+   notarized; see its release notes if macOS blocks the first open.
 2. **Press *Install wine…*** It's the button on the front screen. Go make coffee; it takes about
    five minutes and asks for your Mac password once.
 3. **Pick the world you want** from the **CHANGE WORLD** menu.
@@ -40,26 +40,19 @@ thing it couldn't find, and **Repair** fixes the usual causes automatically.
 
 ---
 
-## Is it good enough to actually play?
+## Performance status
 
-Yes — with one honest caveat about speed.
+These measurements predate macOS 27:
 
 | Measured on an M1 MacBook Pro, 8 GB (the only Mac this has been tested on) | Frame rate |
 | --- | --- |
 | Out in the world, every setting maxed at 4K | ~24 fps |
 | Out in the world, max settings, lighter zone | ~28 fps |
 
-That's perfectly playable for questing, crafting, chatting and most party content.
+On macOS 27.0.1, the M1 test machine has been reported unplayably slow. A fresh in-world FPS
+measurement is still needed; the earlier numbers do not describe current performance.
 
-**A faster Mac will likely do better, possibly a lot better.** The slowdown is the graphics card
-waiting, not the Mac-compatibility layer, and 8 GB of memory on an M1 is the weakest machine
-Apple Silicon comes in. FFXI's own ceiling is 60 fps, and this launcher already unlocks the
-client's 30 fps limiter — so 60 fps at 4K on an M2 Pro / M3 / M4 with 16 GB or more is a
-realistic hope. **Nobody has measured it yet.** If you have one of those Macs, please
-[open an issue](../../issues) with your model, memory, and the fps you see — that is the single
-most useful thing anyone can contribute right now.
-
-Why it isn't already faster, in full detail: [`docs/MAX4K.md`](docs/MAX4K.md).
+The current investigation is in [`docs/MACOS-27-PERFORMANCE.md`](docs/MACOS-27-PERFORMANCE.md).
 
 ---
 

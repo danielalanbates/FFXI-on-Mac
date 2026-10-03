@@ -9,6 +9,15 @@
 
 # Phase 2 — open beta packaging
 
+**Current release audit, 2026-10-02:** v3.9's GitHub disk image and contained app are Developer
+ID signed but **not notarized or stapled**. Gatekeeper reports `Unnotarized Developer ID` for
+both. The older 2.2 result below is historical. `scripts/package.sh` now refuses to produce a
+release image without a signing identity and verifies notarization before publishing an output.
+The first unpublished test was rejected because `libMoltenVK-1.4.2.dylib` lacked a Developer ID
+signature and secure timestamp. After signing that nested dylib, a second unpublished build
+passed Apple's app and disk-image notarization, stapling, and Gatekeeper assessment, including
+the app copied back out of the image. The GitHub v3.9 asset was not replaced.
+
 ## What ships today
 
 `scripts/package.sh` builds `FFXI-on-Mac-<version>.dmg`. As of 2.2 it is **signed with

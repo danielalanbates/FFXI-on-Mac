@@ -37,6 +37,17 @@ Not "it launched once." All of these, verified, not assumed:
 5. Say plainly in the notes what was verified and what wasn't. No "works" claims that
    were not actually tested.
 
+The v3.9 download is Developer ID signed but unnotarized: both its app and disk image fail
+Gatekeeper with `source=Unnotarized Developer ID`. For the next public release, use
+`HXI_SIGN_ID=<certificate SHA-1> ./scripts/package.sh <output-dir>` and require successful
+app and disk-image notarization, stapling, and `spctl` acceptance before uploading the image.
+`package.sh` must fail without the signing identity and leave an existing release image intact.
+An unpublished 3.9 packaging preflight on 2026-10-02 passed Apple's app and disk-image
+notarization, stapling, `codesign --verify --strict --deep`, and Gatekeeper checks, including the
+app copied back out of the image. It lives only in Downloads under `horizonxi-work/release-audit/`;
+the GitHub v3.9 asset remains the earlier unnotarized download. This checks the release pipeline,
+not the gameplay stability gates above.
+
 ## The local .app is a different thing from the release
 `/Applications/FFXI-on-Mac.app` must stay playable at ALL times — Daniel plays on it
 during development. It tracks the working tree: rebuild and reinstall it (`app/bundle.sh`,

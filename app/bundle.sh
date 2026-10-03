@@ -205,6 +205,7 @@ find "$APP" -exec xattr -c {} \; 2>/dev/null || true
 X87SC="$APP/Contents/Resources/x87sidecar_entitled"
 X87COOP="$APP/Contents/Resources/x87sidecar-coop"
 AUDIOFOLLOW="$APP/Contents/Resources/audiofollow.dylib"
+MOLTENVK="$APP/Contents/Resources/libMoltenVK-1.4.2.dylib"
 if [[ -n "${HXI_SIGN_ID:-}" ]]; then
   # The cooperative sidecar has no entitlements, so it can carry the hardened runtime and the
   # secure timestamp the notary demands of nested executables. --timestamp is required here:
@@ -217,12 +218,14 @@ if [[ -n "${HXI_SIGN_ID:-}" ]]; then
   # Nested dylibs need the hardened runtime and a secure timestamp too, or the notary rejects
   # the whole bundle on this one file.
   if [[ -f "$AUDIOFOLLOW" ]]; then codesign --force --options runtime --timestamp -s "$HXI_SIGN_ID" "$AUDIOFOLLOW"; fi
+  if [[ -f "$MOLTENVK" ]]; then codesign --force --options runtime --timestamp -s "$HXI_SIGN_ID" "$MOLTENVK"; fi
   codesign --force --options runtime -s "$HXI_SIGN_ID" "$APP"
 else
   if [[ -f "$X87SC" ]]; then
     codesign --force -s - --entitlements "$REPO/vendor/x87sidecar-entitlements.plist" "$X87SC"
   fi
   if [[ -f "$AUDIOFOLLOW" ]]; then codesign --force -s - "$AUDIOFOLLOW"; fi
+  if [[ -f "$MOLTENVK" ]]; then codesign --force -s - "$MOLTENVK"; fi
   codesign --force -s - "$APP"
 fi
 codesign --verify --deep --strict "$APP"
