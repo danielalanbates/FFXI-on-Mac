@@ -124,10 +124,14 @@ final class Updater: ObservableObject {
         req.setValue("FFXI-on-Mac", forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 20
         let (data, resp) = try await URLSession.shared.data(for: req)
-        guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+        guard let http = resp as? HTTPURLResponse else { throw Err("GitHub returned no HTTP response") }
+        // A rate limit or server error is not evidence that this app is current.
+        guard http.statusCode == 200 else { throw Err("GitHub update check failed (HTTP \(http.statusCode))") }
         guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let tag = obj["tag_name"] as? String,
-              let assets = obj["assets"] as? [[String: Any]] else { return nil }
+              let assets = obj["assets"] as? [[String: Any]] else {
+            throw Err("GitHub returned an invalid release")
+        }
         // Prefer the .dmg; that is what every release ships.
         guard let dmg = assets.first(where: { ($0["name"] as? String)?.lowercased().hasSuffix(".dmg") == true }),
               let urlStr = dmg["browser_download_url"] as? String,
@@ -307,8 +311,9 @@ final class Updater: ObservableObject {
         p.arguments = args
         let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
         guard (try? p.run()) != nil else { return (-1, "") }
-        p.waitUntilExit()
+        // Drain before waiting: a failed codesign or hdiutil call can exceed the pipe buffer.
         let d = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
         return (p.terminationStatus, String(data: d, encoding: .utf8) ?? "")
     }
 }
