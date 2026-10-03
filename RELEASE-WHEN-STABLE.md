@@ -68,6 +68,15 @@ client have exited. If a character is logged in, enter `/shutdown` in game chat 
 client to exit before replacing `/Applications/FFXI-on-Mac.app`. Never kill a live game process to
 make room for an install. Never test addons on hosted servers; use the local LandSandBoat world.
 
+As of 2026-10-03 the Drive checkout's `.git/HEAD` is a File Provider placeholder
+(`isDownloaded=0`), and reading it times out. Running Git there can silently
+walk up to an unrelated repository in the home folder. Verify `git rev-parse
+--show-toplevel` returns the Drive checkout before using it. Until its Git
+metadata is available offline, the `quiet-wine-update` worktree in Downloads
+and GitHub PR #36 are the authoritative branch state; do not treat a Git command
+that reports the home folder as a successful Drive sync. Keep this checkout
+pending rather than copying only source files into an unusable Git working tree.
+
 The updater reads GitHub Releases, so branch commits and beta builds do not prompt public users
 to restart. Cut a new release only after the stability checks above pass. Confirm that the
 downloaded app has the expected bundle ID, release version, valid code signature, and signing
