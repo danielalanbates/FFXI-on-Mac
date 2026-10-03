@@ -130,13 +130,30 @@ notarized app is archived in Downloads. The new installed app opened once with
 no Wine process observed five seconds later. A genuinely stale-prefix update
 has not been exercised, and no game FPS test was run.
 
+An isolated follow-up tried to create a new Wine prefix in Downloads with the
+same patched Wine and a one-shot copy of the launch/activation observer. The
+prefix timestamp reached the expected `wine.inf` mtime, but the outer `wineboot
+-u` process did not exit within two minutes. The observer received no matching
+application notifications and the diagnostic timed out, so this does **not**
+validate the hide behavior. Its source is retained under Downloads in
+`horizonxi-work/archive-local-test/prefix-window-check-inconclusive.swift`;
+the generated prefix was removed after stopping its own wineserver. No FFXI
+client or FPS measurement was involved. Do not repeat this test automatically.
+
+The internal data volume fell to roughly 2.3 GB free during this check, while
+swap remained around 6 GB and Google Drive/File Provider plus another game
+were active. This is a separate resource-pressure concern for future gameplay
+verification, not evidence that Wine or a rendering dependency regressed.
+
 1. If logged in, type `/shutdown` in game chat and wait for the client to exit. Do not kill it.
 2. Install the signed local beta, keeping the previous playable app archived in Downloads.
 3. Cold-launch once and confirm no Wine update window. Confirm the prefix timestamp stays at
    the patched Wine's `wine.inf` mtime after renderer/registry setup and Play.
-4. Use only local LandSandBoat for a short, manual DXVK FPS-log comparison at the same scene
-   with stock Rosetta and the current/newly built x87 helpers. Do not run addon tests on hosted
-   servers. Restore the faster proven setting only after a visually clean normal play session.
+4. Daniel explicitly withheld permission for independent game FPS tests on 2026-10-03. Only
+   after he authorizes one, use local LandSandBoat for a short, manual DXVK FPS-log comparison
+   at the same scene with stock Rosetta and the current/newly built x87 helpers. Do not run
+   addon tests on hosted servers. Restore the faster proven setting only after a visually clean
+   normal play session.
 5. Keep the public v3.9 release unchanged until the stability gates in
    `RELEASE-WHEN-STABLE.md` pass; no low-settings result should be called a performance win.
 
