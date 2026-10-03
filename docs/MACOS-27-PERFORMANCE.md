@@ -104,6 +104,13 @@ manufacture an idle test. Once the Mac is naturally idle, measure the shipped
 Play path with its FPS log on a local world at the same scene before and after
 any dependency change. Keep addons off hosted worlds.
 
+With no FFXI client running, one background cold launch of the installed,
+notarized local beta on 2026-10-03 showed only the launcher process after five
+seconds, no `wineboot` or wineserver, and the prefix timestamp still matched
+the patched Wine's `wine.inf` mtime (`1787146421`). This checks the idle launch
+path without opening a game. It does not verify the Wine window behavior after
+a genuinely stale prefix or measure gameplay speed.
+
 1. If logged in, type `/shutdown` in game chat and wait for the client to exit. Do not kill it.
 2. Install the signed local beta, keeping the previous playable app archived in Downloads.
 3. Cold-launch once and confirm no Wine update window. Confirm the prefix timestamp stays at
