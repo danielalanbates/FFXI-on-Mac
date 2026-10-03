@@ -80,3 +80,9 @@ document `--probe` and macOS 27 support.
    servers. Restore the faster proven setting only after a visually clean normal play session.
 5. Keep the public v3.9 release unchanged until the stability gates in
    `RELEASE-WHEN-STABLE.md` pass; no low-settings result should be called a performance win.
+
+The old `scripts/harness/bench.py` and `inworld.py` are historical measurements, not a safe
+one-command check for this install: their paths point at `~/Games`, and the harness calls
+`kill_all()` on Wine and game processes. Do not run them on Daniel's current wrapper or while
+any client is live. The local comparison needs a single controlled launch at a time and a
+confirmed `/shutdown` for any logged-in character.
