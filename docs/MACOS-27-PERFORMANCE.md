@@ -44,6 +44,26 @@ not exercise the renderer or registry writes, the launcher UI, or actual gamepla
   controlled local-world A/B test. This is a precaution based on the measured failure mode, not
   a new gameplay FPS result.
 
+### Offline x87 check on this Mac
+
+With no game client or local server running, `scripts/tools/cpubench.c` was compiled as a 32-bit
+Windows console program using `i686-w64-mingw32-gcc -O2 -mfpmath=387` and run once per setting
+through the patched Wine on the active, already-current prefix. Its `--stdout` option avoids
+writing the result into the playable prefix. The three runs used the same Wine build and source;
+only `ROSETTA_X87_PATH` changed. `ROSETTA_DISABLE_AOT` was not set by the shell.
+
+| 2026-10-02 setting | x87/long | double (also x87 with this compiler flag) |
+| --- | ---: | ---: |
+| Stock Rosetta | 4.262 s | 5.299 s |
+| Bundled `x87sidecar-coop` | 0.352 s | 0.125 s |
+| Fresh upstream `x87sidecar` | 0.360 s | 0.195 s |
+
+All exited 0; the prefix timestamp remained `1787146421\r\n`. The bundled helper therefore
+accelerates a direct 32-bit Wine process on macOS 27. This does **not** show that Ashita's child
+`horizon-loader.exe` receives the hook or that in-world FPS improves. The one-run numbers do not
+support replacing the bundled helper with upstream yet. Keep stock Rosetta as the launcher default
+until the local-world A/B and normal play check establish which path is faster and visually sound.
+
 Apple's [macOS 27 release notes](https://developer.apple.com/documentation/macos-release-notes/macos-27-release-notes)
 call for reassessing Rosetta compatibility after upgrading, but do not establish that Metal
 rendering regressed here. Upstream's [x87sidecar compatibility notes](https://github.com/athei/x87sidecar#compatibility-and-correctness)
