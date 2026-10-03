@@ -194,6 +194,13 @@ or whether those processes remain busy during play. Internal free space was
 about 10 GB and the external x10 volume about 64 GB (98% used). Check these
 processes and memory pressure again during a user-authorized game session
 before attributing the regression to Wine or changing system-wide indexing.
+A read-only `otool -L` audit of the patched Wine executable, 29 native Wine
+modules, and 13 bundled external libraries found no references to absent
+Homebrew or external-volume absolute library paths. Apple system libraries
+are supplied through the dyld shared cache, so their lack of a visible file
+at `/usr/lib` or `/System/Library` is not a missing dependency. This audit
+does not cover libraries Wine loads dynamically or prove the renderer works
+in-game; it narrows the "broken dependency" hypothesis only for static links.
 
 The last game-session log (2026-10-02) was only about 163 KB, but after login
 it contained 1,556 repeated `ConvertFormat: Unknown format encountered: 65`
