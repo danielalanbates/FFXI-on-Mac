@@ -168,6 +168,12 @@ change, so this is **not** evidence that Wine came forward or that the hide
 hook succeeded. The source for the one-shot check is archived in Downloads as
 `horizonxi-work/archive-local-test/prefix-window-check-resolved-inconclusive.swift`.
 The generated prefix was removed. Do not rerun this test automatically.
+The launcher's startup task now checks the remembered install's prefix before
+consuming a queued `--play` request. Previously that command ran first and
+the background prefix check waited for the full volume discovery, leaving a
+window where Wine could start its own foreground update. This ordering change
+compiled in a release build; it has not been exercised with a stale installed
+prefix or an actual game launch.
 
 The internal data volume fell to roughly 2.3 GB free during this check, while
 swap remained around 6 GB and Google Drive/File Provider plus another game

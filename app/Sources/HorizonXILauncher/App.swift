@@ -265,6 +265,10 @@ struct ContentView: View {
             if selected == nil, let remembered = Install.remembered() {
                 selected = remembered
                 installs = [remembered]
+                // A forwarded --play must not reach Wine before its prefix is current.
+                // This normally returns immediately; a stale prefix is updated once
+                // under Runner's maintenance lock before commands are consumed.
+                await runner.syncPrefixIfStale(remembered)
             }
             // Press Play as soon as the install is known. For Shortcuts/Stream Deck users, and
             // for this project's own unattended tests (see docs/SERVERS-WORKLOG.md).
