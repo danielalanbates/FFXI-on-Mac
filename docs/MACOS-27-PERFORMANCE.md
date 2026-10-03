@@ -180,13 +180,14 @@ schedules prefix maintenance after releasing the lock; the user can press Play
 after maintenance finishes. This closes the manual-click race with startup
 maintenance. The release build compiled, but the real stale-prefix UI behavior
 is still unverified on the installed app.
-The beta for commit `0e9a93e` is staged at
-`/Users/daniel/Downloads/horizonxi-work/beta-0e9a93e/FFXI-on-Mac.app`.
-Apple accepted notarization submission `066a692e-bd6e-4f81-bbb6-06da8c5af8a3`;
+The current beta for commit `d57976e` is staged at
+`/Users/daniel/Downloads/horizonxi-work/beta-d57976e/FFXI-on-Mac.app`.
+Apple accepted notarization submission `7716261e-4629-4a92-a0c3-5b2880890989`;
 the app was stapled and passed strict signature and Gatekeeper checks. The
 installed launcher was still running, so this beta was **not** copied to
 `/Applications/FFXI-on-Mac.app`. When the launcher and all clients have exited
-normally, archive the installed app in Downloads and install this beta.
+normally, archive the installed app in Downloads and install this beta. The
+earlier `beta-0e9a93e` bundle remains in Downloads as a superseded build.
 
 The internal data volume fell to roughly 2.3 GB free during this check, while
 swap remained around 6 GB and Google Drive/File Provider plus another game
