@@ -832,26 +832,29 @@ struct ContentView: View {
                     Text(r.0).tag("\(r.1)x\(r.2)")
                 }
             }
+            .help("World rendering size. Higher values look sharper and use more GPU power.")
             Picker("Texture resolution", selection: $graphics.textureResolution) {
                 ForEach([512, 1024, 2048, 4096], id: \.self) { Text(String($0)).tag($0) }
             }
+            .help("Detail of world textures. Higher values use more graphics memory.")
             Picker("Mip mapping", selection: $graphics.mipMapping) {
                 ForEach(0...4, id: \.self) { Text($0 == 0 ? "Off" : String($0)).tag($0) }
             }
+            .help("Smooths distant textures. Higher values use stronger filtering.")
             Picker("Textures", selection: $graphics.textureCompression) {
                 Text("Uncompressed").tag(0)
                 Text("Compressed").tag(2)
             }
+            .help("Compressed uses less graphics memory; uncompressed preserves texture quality.")
             Toggle("Bump mapping", isOn: $graphics.bumpMapping)
+                .help("Adds raised-looking detail to some surfaces.")
             Toggle("Environmental animation", isOn: $graphics.environmentAnimation)
+                .help("Animates effects such as water and weather.")
             Divider()
             Toggle("Remember window size", isOn: $graphics.rememberWindowSize)
-            Text("Resize the game window however you like; the next Play opens at that size, "
-                 + "drawn at full detail. FFXI cannot redraw at a new size while running, so a "
-                 + "window enlarged mid-game is stretched until the next launch.")
-                .font(.system(size: 12)).foregroundStyle(Vana.muted)
-                .fixedSize(horizontal: false, vertical: true)
+                .help("Opens at the last window size on the next Play. Resizing during play stretches the image until then.")
             Toggle("Match interface to render resolution", isOn: $graphics.uiFollowsResolution)
+                .help("Draws menus and text at the world resolution. Turn off to choose a larger interface.")
             if !graphics.uiFollowsResolution {
                 Picker("Interface resolution", selection: Binding(
                     get: { "\(graphics.uiWidth)x\(graphics.uiHeight)" },
@@ -863,17 +866,16 @@ struct ContentView: View {
                         Text(r.0).tag("\(r.1)x\(r.2)")
                     }
                 }
-                Text("FFXI draws the interface at this resolution and scales it up to the "
-                     + "window, so a lower number means bigger menus and text. The world is "
-                     + "still drawn at the render resolution above.")
-                    .font(.system(size: 12)).foregroundStyle(Vana.muted)
-                    .fixedSize(horizontal: false, vertical: true)
+                .help("Lower values make menus and text larger without changing world detail.")
             }
 
             HStack {
                 Button("Low") { graphics = .lowSpec }
+                    .help("Lower resolution and texture memory use.")
                 Button("Balanced") { graphics = .balanced }
+                    .help("1080p with standard texture detail.")
                 Button("Max (4K)") { graphics = .max4K }
+                    .help("4K with maximum texture detail. Uses more graphics memory.")
                 Spacer()
                 Button("Cancel") { showGraphics = false }
                 Button("Apply") {
