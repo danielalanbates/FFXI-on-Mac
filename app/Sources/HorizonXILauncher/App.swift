@@ -1322,7 +1322,6 @@ struct ContentView: View {
                         .disabled(!Guide.isAvailable || !Guide.allowed(by: addonPolicy))
                         .help(vanaguideHelp)
                     Toggle("Large address aware", isOn: $perf.largeAddressAware)
-                    Toggle("Show frame rate (Metal HUD)", isOn: $perf.metalHUD)
                     Divider()
                     RetroAchievementsSection(ra: ra, gameDir: active?.gameDir,
                                              log: { runner.appendLine($0) })

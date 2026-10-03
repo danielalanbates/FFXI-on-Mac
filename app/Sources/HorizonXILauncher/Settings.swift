@@ -90,7 +90,7 @@ struct PerfSettings: Codable {
         msync = b(.msync, true)
         esync = b(.esync, false)
         silenceWineDebug = b(.silenceWineDebug, true)
-        metalHUD = b(.metalHUD, false)
+        metalHUD = false  // overlay removed from the UI; an old saved "on" must not resurface
         disableAppNap = b(.disableAppNap, true)
         fpsDivisorOne = b(.fpsDivisorOne, true)
         followSoundOutput = b(.followSoundOutput, true)
