@@ -157,6 +157,18 @@ no Wine process seen after five seconds. The installed executable's SHA-256
 matched the notarized beta. None of these checks exercises a genuinely stale
 prefix or game performance.
 
+After internal free space recovered, a fresh disposable prefix and three
+one-shot stale-prefix updates completed with Wine exit 0 and returned its
+`.update-timestamp` to the matching `wine.inf` mtime. No FFXI client was
+launched. The corrected NSWorkspace observer matched no Wine app in those
+runs. In one of two runs that sampled the frontmost app during maintenance, it
+changed for about eight seconds, then returned to the original app; the other
+run saw no change. The sampling code did not record the process on the first
+change, so this is **not** evidence that Wine came forward or that the hide
+hook succeeded. The source for the one-shot check is archived in Downloads as
+`horizonxi-work/archive-local-test/prefix-window-check-resolved-inconclusive.swift`.
+The generated prefix was removed. Do not rerun this test automatically.
+
 The internal data volume fell to roughly 2.3 GB free during this check, while
 swap remained around 6 GB and Google Drive/File Provider plus another game
 were active. This is a separate resource-pressure concern for future gameplay
