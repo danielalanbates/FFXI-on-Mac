@@ -17,7 +17,7 @@ import Combine
 @MainActor
 final class Updater: ObservableObject {
     /// owner/repo the releases come from. One place to change if the repo ever moves.
-    static let repo = "danielalanbates/HorizonXI-on-Mac"
+    static let repo = "danielalanbates/FFXI-on-Mac"
 
     enum State: Equatable {
         case idle                     // nothing to do / up to date

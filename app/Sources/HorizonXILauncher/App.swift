@@ -1970,6 +1970,7 @@ struct ContentView: View {
         }
         selected?.remember()
         await recheckAsync()
+        if let i = selected { await runner.syncPrefixIfStale(i) }
     }
 
     private func recheck() { Task { await recheckAsync() } }

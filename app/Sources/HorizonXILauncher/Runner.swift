@@ -292,6 +292,7 @@ final class Runner: ObservableObject {
             self?.endMaintenance()
             self?.busy = false
             self?.appendLine("==> repair exited \(code)")
+            if code == 0, let self { Task { await self.syncPrefixIfStale(install) } }
         }
     }
 
@@ -352,6 +353,44 @@ final class Runner: ObservableObject {
         let link = games.appendingPathComponent(name)
         try? FileManager.default.removeItem(at: link)
         try? FileManager.default.createSymbolicLink(at: link, withDestinationURL: URL(fileURLWithPath: dataPath))
+    }
+
+    /// Wine compares the prefix's `.update-timestamp` with `wine.inf`'s mtime at every start and,
+    /// when they differ (a new wrapper, a Repair, a copied drive), stops to "update the Wine
+    /// configuration" -- with Mono/Gecko install prompts -- in front of the game. Do that update
+    /// here, quietly, while nothing is running, so Play never meets it.
+    nonisolated static func prefixStale(_ install: Install) -> Bool {
+        let inf = install.sharedSupport.appendingPathComponent("wine/share/wine/wine.inf")
+        guard let m = (try? FileManager.default.attributesOfItem(atPath: inf.path))?[.modificationDate] as? Date
+        else { return false }
+        let ts = install.prefix.appendingPathComponent(".update-timestamp")
+        guard let txt = try? String(contentsOf: ts, encoding: .utf8) else { return true }
+        let first = txt.split(whereSeparator: { $0 == " " || $0 == "\n" }).first.map(String.init) ?? ""
+        if first == "disable" { return false }
+        return Int(first) != Int(m.timeIntervalSince1970)
+    }
+
+    /// Runs `wineboot -u` with Mono and Gecko disabled (their installers are what ask questions).
+    nonisolated static func updatePrefix(_ install: Install) {
+        var env = ProcessInfo.processInfo.environment
+        env["WINEPREFIX"] = install.prefix.path; env["WINEDEBUG"] = "-all"
+        env["WINEDLLOVERRIDES"] = "mscoree,mshtml="
+        env.removeValue(forKey: "DYLD_FALLBACK_LIBRARY_PATH"); env.removeValue(forKey: "DYLD_LIBRARY_PATH")
+        let p = Process(); p.executableURL = install.wine; p.arguments = ["wineboot", "-u"]; p.environment = env
+        p.standardOutput = Pipe(); p.standardError = Pipe()
+        try? p.run(); p.waitUntilExit()
+        let k = Process(); k.executableURL = install.wineserver; k.arguments = ["-w"]
+        k.environment = ["WINEPREFIX": install.prefix.path]
+        try? k.run(); k.waitUntilExit()
+    }
+
+    /// Background check at launcher start and after a Repair. Skipped while any client runs.
+    func syncPrefixIfStale(_ install: Install) async {
+        guard !running, LiveClients.snapshot().clients.isEmpty else { return }
+        guard await Task.detached(operation: { Self.prefixStale(install) }).value else { return }
+        appendLine("==> updating Wine's configuration (one time, about 20 s)")
+        await Task.detached { Self.updatePrefix(install) }.value
+        appendLine("==> Wine is up to date")
     }
 
     /// Make sure the wrapper's installer prefix exists (see `Install.installerPrefix`). Slow the
