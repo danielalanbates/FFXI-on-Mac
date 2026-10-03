@@ -30,6 +30,12 @@ complete; a cold launch after the current game session ends must confirm no upda
   reported the macOS 27 Rosetta runtime **supported**. That does not prove the older bundled
   helper attached to the live HorizonXI client. Do not replace the shipping helper without a
   local-world A/B test and real play-session check.
+- Upstream's current cooperative smoke test explicitly checks only correct execution, not x87
+  JIT acceleration. The project's own August measurement found 2.98 fps with a failed cooperative
+  hook versus 58.02 fps with stock Rosetta in the same rules scene. On macOS 27 the launcher now
+  defaults to stock Rosetta; `FFXI_ON_MAC_X87=1` is an explicit experimental override for a
+  controlled local-world A/B test. This is a precaution based on the measured failure mode, not
+  a new gameplay FPS result.
 
 Apple's [macOS 27 release notes](https://developer.apple.com/documentation/macos-release-notes/macos-27-release-notes)
 call for reassessing Rosetta compatibility after upgrading, but do not establish that Metal
@@ -43,6 +49,7 @@ document `--probe` and macOS 27 support.
 3. Cold-launch once and confirm no Wine update window. Confirm the prefix timestamp stays at
    the patched Wine's `wine.inf` mtime after renderer/registry setup and Play.
 4. Use only local LandSandBoat for a short, manual DXVK FPS-log comparison at the same scene
-   with the current and newly built x87 helpers. Do not run addon tests on hosted servers.
+   with stock Rosetta and the current/newly built x87 helpers. Do not run addon tests on hosted
+   servers. Restore the faster proven setting only after a visually clean normal play session.
 5. Keep the public v3.9 release unchanged until the stability gates in
    `RELEASE-WHEN-STABLE.md` pass; no low-settings result should be called a performance win.

@@ -159,19 +159,13 @@ struct PerfSettings: Codable {
         // x87 acceleration, the way athei's patched wine actually wants to be told about it.
         //
         // `ROSETTA_X87_PATH` is read by wine's own loader (athei/wine commit 3804c30b, "ntdll:
-        // HACK: Recognize ROSETTA_X87_PATH and attach x87sidecar cooperatively"): **every** i386
-        // wine process re-execs itself through the named sidecar and does the task-port handshake
-        // in __wine_main. That is the whole point — the client this project cares about is a
-        // *grandchild* (Ashita-cli.exe injects into horizon-loader.exe and exits), and only this
-        // pathway reaches it.
+        // HACK: Recognize ROSETTA_X87_PATH and attach x87sidecar cooperatively"): i386 wine
+        // processes re-exec through the named sidecar. The client is an Ashita grandchild, so
+        // the launcher must verify in-world speed before treating a handshake as acceleration.
         //
         // Wrapping the command instead — `x87sidecar-coop --cooperative wine Ashita-cli.exe` —
-        // accelerates exactly one process: the injector, which exits within seconds, taking the
-        // sidecar with it and leaving the game unaccelerated. Measured 2026-08-21: one handshake
-        // with the wrapper, two with this variable, and the difference in-world is the whole 2.5x.
-        // That misuse is what made x87 look broken for a day, and it cost the frame rate twice —
-        // once by not accelerating, and once more because ROSETTA_DISABLE_AOT was being set by
-        // hand on top of it. The sidecar disables AOT itself when it attaches; do not set it here.
+        // reaches only the short-lived injector. Do not set ROSETTA_DISABLE_AOT by hand: when
+        // the x87 hook fails, that forced slow path caused the measured 19x regression.
         if x87, let sidecar = X87Sidecar.coopBinary() {
             env["ROSETTA_X87_PATH"] = sidecar.path
         }

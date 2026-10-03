@@ -889,7 +889,19 @@ final class Runner: ObservableObject {
         // wrapper is one bundle for every world, so with several playing it names them all.
         let playingWorlds = Set(Runner.playing.values.map(\.world)).sorted().joined(separator: " + ")
         DockIcon.apply(to: install, world: playingWorlds) { [weak self] in self?.appendLine($0) }
-        var env = perf.environment(for: install, x87: useX87, world: worldName)
+        // Cooperative x87 has not been shown to install its JIT hook on macOS 27. On 26.5.2
+        // this exact failure cost 19x in the measured rules scene (docs/X87-WALL.md). Keep the
+        // last playable fallback, stock Rosetta, until a local-world A/B proves the new helper.
+        let x87Enabled = useX87 && (ProcessInfo.processInfo.operatingSystemVersion.majorVersion < 27
+                                    || ProcessInfo.processInfo.environment["FFXI_ON_MAC_X87"] == "1")
+        var env = perf.environment(for: install, x87: x87Enabled, world: worldName)
+        if !x87Enabled {
+            env.removeValue(forKey: "ROSETTA_X87_PATH")
+            env.removeValue(forKey: "ROSETTA_DISABLE_AOT")
+        }
+        if useX87 && !x87Enabled {
+            appendLine("i  macOS 27: x87 sidecar off until its in-world speed is verified")
+        }
         if g.sync != wantSync {
             env["WINEMSYNC"] = g.sync == .msync ? "1" : "0"
             env["WINEESYNC"] = g.sync == .esync ? "1" : "0"
@@ -902,25 +914,13 @@ final class Runner: ObservableObject {
                                                           log: { [weak self] in self?.appendLine($0) }) {
             env["CX_ROOT"] = cx.path
         }
-        // x87 acceleration, two generations:
-        //  * Cooperative (preferred): x87sidecar --cooperative launching the patched CX wine
-        //    (athei/wine-build at COOP_WINE). Every wine process — including horizon-loader,
-        //    a *grandchild* via Ashita — does its own handshake and flushes its own i-cache,
-        //    which is the only reliable way since macOS 26.5.2's Rosetta. No entitlements.
-        //  * attach-by-pid (legacy, x87sidecar_entitled in Resources): broken on 26.5.2 —
-        //    cross-process i-cache flush is unreliable, the client page-faults minutes after
-        //    attach. Kept only as a fallback for older macOS; the binary is currently NOT
-        //    bundled for that reason.
-        // ROSETTA_DISABLE_AOT only pays off when a sidecar actually patches x87; without one
-        // it forces Rosetta's slow path and costs ~half the stock frame rate (measured
-        // 2026-08-19: ~5 fps vs ~11 stock). Set it only when acceleration will engage.
-        // A world may have to run without x87 acceleration (see Server.x87).
-        // x87 acceleration rides on ROSETTA_X87_PATH now (set in PerfSettings.environment), so
-        // there is nothing to wrap here: wine re-execs every i386 process through the sidecar
-        // itself, including the client Ashita spawns. See Settings.swift for the measurements.
+        // The patched wine can re-exec i386 children through the cooperative sidecar via
+        // ROSETTA_X87_PATH. A live sidecar only proves that it launched, not that the client's
+        // x87 hook engaged; the failed-hook measurements in docs/X87-WALL.md are severe.
+        // Keep macOS 27 on stock Rosetta until a local-world A/B validates acceleration.
         if !useX87 {
             appendLine("i  x87 acceleration is off for this world — its client exits at boot with it on.")
-        } else if X87Sidecar.coopBinary() == nil {
+        } else if x87Enabled && X87Sidecar.coopBinary() == nil {
             appendLine("!! x87sidecar-coop missing from the bundle — the client will run at "
                        + "Rosetta's stock x87 speed (single-digit fps in-world).")
         }
@@ -944,7 +944,7 @@ final class Runner: ObservableObject {
             exe = wine
             args = [injector, bootFile]
             appendLine("==> wine: \(wine.path)"
-                       + (useX87 && X87Sidecar.coopBinary() != nil ? " + x87 sidecar" : ""))
+                       + (x87Enabled && X87Sidecar.coopBinary() != nil ? " + x87 sidecar" : ""))
         } else {
             exe = install.wine
             args = [injector, bootFile]
@@ -1158,10 +1158,14 @@ final class Runner: ObservableObject {
         FileManager.default.createFile(atPath: out.path, contents: nil)
         var e = ProcessInfo.processInfo.environment
         for (k, v) in env { e[k] = v }
+        if env["ROSETTA_X87_PATH"] == nil {
+            e.removeValue(forKey: "ROSETTA_X87_PATH")
+            e.removeValue(forKey: "ROSETTA_DISABLE_AOT")
+        }
         // The RetroAchievements key never reaches the game (or last-spawn.txt).
         e.removeValue(forKey: RetroAchievements.envKey)
-        // Record exactly what was spawned. Diffing this against a hand-run that works is how
-        // the launch-death and Gaia XI exits were bisected; it costs one small file per launch.
+        // Record the launch path and relevant performance settings. Diffing these against a
+        // hand-run helped bisect launch failures without retaining the full inherited environment.
         // last-spawn.txt is always the newest launch; each session also keeps its own.
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("HorizonXI-on-Mac", isDirectory: true)
