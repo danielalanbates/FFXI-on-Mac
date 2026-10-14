@@ -267,3 +267,86 @@ after each `!additem` — server-side quirk, harmless.
 
 **Pattern worth remembering:** on this Ashita 4.3 + Wine/Rosetta stack, *any* Lua addon that gets
 hot enough to JIT can hit that fault; `jit.off()` at the top of the entry file is the fix.
+
+## Native friend list — dynamic reverse engineering, 2026-09-12
+
+Context: HorizonXI declined friend-list addons because their team "is currently working
+on getting the in-game friends list function to work." Neither upstream LandSandBoat nor
+Horizon's public repos show that work, so this session measured what the native feature
+actually needs. All testing on the local LSB world only.
+
+### Proven by live packet capture
+
+A packet logger (both directions, id + hexdump) was added to the harness addon and
+`/friendlist`, `/flist`, `/befriend <name>` were issued in world with the FFXIFriendList
+addon unloaded. Result: **zero packets leave the client.** Every command is refused
+client-side with "You cannot use that command at this time." The gate is inside
+FFXiMain.dll, before any network involvement. No server implementation alone —
+LandSandBoat's or anyone's — can light this up.
+
+### Client internals mapped (from a live in-memory dump)
+
+FFXiMain.dll was dumped from the running process (base 0x01CA0000, size 0x00BDF000 —
+the dump and `analyze.py` live in `~/Downloads/ffxi-friendlist-re/`, never committed):
+
+- **Text-command table**: 277 entries × 0x18 bytes at VA `0x1ff3418`. Layout:
+  `char name[16]; u32 pad; u16 command_id; u16 flags`.
+  `/befriend` id=0x0d flags=0x5b · `/friendlist` & `/flist` id=0x3d flags=0x51 ·
+  `/blacklist` id=0x3b flags=0x59 · `/search` id=0x3a flags=0x59.
+- **Flags are not the gate.** Live-patching `/friendlist`/`/befriend` flags to 0x59
+  (matching working `/blacklist`) changes nothing.
+- **Dispatcher**: name lookup at `0x1d1fe53`, then `0x1d20020(command_id)` executes.
+  `0x1d20110` translates command_id → *menu id* through a 0xe4-pair s16 table at
+  `0x1fcabb0`: `/search`→0x0c, **`/friendlist`→0x0d**, `/blacklist`→0x0e,
+  `/befriend`→0x83. Search (0x0c) and blacklist (0x0e) open; friend (0x0d) is refused —
+  so the gate sits in the menu system's open-check for that one menu id.
+- **The friend menus ship in the client**: resource names `menu friend`,
+  `menu flistmai`, `menu flmes`, `menu olstat` are present in loaded memory.
+
+### What "making it work" therefore requires
+
+1. **Un-gate menu 0x0d** — find the availability check the menu open path performs for
+   the friend menu (almost certainly a "POL friend service connected" flag that the
+   private-server loaders never set) and force it true. Static follow-up in Ghidra on
+   the dump: walk `0x1d20020`'s consumer to the menu-open routine, diff the 0x0c/0x0e
+   paths against 0x0d.
+2. **Feed the menu data** — once it opens, find the structure `flistmai` reads and
+   populate it (Ashita addon/plugin writing memory, sourced from any backend: LSB DB
+   via custom packets, or a hosted API as Tanyrus does).
+3. **Handle add/remove/status** — hook the menu's action callbacks the same way.
+
+This is precisely the work Horizon must be doing privately (they control loader +
+client patches + server). Pathways for a future session, in order of value:
+
+- **A (recommended):** Ghidra session on the dump, starting from the addresses above.
+  The gate flag is one bool; finding it may be hours, not weeks. Test flips live via
+  the harness `LUA` channel (see below).
+- **B:** If the gate proves to be deep POL plumbing (polcore COM state), extend the
+  loader's IPOLCoreCom emulation instead (see `LandSandBoat/xiloader` `src/polcore.h`).
+- **C:** Fall back to the overlay addon (works today, archived in this repo) or
+  Tanyrus's — blocked only by Horizon approval politics, not technology.
+
+### New harness capabilities (this session)
+
+The Mac-side harness addon gained, both guarded behind the pipe being armed:
+
+- **Packet logger**: every world packet in/out → `/tmp/ffxi-pipe/packets.log`
+  (`HH:MM:SS C2S/S2C 0xID len=N <first 96 bytes hex>`).
+- **In-process Lua eval**: a `cmd.txt` line `LUA <expr>` runs inside the game's Lua
+  state; result/error appended to `/tmp/ffxi-pipe/lua.out`. This is what made the
+  memory reconnaissance and live patching possible — `ashita.memory.*` is fully
+  reachable. Pattern quirk: `ashita.memory.find` wants **unspaced** hex ("46494E414C");
+  spaced patterns silently return 0.
+
+## CORRECTION and resolution — same day, 2026-09-12 (later)
+
+The section above is **wrong about the gate**. "You cannot use that command at this time" was
+caused by a modal *Start Seekers of Adoulin?* prompt that was open on screen; it blocks every menu
+(`/blacklist` and `/search` were refused too). With the prompt dismissed, the native Friend List
+opens normally and shows "No friends registered." The flags/menu-0x0d theory is retracted.
+
+The native friend list has since been made to work, verified with two real characters on the
+local LSB world: **https://github.com/danielalanbates/ffxi-native-friendlist**. The `nativefriends`
+addon redirects FFXiMain's per-slot friend fetch (`0x1d87720` → PlayOnline `0x1d91350`) to entries
+built from `friendsd` (a small service beside the LSB database), and redraws the open menu live.
+Full internals in that repo's `docs/CLIENT_INTERNALS.md`.
