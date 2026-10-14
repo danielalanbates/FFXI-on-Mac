@@ -47,6 +47,27 @@ with `pgrep -fl "FFXI-on-Mac|horizon-loader|wine"` first and wait for an idle mo
 The GitHub release is the opposite: slow, gated, at most weekly. Fast local .app,
 rare public release.
 
+## Answering "where do we stand" in one command
+
+```sh
+scripts/release-check.sh
+```
+
+It reports and never acts: the installed .app's version and build date, whether any launcher
+source is newer than it (so you know the local build is behind the tree), whether a client or
+launcher is running (so you know a rebuild would be unsafe *right now*), the latest tag and
+how many days and commits ago it was, and the human checklist above in short form. Nothing in
+it builds, installs, tags or pushes, because every one of those is a decision.
+
+Its git calls are on a ten-second leash. This repository lives in iCloud Drive, and when
+iCloud evicts or re-downloads a pack file, git blocks in `mmap` for minutes — a status report
+that hangs forever is worse than one that says "git did not answer".
+
+**As of 2026-08-24 it says:** the installed app is v3.8 build 19 from 2026-08-22 with 22
+launcher sources newer than it, a client was running so the bundle must not be touched, and
+**there is no tag at all** — nothing has ever been released. So the first release is
+outstanding rather than overdue: it is waiting on the checklist above, not on the clock.
+
 ## Why this note exists
 This project has repeatedly reached a good state mid-session and then lost it to the
 next round of experiments. Cutting a release at the stable point is what makes the
