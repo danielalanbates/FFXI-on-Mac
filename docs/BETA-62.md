@@ -251,3 +251,94 @@ nothing would be ended while its wineserver runs.
 - The row summary joins the post's items into one line; long posts are cut at two lines.
 - The sheet's link opens the browser (the only thing that leaves the launcher); the post's page
   is client-rendered and finds only posts still in the newest 30 (else its `.json` fallback).
+
+## Review fixes
+
+An adversarial review of `beta-b61..beta-b62`, plus a Gemini 2.5 Flash pass over the same diff.
+
+- **Adoption could take CatsEyeXI's launcher's game, and its Stop would end that launcher.**
+  `scripts/catseye-launcher.sh` runs CatsEyeXI's own launcher in the wrapper's wine and the
+  selected prefix; the loader its Play starts shares that launcher's process group. Every rule
+  above held, so the group was adopted, and Stop signals every wine process in the group. A group
+  is now adopted only when each of its clients is a loader or injector (`Leftovers.candidates`);
+  one that also holds a Windows program nobody can name (that launcher, an installer, a tool)
+  stays elsewhere. This launcher's own process group (its jobs) is never adopted.
+- **Adoption ran while a job of this launcher was under way.** With the world's session busy
+  (Repair, an update, CatsEyeXI's launcher), adoption opened "HorizonXI #2" and pointed the
+  world's button at it, away from the job. The doc comment already said "not while a job is under
+  way"; `refreshElsewhere` now checks `Runner.workInFlight` before adopting.
+- **A client of no listed world** was adopted as "Unknown world" (or its host) with
+  `horizonxi.ini` as its profile, so its exit wrote its window size into HorizonXI's boot
+  profile. It now stays elsewhere, as in b61.
+- **The cleanup held up the refresh.** `endServerless` (1 s, then up to 3 s for SIGTERM) was
+  awaited inside `refreshElsewhere`, which start-up awaits before a forwarded `--play`, and the
+  RUNNING list was then published from a scan seconds old. It runs in a task of its own now.
+- **`otherLauncherAlive` resolved every running app's executable path** on the main actor at
+  each refresh; an app on a sleeping external drive wakes it. Only an app whose executable has
+  this one's name is resolved now.
+- **The news panel took its full 360 pt before "Getting an account".** Its layout priority put
+  it first: in the 600 pt minimum window the account card (the sign-up link a new player needs)
+  had 30 pt to scroll in, the opposite of what d17873a says. Measured offscreen with the same
+  stack (150 pt header, 140 pt card, 60 pt log strip): 600 pt window, cards 30 → 140 and panel
+  360 → 250; 720 pt, cards 150 → 140 and panel 360 (unchanged); with the details list open at
+  600 pt, cards 135, details 135, panel 120. Beside the news, the cards (and the details list)
+  are held to their own measured height and laid out first; without a panel nothing changes.
+- **Every hover redrew every row and rebuilt each patch note's summary from its whole body** on
+  the main actor: `NewsRow`'s `now = Date()` default differed on every redraw, and `summary` was
+  computed. The summary is stored, made once with the body off the main actor and kept to a few
+  hundred characters; `now` defaults to nil.
+- **HTML.** `<li>` needs no close tag: items left open stayed on the block stack after `</ul>`,
+  and every paragraph after the list read as a bullet; a list's end now ends its items.
+  `<embed>` (void) and a self-closed `<svg/>` were skipped "to their close tag", dropping the rest
+  of the post; only the tag goes now. HorizonXI's 30 live posts use only h3, ul, li, p, em and
+  strong, so neither changes what they show.
+- **The fetch** used `URLSession.shared`, whose request timeout restarts with every byte: a feed
+  that trickled held its one in-flight slot for the whole transfer (by default up to 7 days), and
+  nothing capped the payload. An ephemeral session (no cookies, no cache), 30 s for the whole
+  transfer, payloads over 4 MB refused (the live feed is 33 KB).
+- The risk above about a script "losing its `services.exe` between the two scans" overstates it:
+  the second scan runs under the launch lock and ends nothing once any wineserver of this wine
+  exists, and only pids flagged by both scans (programs of a server already gone) are signalled.
+
+Checked and left as they are:
+
+- **Rendering a post loads nothing and runs nothing.** No WebKit and no Markdown parse: text runs
+  become `AttributedString`s, entities are decoded to text, script/style/iframe/object/svg and the
+  rest are dropped with their contents, images are dropped, and only an `http(s)` link with a
+  host survives (`javascript:`, `file:`, relative paths become plain text). The sheet's
+  `horizonxi.com` link is `https` only, from a slug limited to one path segment.
+- **No feed, no text.** The panel needs a feed address (only HorizonXI has one, and servers.json
+  cannot set it) and at least one post; a failed fetch keeps the last good copy, a payload that is
+  not an array of posts is never cached or shown, a damaged cache is no news. The only words the
+  launcher adds are the dates ("Today", "Yesterday", "N days ago"), "Done" and the link's host.
+- **The serverless cleanup stays with this launcher's wine.** Only `ownSystemPrograms` (wine's own
+  programs whose executable is this launcher's wine) with launchd as parent, only while no
+  wineserver of this wine runs, checked again under the launch lock and before the SIGKILL.
+  Daniel's game had wineserver 33416 (this wine) the whole time: `--leftovers-report` flagged
+  nothing.
+- **A launch in progress** keeps its client: from the moment it passes the gate its host is in
+  `playingGroups.hostsWithoutGroup`, and its group is set synchronously at the spawn.
+- **No greyed Play, no new text on the button.** An adopted session's button is Stop (enabled);
+  a client another launcher is tracking stays "Running…" as in b61.
+- Gemini's one finding ("the startup refresh blocks the main thread for seconds") was rejected
+  as stated: the scan, `ps -E` and `stat` run in `Task.detached`; the main actor only awaited.
+  What was real behind it (the awaited cleanup delaying start-up) is fixed above.
+
+Tests after the fixes (release build of the final tree, 2026-10-15): `--selftest-news` 36/36 (3
+new: the paragraph after an unclosed list, `<embed>`/`<svg/>`, a 400-item post's short summary),
+`--selftest-leftovers` 26/26 (3 new: CatsEyeXI's launcher in this wine, this launcher's own group,
+an injector still in the group); the other 19 suites all pass (`--selftest-primary-action` 77/77,
+`--selftest-install-location <fixture>` 107/107, `--selftest-setup-progress` 27/27,
+`--selftest-retroachievements` 47/47, `HXI_FIXTURE_DIR=… --selftest-boot-profile` 43/43, the rest
+"all checks passed"); `scripts/tests/setup-scripts-test.sh` with `HXI_LAUNCHER_BIN`: 98 ok, 2
+failed, 2 skipped, the same part-21 pair (`--fix` refused Repair: "a game is running in this prefix
+(play.horizonxi.com: pid 33436,33438)", Daniel's game); `--check` exit 1 (HorizonXI, Local server,
+Gaia XI ok; CatsEyeXI, Supernova, OmicronXI BAD: no Ashita in their folders); `--next-action
+HorizonXI` `play | Play |`, exit 0; `--leftovers-report` still "would adopt" group 33401 (adopts
+nothing now: another launcher is alive), would end nothing; `--news-preview` 30 rows.
+
+Still open from the review:
+
+- The new layout and the hover change were measured offscreen, not seen in the running window.
+- A hand-run client of this wine in the selected prefix (no other program in its group, a listed
+  world) is still adopted when no launcher is alive (Risks, above).
