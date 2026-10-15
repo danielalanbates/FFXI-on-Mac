@@ -627,3 +627,67 @@ printed nothing, and the steps before the torrent (Wine, the Windows drive) repo
   root (only matters for unbundled runs; Runner's two are fixed).
 - The launcher self-update's "Restart" wording could become "Relaunch" if Daniel wants the word
   gone entirely.
+
+## Review fixes (2026-10-15, adversarial review of `beta-b59..beta-b60`)
+
+Each fixed in its own commit on `beta-b60`; the full self-test set, `setup-scripts-test.sh` and
+the read-only `--check` / `--next-action` on Daniel's Mac were rerun afterwards (results below).
+
+- **`--check`, `--next-action` and `--fix` looked at a different install from the window**
+  (`776418e`). A `swift build` binary has no bundle identifier, so its `UserDefaults.standard`
+  was its own domain (`HorizonXILauncher`) holding an old `install.last` (siku.app), while the
+  window read `org.batesai.horizonxi-on-mac` (`…/FFXI on Mac/FFXI on Mac Wine.app#prefix10`).
+  `AppDefaults.store` is the app's domain whichever binary runs (self-tests keep their own). On
+  Daniel's Mac they now report the window's install: HorizonXI and Local server `play` (only COM
+  registration missing, which Play does on the way in), CatsEyeXI `setup:data-drive` ('Games').
+  The stale `install.prefix` key in the app's defaults is read by nothing in any branch or in the
+  history, so it was left alone.
+- **game-wine.sh had 19 stray lines above its `#!/bin/zsh`** (`cc4e129`), pasted in by `9e5c437`:
+  three "command not found" lines and a `mkdir ''` in every Setup log, and no interpreter line.
+- **Stop never ran the scripts' cleanup** (`2953967`). zsh runs an EXIT trap on a signal only when
+  that signal has a trap of its own, so a Stop mid-unzip left up to 15.5 GB in
+  `updates/.base-extract` (and game-wine.sh its unpack folder). Both trap TERM/INT/HUP now.
+  install.sh had no trap at all: a Stop or Quit mid-Repair left its Wine session (the hung
+  regsvr32) running; it now ends the prefix's session. Fixture test 31 covers both.
+- **No Stop for most jobs, and Quit left every job running** (`ed0a59f`, `79c917d`). Repair
+  (Setup's last step), Setup's copy, Move, Wine's prefix update and the client downloads had no
+  Stop; "Quit anyway" killed nothing (scripts, aria2c, ditto, tar and their Wine sessions ran on
+  as orphans). `JobKill` (Jobs.swift) tracks every job process with its Wine prefix: Stop (now
+  beside every job's progress) and Quit end what it started, then it, then `wineserver -k` for
+  that prefix. Wine's prefix update is bounded (5 minutes). An installer's Stop is honoured
+  between its steps (no "download failed" page on a Stop).
+- **Setup's Wine step** (`9a6c711`): a second Setup started while a cancelled one still built in
+  the background ran two builds into one folder; one at a time now. The first `wineboot` was
+  unbounded and its output pipe was read to the end, which waits on every program the session
+  started (a crash-looping explorer never closes it): output goes to a file, wineboot is bounded
+  at 5 minutes, and `wineserver -w` (1 minute) before system.reg is checked.
+- **Move could copy a system folder as game data** (`842616d`): a link under the game's folder to
+  `/Users`, `/Applications` or `/System` would have been copied in its place. Those stay links.
+- **A Move or copy cut short by Quit left its hidden copy for good** (`797f562`); the next one
+  sends its own earlier hidden copies to the Trash first (exact name only).
+- **The first client of a multi-client world had no Stop** (`31e2f19`): the RUNNING list dropped
+  the selected world's session assuming the main button was its Stop, but there it is Play
+  Another (and "Starting…" while a launch starts). It is left out only while the button is Stop.
+- **diskutil on the main thread** (`1b93c24`): Repair, Update and the downloads asked
+  `Preflight.driveState` (which runs `diskutil list`) on the main actor for their refusal's
+  wording; they say the plain drive line now.
+
+Checked and left as they are: the main button can never be a greyed Play (resolver and self-test
+agree, every `.disabled` on it is the resolver's); no user-facing "restart the Mac" anywhere;
+Gemini 2.5 Flash's three findings (Move's Trash filter, game-wine.sh's tar, install.sh's launcher
+line) did not hold up: the filter excludes only the new copy and what contains it, the tarball's
+SHA-256 is checked before tar runs, and the launcher line is a log line whose status is chmod's.
+
+Still not bounded or not stoppable: the local server's build (LocalServer, its own card), Rosetta
+once macOS's password prompt is accepted (Apple's `softwareupdate`, root), the main-thread
+`GameRegistry.point` at Play (headless now, but no time limit), and `diskutil mount` behind
+Repair on an unmounted drive.
+
+Rerun after the fixes (release build, the two old warnings only): all 18 self-test suites pass
+(`--selftest-primary-action` 77/77, `--selftest-install-location` 107/107,
+`--selftest-setup-progress` 27/27, the other 15 "all checks passed"); `setup-scripts-test.sh`
+105/105 (test 29, the real game-Wine tarball, skipped: 204 MB is over this run's download
+limit). On Daniel's Mac, read-only: `--check` names `…/FFXI on Mac/FFXI on Mac Wine.app
+[prefix10]` and exits 1; `--next-action` gives `play` for HorizonXI and Local server (exit 0)
+and `setup:data-drive | Setup | The 'Games' drive isn't connected — reconnect it or press Setup.`
+for CatsEyeXI (exit 10).
