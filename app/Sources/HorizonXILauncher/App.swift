@@ -229,19 +229,58 @@ struct ContentView: View {
     /// The installed HorizonXI client's version (version.json on the game drive), read off the
     /// main actor in `recheckAsync`, never in `body`.
     @State private var horizonInstalled: String?
+    /// The rest of what the main button looks at, read off the main actor with the checks.
+    @State private var probe = Primary.Probe()
+    /// Which world `checks` belong to; anything else shows "Checking…" rather than a stale verdict.
+    @State private var checksWorld: String?
+    /// No install found, and the remembered one sits on this missing drive.
+    @State private var rememberedDrive: (name: String, state: Preflight.DriveState)?
+    /// A HorizonXI update failed or was stopped: Play this session anyway (its login server
+    /// accepts a client one version behind).
+    @State private var updateDeferred = false
+    @FocusState private var accountFocused: Bool
     private var fdaBlocked: Bool { checks.contains(where: { $0.id == "fda" && $0.state == .bad }) }
-    private var blocked: Bool { checks.contains { $0.state == .bad } }
 
     /// The drive the selected world's files are on (or link to), when it is not there.
     private var missingDrive: String? { checks.first { $0.state == .bad && $0.drive != nil }?.drive }
 
-    /// The footer's one line: why Play is grey, or what is under way. Nothing when ready.
-    private var statusText: String? {
-        PlayStatus.footer(hasInstall: selected != nil, scanning: scanning,
-                          busyReason: runner.busy ? runner.busyReason : nil,
-                          starting: runner.starting,
-                          world: store.selected?.name ?? "The game",
-                          hasGame: active?.hasGame, checks: checks)
+    /// The main button: the next thing that has to happen. See PrimaryAction.swift.
+    private var primary: PrimaryDecision { Primary.decide(primaryInputs) }
+
+    private var primaryInputs: PrimaryInputs {
+        var x = PrimaryInputs()
+        let s = store.selected
+        x.world = s?.name ?? "The game"
+        x.isLocal = s?.local == true
+        x.canDownload = x.isLocal || (s?.installKind ?? Server.InstallKind.none) != .none
+        x.hostEmpty = s.map { !$0.local && $0.host.trimmingCharacters(in: .whitespaces).isEmpty } ?? false
+        x.allowsMultipleClients = s?.allowsMultipleClients == true
+        x.hasInstall = selected != nil
+        x.scanning = scanning
+        if let r = rememberedDrive { x.rememberedDrive = r.name; x.driveStates[r.name] = r.state }
+        x.checks = checks
+        x.checksPending = selected != nil && checksWorld != s?.name
+        x.driveStates.merge(probe.driveStates) { $1 }
+        x.hasGame = probe.hasGame
+        x.patchedWineMissing = probe.patchedWineMissing
+        x.restartingLauncher = updateInstalling
+        if runner.busy { x.ownJob = runner.busyReason.isEmpty ? "Working" : runner.busyReason }
+        else if x.isLocal, local.busy { x.ownJob = "Setting up the server" }
+        x.ownProgress = runner.updatingHorizon ? runner.updateProgress : nil
+        if !runner.busy, Runner.workInFlight { x.otherJob = Runner.workInFlightReason ?? "Another job is running" }
+        x.runningHere = runner.running
+        x.starting = runner.starting
+        x.runningElsewhere = s.map { sessions.runningElsewhere(world: $0.name, host: $0.host) } == true
+        x.wineStuck = WineserverStopWait.anyStuck && sessions.live.isEmpty
+        x.horizonInstalled = horizonInstalled
+        x.horizonLatest = feeds.horizonLatest
+        x.updateDeferred = updateDeferred
+        x.clientRequired = s.map { feeds.requiredClients[$0.name] ?? $0.requiredClient } ?? ""
+        x.clientInstalled = probe.clientInstalled
+        x.canUpdateClient = s?.name == "HorizonXI" || s?.installKind == .catseyeLauncher
+        x.localReady = x.isLocal ? local.status?.ready : nil
+        x.accountNeeded = user.trimmingCharacters(in: .whitespaces).isEmpty && !probe.profileHasAccount
+        return x
     }
 
     /// A notice that is not an error clears itself; errors stay until the next Play.
@@ -299,6 +338,10 @@ struct ContentView: View {
             // "no client" verdict must not keep Play grey after switching back to HorizonXI.
             recheck()
         }
+        // Every job ends with fresh checks: a Download, Repair or Update that finished must turn
+        // the button into the next step (or PLAY) without anyone pressing ↻.
+        .onChange(of: runner.busy) { busy in if !busy { recheck() } }
+        .onChange(of: local.busy) { busy in if !busy { recheck() } }
         // The selected world's game has exited: what was said about it is over.
         .onChange(of: runner.running) { running in
             guard !running else { return }
@@ -401,7 +444,6 @@ struct ContentView: View {
                     .tracking(3.5)
                     .foregroundStyle(Vana.gold)
                 updateBanner
-                gameUpdateBanner
                 populationLine
             }
             .padding(.horizontal, 34).padding(.top, 34).padding(.bottom, 20)
@@ -468,23 +510,8 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .menuIndicator(.hidden)
 
-            // The host and boot-profile fields used to sit here for every unverified world,
-            // which read as something the player was expected to fill in. They now live under
-            // Setup & Diagnostics; only the one thing that actually blocks Play stays visible.
-            if let s = store.selected, !s.local, s.host.isEmpty {
-                Text("No login host — set it in Setup & Diagnostics")
-                    .font(.system(size: 12)).foregroundStyle(Vana.ember)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        // A world other than HorizonXI with no folder of its own would be run out of HorizonXI's
-        // files -- which is exactly what earns "The game's data has been updated" from CatsEye.
-        // Say so right under the world, and offer the two ways to fix it.
-        // Files on a drive that is not there are not "not installed", and downloading them again
-        // is the wrong answer: then the footer names the drive and this card stays away.
-        if let i = active, let s = store.selected, missingDrive == nil,
-           !i.hasGame || (s.dataPath.isEmpty && !s.local && s.name != "HorizonXI") {
-            gameDataCard(for: s, install: i)
-        }
+            // b60: no login host, missing game data and the rest are the main button's reason
+            // line now (PrimaryAction); nothing about them sits up here any more.
         }
         .sheet(isPresented: $newServer) { addServerSheet }
         .sheet(isPresented: $showGraphics) { graphicsSheet }
@@ -524,43 +551,6 @@ struct ContentView: View {
             return "\(store.selected?.name ?? "This server") doesn't allow this addon."
         }
         return "Loads the Vanaguide quest guide in this world."
-    }
-
-    /// HorizonXI game update: one line, only when the installed client's version is known and
-    /// older than what api.horizonxi.com publishes (`ServerFeeds.horizonLatest`), or while an
-    /// update is running. Unknown installed version: nothing.
-    @ViewBuilder private var gameUpdateBanner: some View {
-        if runner.updatingHorizon {
-            HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Updating HorizonXI \(runner.updateLabel)  \(Int(runner.updateProgress * 100))%")
-                        .font(.system(size: 12)).foregroundStyle(Vana.text)
-                    ProgressView(value: runner.updateProgress).tint(Vana.gold)
-                }
-                Spacer()
-                Button("Stop") { runner.stopHorizonUpdate() }.controlSize(.small)
-            }
-            .padding(10)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Vana.gold.opacity(0.12)))
-            .padding(.top, 6)
-        } else if store.selected?.name == "HorizonXI", let i = active,
-                  let have = horizonInstalled, let latest = feeds.horizonLatest,
-                  Updater.isNewer(latest, than: have) {
-            HStack(spacing: 10) {
-                Image(systemName: "arrow.down.circle.fill").foregroundStyle(Vana.gold)
-                Text("HorizonXI \(latest) available")
-                    .font(.system(size: 12)).foregroundStyle(Vana.text).lineLimit(1)
-                    .help("Installed: \(have)")
-                Spacer()
-                Button("Update") { runner.updateHorizon(i) { _ in recheck() } }
-                    .buttonStyle(.borderedProminent).controlSize(.small)
-                    .disabled(runner.busy)
-            }
-            .padding(10)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Vana.gold.opacity(0.12)))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Vana.gold.opacity(0.35), lineWidth: 1))
-            .padding(.top, 6)
-        }
     }
 
     /// The launcher's own update: one line, and only when there is something to act on (see
@@ -1203,7 +1193,8 @@ struct ContentView: View {
             // The local server auto-creates its own account on first login (see LocalServer.swift)
             // -- there is no real account to type here, so the fields are disabled rather than
             // left editable and silently ignored.
-            field("Account name", text: $user, secure: false, disabled: store.selected?.local == true)
+            field("Account name", text: $user, secure: false, disabled: store.selected?.local == true,
+                  focus: $accountFocused)
             field("Password", text: $pass, secure: true, disabled: store.selected?.local == true)
             Toggle("Remember me", isOn: $remember)
                 .toggleStyle(.checkbox).font(.system(size: 12)).foregroundStyle(Vana.muted)
@@ -1294,15 +1285,16 @@ struct ContentView: View {
                                              log: { runner.appendLine($0) })
                     Divider()
                     HStack(spacing: 8) {
-                        Button("Repair") { if let i = active { runner.repair(i) } }
-                            .disabled(runner.busy || fdaBlocked)
-                            .help(fdaBlocked ? "Grant Full Disk Access first — Repair runs wine from a drive this app can't read yet." : "Re-applies the prefix configuration the game needs.")
-                        if store.selected?.name == "HorizonXI" {
-                            Button("Update HorizonXI…") {
-                                if let i = active { runner.updateHorizon(i) { _ in recheck() } }
-                            }
-                            .disabled(runner.busy)
-                            .help("Downloads and applies the HorizonXI patch.")
+                        // Repair refuses (and says why) when the game data is unreachable; the
+                        // main button never offers it then. Update HorizonXI is the main button.
+                        Button("Repair") { if let i = active { runner.repair(i) { _ in recheck() } } }
+                            .disabled(runner.busy || fdaBlocked || missingDrive != nil)
+                            .help(missingDrive.map { "The '\($0)' drive isn't available." }
+                                  ?? (fdaBlocked ? "Allow Full Disk Access first." : "Re-applies the prefix configuration the game needs."))
+                        if let s = store.selected {
+                            Button("Choose folder…") { chooseGameData(for: s) }
+                                .disabled(runner.busy)
+                                .help("Point \(s.name) at a folder that already holds its game files.")
                         }
                         if store.selected?.name == "CatsEyeXI" {
                             Button("CatsEyeXI installer…") { if let i = active, let s = store.selected { runner.runCatsEyeLauncher(i, dataPath: s.dataPath) } }
@@ -1347,41 +1339,6 @@ struct ContentView: View {
             }
 
             Spacer()
-
-            // Nothing found and the scan has finished: this is a first run, and the one thing
-            // the user needs is the button that installs everything. Offering it here rather
-            // than burying it in Setup & Diagnostics is the difference between a launcher that
-            // works out of the box and one that needs the README first.
-            // Shown outside the collapsed panel: without this grant every wine process the app
-            // starts is killed by macOS at launch, so Play and Repair just "exit".
-            if fdaBlocked {
-                Button {
-                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
-                } label: {
-                    Label("Grant Full Disk Access", systemImage: "lock.open")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .help("The game drive needs Full Disk Access. Turn on FFXI on Mac in the list, then press ↻.")
-            }
-
-            if !scanning && selected == nil {
-                Button { showSetup = true } label: {
-                    Label("Set up FFXI on Mac", systemImage: "wand.and.stars")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .help("Installs Rosetta 2 and Wine, and creates the Windows drive FFXI installs into")
-            }
-
-            if let status = statusText {
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    Circle().fill(blocked && !runner.busy ? Vana.ember : Vana.gold).frame(width: 6, height: 6)
-                    Text(status).font(.system(size: 12))
-                        .foregroundStyle(blocked && !runner.busy ? Vana.text : Vana.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
         }
         .padding(22)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1403,11 +1360,13 @@ struct ContentView: View {
     }
 
     private func field(_ title: String, text: Binding<String>, secure: Bool,
-                       disabled: Bool = false) -> some View {
+                       disabled: Bool = false, focus: FocusState<Bool>.Binding? = nil) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title.uppercased()).font(.system(size: 12)).tracking(1.5).foregroundStyle(Vana.muted)
             Group {
-                if secure { SecureField("", text: text) } else { TextField("", text: text) }
+                if secure { SecureField("", text: text) }
+                else if let focus { TextField("", text: text).focused(focus) }
+                else { TextField("", text: text) }
             }
             .textFieldStyle(.plain)
             .disabled(disabled)
@@ -1454,56 +1413,6 @@ struct ContentView: View {
                     worldHover = hovering
                     if hovering { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
                 }
-    }
-
-    /// Shown when the chosen world's game files are not where the launcher expects them. Two
-    /// answers, both one click: point at a folder that already has them, or get them from the
-    /// world's own source. The location is the user's to choose — external drives welcome — and
-    /// is remembered per world in servers.json.
-    private func gameDataCard(for s: Server, install i: Install) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("GAME DATA").font(.system(size: 12)).tracking(2.5).foregroundStyle(Vana.gold)
-            Text(s.dataPath.isEmpty
-                 ? (i.hasGame ? "\(s.name) has no folder of its own yet — Play would use HorizonXI's files, which \(s.name)'s login server may reject."
-                              : "\(s.name)'s game files are not installed yet.")
-                 : "Nothing playable at \(s.dataPath).")
-                .font(.system(size: 12)).foregroundStyle(Vana.muted).fixedSize(horizontal: false, vertical: true)
-            // Three buttons never fit this panel's width: they rendered as "Downloa…",
-            // "Choose fold…", "Run installer…" -- the primary action unreadable. The action that
-            // matters gets its own full-width row; the alternatives share the one below.
-            VStack(alignment: .leading, spacing: 6) {
-                if s.installKind != .none {
-                    // The button used to read "Download…" whether or not a download was already
-                    // going, and a second press was silently ignored -- so a download that had
-                    // been killed (quitting the launcher kills its child processes) and one that
-                    // was running looked exactly the same. It now says which it is.
-                    Button { downloadGameData(for: s, install: i) } label: {
-                        Label(runner.busy ? "Downloading…" : "Download…",
-                              systemImage: runner.busy ? "arrow.down.circle.dotted" : "arrow.down.circle")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(sessions.anyBusy || runner.running)
-                    .help(runner.busy
-                          ? "Another download or install is running. It resumes where it left off if it is interrupted."
-                          : (s.installNote.isEmpty ? "" : s.installNote + " ")
-                            + "Resumable: if this is interrupted, press Download again and it continues.")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                HStack(spacing: 8) {
-                Button("Choose folder…") { chooseGameData(for: s) }
-                if !s.local {
-                    Button("Run installer…") { runLocalInstaller(for: s, install: i) }
-                        .help("Already have \(s.name)'s installer? Run it inside the wrapper.")
-                }
-                if s.name == "HorizonXI" {
-                    Button("Install into wrapper…") { showSetup = true }
-                        .help("The classic route: run HorizonXI's installer inside the wrapper.")
-                }
-                }
-            }.font(.system(size: 12)).lineLimit(1)
-        }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.25)))
     }
 
     /// Ask where this world's files are (or should go). Defaults to ~/Games/FFXI/<world>, and
@@ -1607,44 +1516,120 @@ struct ContentView: View {
         }
     }
 
-    /// The selected world is playing, here or in another launcher. Keyed like the duplicate
-    /// refusal: the Host field and the `--server` its boot profile carries.
-    private var selectedRunning: Bool {
-        runner.running || store.selected.map { sessions.runningElsewhere(world: $0.name, host: $0.host) } == true
+    /// The next required action, as one button: Install Wine, Download, Mount, Restart Mac,
+    /// Repair, Update, Add Account, Stop -- and PLAY only when the game is ready. One short line
+    /// under it says why when it is not PLAY.
+    private var playButton: some View {
+        let d = primary
+        let dim = !d.enabled || d.destructive
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Button { perform(d.action) } label: {
+                    Text(d.label.uppercased())
+                        .font(.system(size: 15, weight: .semibold, design: .serif)).tracking(3)
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                        .frame(maxWidth: .infinity).padding(.vertical, 13)
+                        .background(
+                            LinearGradient(colors: dim
+                                           ? [Vana.goldDim.opacity(0.45), Vana.goldDim.opacity(0.25)]
+                                           : [Vana.gold, Vana.goldDim],
+                                           startPoint: .top, endPoint: .bottom))
+                        .foregroundStyle(Color.black.opacity(0.86))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .shadow(color: Vana.gold.opacity(dim ? 0 : 0.35), radius: 10, y: 3)
+                }
+                .buttonStyle(.plain)
+                // Stop and Restart Mac are never one Return key away.
+                .keyboardShortcut(d.destructive ? nil : .defaultAction)
+                .disabled(!d.enabled)
+                if runner.updatingHorizon {
+                    Button("Stop") { runner.stopHorizonUpdate() }
+                        .controlSize(.small)
+                        .help("Stops the download. Press the button again later to resume.")
+                }
+            }
+            if let p = d.progress { ProgressView(value: p).tint(Vana.gold) }
+            if let r = d.reason {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Circle().fill(d.enabled ? Vana.gold : Vana.ember).frame(width: 6, height: 6)
+                    Text(r).font(.system(size: 12)).foregroundStyle(Vana.text)
+                        .lineLimit(1).truncationMode(.tail)
+                        .help(r)
+                }
+            }
+        }
     }
 
-    /// Play is still pressable on a running world that allows a second client.
-    private var playAgain: Bool { selectedRunning && store.selected?.allowsMultipleClients == true }
-
-    private var playButton: some View {
-        Button(action: play) {
-            Text(playAgain ? "PLAY ANOTHER" : selectedRunning ? "RUNNING" : "PLAY")
-                .font(.system(size: 15, weight: .semibold, design: .serif)).tracking(5)
-                .frame(maxWidth: .infinity).padding(.vertical, 13)
-                .background(
-                    LinearGradient(colors: selectedRunning && !playAgain
-                                   ? [Vana.goldDim.opacity(0.45), Vana.goldDim.opacity(0.25)]
-                                   : [Vana.gold, Vana.goldDim],
-                                   startPoint: .top, endPoint: .bottom))
-                .foregroundStyle(Color.black.opacity(0.86))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .shadow(color: Vana.gold.opacity(selectedRunning && !playAgain ? 0 : 0.35), radius: 10, y: 3)
+    /// The button's click. Decided again now, and done only if it still says the same thing,
+    /// so a double click or a state change under the pointer cannot start the wrong job.
+    private func perform(_ a: PrimaryAction) {
+        let now = primary
+        guard now.action == a, now.enabled else { return }
+        if case .installWine = a { prepareWineSetup(); showSetup = true; return }
+        guard let s = store.selected else { return }
+        if let i = active,
+           PrimaryFixer.perform(a, install: i, server: s, runner: runner, done: { ok in
+               if case .updateGame = a, !ok { updateDeferred = true }
+               recheck()
+           }) { return }
+        switch a {
+        case .play, .playAnother:
+            // Registry and COM entries Preflight found missing are written by Play itself
+            // (GameRegistry.point); forget the cache so it really does write them.
+            if let i = active, checks.contains(where: { ["reg32", "reglayout", "com"].contains($0.id) && $0.state == .bad }) {
+                GameRegistry.invalidate(i)
+            }
+            play()
+        case .stop:
+            let alert = NSAlert()
+            alert.messageText = "Stop \(s.name)?"
+            alert.informativeText = "The game closes without logging out."
+            alert.addButton(withTitle: "Keep Playing")
+            alert.addButton(withTitle: "Stop")
+            if alert.runModal() == .alertSecondButtonReturn { runner.stop() }
+        case .restartMac:
+            guard sessions.live.isEmpty, sessions.elsewhere.isEmpty, !Runner.workInFlight, !local.busy else {
+                notice = "Close the game and wait for jobs to finish first."; return
+            }
+            PrimaryFixer.restartMac()
+        case .allowAccess:
+            NSWorkspace.shared.open(PrimaryFixer.fullDiskAccessPane)
+        case .chooseFolder:
+            chooseGameData(for: s)
+        case .enterAccount:
+            accountFocused = true
+        case .setUpLocalServer:
+            local.setup(force: false, log: { runner.appendLine($0) })
+        case .downloadGame:
+            guard let i = active else { return }
+            // The local server plays HorizonXI's client: its download is HorizonXI's.
+            if s.local { runner.installHorizon(into: i.gameDir) { _ in recheck() } }
+            else { downloadGameData(for: s, install: i) }
+        case .updateGame:
+            if let i = active, s.installKind == .catseyeLauncher { runner.runCatsEyeLauncher(i, dataPath: s.dataPath) }
+        default:
+            break
         }
-        .buttonStyle(.plain)
-        .keyboardShortcut(.defaultAction)
-        // Only the *absence* of an install should block Play. Once we have one — remembered
-        // or found — a still-running background rescan must not hold the user up.
-        .disabled(selected == nil || (selectedRunning && !playAgain) || blocked || runner.busy
-                  || updateInstalling)
+    }
+
+    /// Install Wine repairs the selected wrapper when that is the one whose wine is missing,
+    /// instead of building a second, empty wrapper and switching to it (G11).
+    private func prepareWineSetup() {
+        if let i = selected, !FileManager.default.isExecutableFile(atPath: i.wine.path) {
+            Bootstrap.target = i.wrapper
+        } else {
+            Bootstrap.target = nil
+        }
     }
 
     /// Every world playing right now, each with its own Stop. Stopping one never stops another.
     @ViewBuilder private var runningList: some View {
         let live = sessions.live
-        if !live.isEmpty || !elsewhere.isEmpty {
+        if live.contains(where: { $0.id != store.selected?.name }) || !elsewhere.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 Text("RUNNING").font(.system(size: 12)).tracking(2).foregroundStyle(Vana.muted)
-                ForEach(live, id: \.id) { s in
+                // The selected world's own Stop is the main button.
+                ForEach(live.filter { $0.id != store.selected?.name }, id: \.id) { s in
                     HStack(spacing: 6) {
                         Circle().fill(Vana.crystal).frame(width: 6, height: 6)
                         Text(s.id).font(.system(size: 12)).foregroundStyle(Vana.text)
@@ -1944,7 +1929,12 @@ struct ContentView: View {
         scanning = false
         guard !found.isEmpty else { return }
         installs = found
-        if selected == nil || !found.contains(where: { $0.id == selected?.id }) {
+        if let cur = selected, !found.contains(where: { $0.id == cur.id }), cur.hasGame {
+            // The selected install still holds the game but was not found (its wine is broken,
+            // or it is outside the scanned folders): keep it rather than switching to an empty
+            // wrapper and asking for a 9 GB download again (G11).
+            installs = [cur] + found
+        } else if selected == nil || !found.contains(where: { $0.id == selected?.id }) {
             selected = found.first
         }
         selected?.remember()
@@ -1963,19 +1953,33 @@ struct ContentView: View {
     private func recheckAsync() async {
         checksGeneration += 1
         let generation = checksGeneration
-        guard let i = active else { checks = []; horizonInstalled = nil; return }
+        guard let i = active else {
+            checks = []; horizonInstalled = nil; probe = Primary.Probe(); checksWorld = nil
+            // Nothing selected: if the remembered install is on a drive that is gone, the button
+            // asks for that drive instead of offering a fresh setup (G6).
+            let r = await Task.detached(priority: .userInitiated) { Primary.rememberedDrive() }.value
+            guard generation == checksGeneration else { return }
+            rememberedDrive = r.map { (name: $0.0, state: $0.1) }
+            return
+        }
+        rememberedDrive = nil
+        let world = store.selected?.name
         let profile = store.selected?.bootProfile ?? "horizonxi.ini"
-        let horizon = store.selected?.name == "HorizonXI"
+        let horizon = world == "HorizonXI"
+        let required = store.selected.map { feeds.requiredClients[$0.name] ?? $0.requiredClient } ?? ""
         checksInFlight += 1
-        let (c, v) = await Task.detached(priority: .userInitiated) {
-            (Preflight.run(i, profile: profile), horizon ? ClientVersion.horizonVersion(in: i) : nil)
+        let p = await Task.detached(priority: .userInitiated) {
+            Primary.probe(i, profile: profile, horizon: horizon, requiredClient: required)
         }.value
+        let (c, v) = (p.checks, p.horizonInstalled)
         checksInFlight -= 1
         if checksInFlight == 0, recheckPending { recheckPending = false; recheck() }
         // A newer recheck started meanwhile (world switched, drive mounted): its answer stands.
         guard generation == checksGeneration else { return }
         checks = c
         horizonInstalled = v
+        probe = p
+        checksWorld = world
     }
 
     /// A Play is between its press and the game window (or the 90 s fallback).

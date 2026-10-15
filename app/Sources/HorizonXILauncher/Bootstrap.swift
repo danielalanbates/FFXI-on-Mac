@@ -38,9 +38,14 @@ enum Bootstrap {
     /// Where the wrapper is built. `~/Applications` rather than `/Applications` because it needs
     /// no admin rights, and because `Install.discover()` already looks there.
     static var wrapperURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        target ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Applications/FFXI on Mac Wine.app")
     }
+
+    /// Set by the main button's Install Wine when the selected wrapper is the one whose wine is
+    /// missing: its wine is replaced in place, its prefix and game untouched (G11). nil: build
+    /// the default wrapper.
+    static var target: URL?
 
     static var prefixName: String { "prefix10" }
 
@@ -119,7 +124,7 @@ enum Bootstrap {
         step(.prefix)
         try await bootPrefix(log: log)
         log("")
-        log("Wine is ready. Next: install FFXI into it -- press \"Install the game…\".")
+        log("Wine is ready. Close this; the main button shows the next step.")
     }
 
     // MARK: - Step 1: Rosetta
@@ -220,13 +225,22 @@ enum Bootstrap {
             throw Err("The wine engine unpacked into an unexpected shape. Expected wswine.bundle.")
         }
 
-        try fm.moveItem(at: wswine,
-                        to: unpacked.appendingPathComponent("Contents/SharedSupport/wine"))
-
-        try? fm.createDirectory(at: wrapperURL.deletingLastPathComponent(),
-                                withIntermediateDirectories: true)
-        try? fm.removeItem(at: wrapperURL)
-        try fm.moveItem(at: unpacked, to: wrapperURL)
+        if fm.fileExists(atPath: wrapperURL.appendingPathComponent("Contents/SharedSupport").path) {
+            // An existing wrapper whose wine is broken: swap the wine alone. Deleting the
+            // wrapper would delete its prefix -- and a 27 GB game inside it.
+            let wine = wrapperURL.appendingPathComponent("Contents/SharedSupport/wine")
+            let old = wrapperURL.appendingPathComponent("Contents/SharedSupport/wine.broken-\(Int(Date().timeIntervalSince1970))")
+            if fm.fileExists(atPath: wine.path) { try fm.moveItem(at: wine, to: old) }
+            try fm.moveItem(at: wswine, to: wine)
+            try? fm.removeItem(at: old)
+            log("replaced wine in \(wrapperURL.path)")
+        } else {
+            try fm.moveItem(at: wswine,
+                            to: unpacked.appendingPathComponent("Contents/SharedSupport/wine"))
+            try? fm.createDirectory(at: wrapperURL.deletingLastPathComponent(),
+                                    withIntermediateDirectories: true)
+            try fm.moveItem(at: unpacked, to: wrapperURL)
+        }
         try? fm.removeItem(at: staging)
         log("built \(wrapperURL.path)")
 
@@ -234,7 +248,10 @@ enum Bootstrap {
         // are not in; without this, wineserver dies on @rpath/libinotify.0.dylib before anything
         // else happens. See scripts/fix-wine-rpath.sh for the full story.
         log("fixing wine's library paths")
-        guard let script = Bundle.main.url(forResource: "fix-wine-rpath", withExtension: "sh") else {
+        let devScript = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("scripts/fix-wine-rpath.sh")
+        guard let script = Bundle.main.url(forResource: "fix-wine-rpath", withExtension: "sh")
+                ?? (FileManager.default.fileExists(atPath: devScript.path) ? devScript : nil) else {
             throw Err("fix-wine-rpath.sh is missing from this app.")
         }
         let p = Process()

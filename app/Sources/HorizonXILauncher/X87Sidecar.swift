@@ -44,6 +44,10 @@ enum X87Sidecar {
     ]
 
     static func patchedWine() -> URL? {
+        // Tests (`--fix` on a fixture prefix) point this at a stub so no real wine ever runs.
+        if let o = ProcessInfo.processInfo.environment["FFXI_ON_MAC_WINE"], !o.isEmpty {
+            return FileManager.default.isExecutableFile(atPath: o) ? URL(fileURLWithPath: o) : nil
+        }
         for p in patchedWineCandidates {
             if FileManager.default.isExecutableFile(atPath: p) {
                 return URL(fileURLWithPath: p)

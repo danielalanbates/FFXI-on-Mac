@@ -42,8 +42,8 @@ final class Runner: ObservableObject {
     private func beginBusy(_ reason: String) {
         busyReason = reason
         busy = true
-        stopRequested = false
         errorsAtJobStart = errorsShown
+        stopRequested = false
     }
 
     /// The user pressed Stop on the running job (update, installer): its exit is not a failure.
@@ -200,6 +200,12 @@ final class Runner: ObservableObject {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("HorizonXI-on-Mac", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // `--fix` runs against test prefixes: its log must not rotate the real launcher.log away.
+        if CommandLine.arguments.contains("--fix") {
+            let f = FileManager.default.temporaryDirectory.appendingPathComponent("ffxi-on-mac-fix.log")
+            FileManager.default.createFile(atPath: f.path, contents: nil)
+            return f
+        }
         let f = dir.appendingPathComponent("launcher.log")
         let prev = dir.appendingPathComponent("launcher.log.1")
         try? FileManager.default.removeItem(at: prev)
@@ -404,24 +410,47 @@ final class Runner: ObservableObject {
         return FileManager.default.isExecutableFile(atPath: dev.path) ? dev : nil
     }
 
-    func repair(_ install: Install) {
-        guard claimForMaintenance("Repair") else { return }
+    /// Why Repair cannot help, before anything is written: the game data is behind a drive that
+    /// is not there, or its DLLs are gone. 2026-10-15: Repair ran against a ghost-mounted
+    /// 'Games' drive, rewrote the registry, re-updated the prefix with the wrong wine, and then
+    /// died in regsvr32 with a bare "exited 3".
+    nonisolated static func repairBlocker(_ install: Install) -> String? {
+        let se = install.squareEnix
+        if let d = Preflight.unavailableDrive(for: se.appendingPathComponent("FINAL FANTASY XI").path) {
+            return Preflight.driveLine(d, Preflight.driveState(d)) + " Repair can't fix that; nothing was changed."
+        }
+        let need = ["FINAL FANTASY XI/FFXi.dll", "FINAL FANTASY XI/FFXiMain.dll", "FINAL FANTASY XI/FFXiVersions.dll"]
+        let missing = need.filter { !FileManager.default.fileExists(atPath: se.appendingPathComponent($0).path) }
+        if !missing.isEmpty {
+            return "Game files missing (\(missing.map { ($0 as NSString).lastPathComponent }.joined(separator: ", "))). Download them again; nothing was changed."
+        }
+        return nil
+    }
+
+    func repair(_ install: Install, done: @escaping (Bool) -> Void = { _ in }) {
+        if let why = Self.repairBlocker(install) { appendLine("!! " + why); done(false); return }
+        guard claimForMaintenance("Repair") else { done(false); return }
         guard let script = Self.repairScript() else {
             endMaintenance()
-            appendLine("!! install.sh not found in the bundle"); return
+            appendLine("!! install.sh not found in the bundle"); done(false); return
         }
-        beginBusy("Repairing Wine")
+        beginBusy("Repairing")
         appendLine("==> repairing \(install.wrapper.path) [\(install.prefixName)]")
         // Cheap, local, and the difference between "logs in then quits" and a playable game.
         Sandbox.repair(install) { [weak self] in self?.appendLine($0) }
+        // The wine Play runs, so Repair does not flip the prefix to another wine's timestamp
+        // (which made every Play after a Repair stop for "Updating Wine").
         spawn(URL(fileURLWithPath: "/bin/zsh"),
-              args: [script.path, install.wrapper.path, install.prefixName],
-              env: [:], cwd: Self.scratchDir) { [weak self] code in
+              args: [script.path, install.wrapper.path, install.prefixName,
+                     install.gameDir.path, install.squareEnixWine],
+              env: ["HXI_WINE": Self.playWine(install).path], cwd: Self.scratchDir) { [weak self] code in
             self?.endMaintenance()
             self?.busy = false
             self?.appendLine("==> repair exited \(code)")
-            self?.reportFailure(code, "Repair failed — Open log in Setup & Diagnostics")
-            if code == 0, let self { Task { await self.syncPrefixIfStale(install) } }
+            self?.reportFailure(code, "Repair didn't finish — Open log in Setup & Diagnostics")
+            if code == 0, let self {
+                Task { await self.syncPrefixIfStale(install); done(true) }
+            } else { done(false) }
         }
     }
 
@@ -437,12 +466,15 @@ final class Runner: ObservableObject {
     /// Apply every pending HorizonXI game update (torrent, so it can take a while), then report.
     func updateHorizon(_ install: Install, done: @escaping (Bool) -> Void) {
         guard !Runner.workInFlight, !running else { appendLine("!! something else is running in the wrapper — try again when it finishes"); done(false); return }
+        if let d = Preflight.unavailableDrive(for: install.squareEnix.path) {
+            appendLine("!! " + Preflight.driveLine(d, Preflight.driveState(d))); done(false); return
+        }
         guard claimForMaintenance("the HorizonXI update") else { done(false); return }
         guard let script = Self.updateScript() else {
             endMaintenance()
             appendLine("!! update-client.sh not found in the bundle"); done(false); return
         }
-        beginBusy("Updating HorizonXI")
+        beginBusy("Updating")
         updatingHorizon = true
         updateProgress = 0; updateLabel = ""; updateStep = (1, 1)
         appendLine("==> updating HorizonXI game files in \(install.gameDir.path)")
@@ -843,18 +875,26 @@ final class Runner: ObservableObject {
     }
 
     /// Fresh HorizonXI client into `dir` via their published torrent + updates (update-client.sh install).
-    func installHorizon(into dir: URL) {
-        if refuseWhileBusy("the HorizonXI client install") { return }
-        guard let script = Self.updateScript() else { return }
-        beginBusy("Downloading HorizonXI")
+    func installHorizon(into dir: URL, done: @escaping (Bool) -> Void = { _ in }) {
+        if refuseWhileBusy("the HorizonXI client install") { done(false); return }
+        guard let script = Self.updateScript() else {
+            appendLine("!! update-client.sh not found in the bundle"); done(false); return
+        }
+        beginBusy("Downloading")
+        // The same progress readout as an update (and the same Stop).
+        updatingHorizon = true
+        updateProgress = 0; updateLabel = ""; updateStep = (1, 1)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         appendLine("==> installing HorizonXI into \(dir.path) (9.4 GB torrent — leave this running)")
         var env: [String: String] = [:]
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")
         spawn(URL(fileURLWithPath: "/bin/zsh"), args: [script.path, "install", dir.path],
               env: env, cwd: Self.scratchDir) { [weak self] code in
-            self?.busy = false; self?.appendLine("==> install exited \(code)")
-            self?.reportFailure(code, "HorizonXI download failed — Open log in Setup & Diagnostics")
+            self?.busy = false
+            self?.updatingHorizon = false
+            self?.appendLine("==> install exited \(code)")
+            self?.reportFailure(code, "HorizonXI download didn't finish — press Download again to resume")
+            done(code == 0)
         }
     }
 

@@ -22,6 +22,13 @@ enum GameRegistry {
         try? String(contentsOf: marker(i), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Forget the cached target, so the next `point` writes the registry and COM entries again.
+    /// Play calls this when Preflight finds them missing (a fresh download, a new prefix):
+    /// the marker alone would make `point` skip exactly the work that is needed.
+    static func invalidate(_ i: Install) {
+        try? FileManager.default.removeItem(at: marker(i))
+    }
+
     /// Re-point if needed. Must run while no wineserver holds the registry (Runner calls it right
     /// after `RendererSetup.apply`, which stops it). Returns false if the world's SquareEnix folder
     /// is not there to point at.

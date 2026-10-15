@@ -202,6 +202,68 @@ enum Preflight {
         return nil
     }
 
+    // MARK: - Why a drive is missing (b60)
+
+    /// Ghost: the mount table lists `/Volumes/<name>` but the path does not exist (2026-10-14,
+    /// 'Games' on Daniel's Mac) -- only a restart clears it. Unmounted: macOS knows the volume
+    /// but it is not mounted -- `diskutil mount` fixes it without admin rights. Absent: neither
+    /// knows it; it has to be plugged in.
+    enum DriveState: Equatable { case ghost, unmounted(device: String), absent }
+
+    static func driveState(_ name: String) -> DriveState {
+        if mountTableLists("/Volumes/\(name)") { return .ghost }
+        if let dev = unmountedDevice(named: name) { return .unmounted(device: dev) }
+        return .absent
+    }
+
+    static func mountTableLists(_ path: String) -> Bool {
+        var buf: UnsafeMutablePointer<statfs>?
+        let n = getmntinfo(&buf, MNT_NOWAIT)
+        guard n > 0, let b = buf else { return false }
+        for k in 0..<Int(n) {
+            var mp = b[k].f_mntonname
+            let s = withUnsafePointer(to: &mp) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+            }
+            if s == path { return true }
+        }
+        return false
+    }
+
+    /// The device id (`disk9s1`) of a volume called `name` that is not mounted, from
+    /// `diskutil list -plist` (read-only).
+    static func unmountedDevice(named name: String) -> String? {
+        let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
+        p.arguments = ["list", "-plist"]
+        let pipe = Pipe(); p.standardOutput = pipe; p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        guard let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let disks = root["AllDisksAndPartitions"] as? [[String: Any]] else { return nil }
+        var vols: [[String: Any]] = []
+        for d in disks {
+            vols.append(d)
+            vols += (d["Partitions"] as? [[String: Any]]) ?? []
+            vols += (d["APFSVolumes"] as? [[String: Any]]) ?? []
+        }
+        for v in vols where (v["VolumeName"] as? String) == name {
+            let mp = (v["MountPoint"] as? String) ?? ""
+            if mp.isEmpty, let dev = v["DeviceIdentifier"] as? String { return dev }
+        }
+        return nil
+    }
+
+    /// The one line for a missing drive, by why it is missing.
+    static func driveLine(_ name: String, _ state: DriveState?) -> String {
+        switch state {
+        case .ghost?: return "The '\(name)' drive is stuck. A restart brings it back."
+        case .unmounted?: return "The '\(name)' drive is connected but not mounted."
+        case .absent?: return "Connect the '\(name)' drive."
+        case nil: return driveMessage(name)
+        }
+    }
+
     /// `tmutil destinationinfo` lists the mount points Time Machine backs up to.
     static func isTimeMachineDestination(_ vol: URL) -> Bool {
         let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/tmutil"); p.arguments = ["destinationinfo"]

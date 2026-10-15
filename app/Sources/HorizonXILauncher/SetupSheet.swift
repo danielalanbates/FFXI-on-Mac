@@ -75,22 +75,15 @@ struct SetupSheet: View {
                         .foregroundStyle(Vana.text)
                     Text(gameFound
                          ? "Found FFXI in the wrapper. You are ready to play."
-                         : "FFXI is Square Enix's, so it comes from your server rather than from "
-                           + "here. Download HorizonXI's Windows installer, then hand it over "
-                           + "below — it runs inside the drive that was just created.")
+                         : "Close this, then press the main button to download the game.")
                         .font(.system(size: 12)).foregroundStyle(Vana.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
             HStack {
-                if done && !gameFound {
-                    Button("Open HorizonXI's download page") {
-                        NSWorkspace.shared.open(URL(string: "https://horizonxi.com/play")!)
-                    }
-                    Button("Install the game…") { chooseInstaller() }
-                        .buttonStyle(.borderedProminent)
-                }
+                // b60: the HorizonXI download is the main window's button (the old installer
+                // route here needed renderer pieces a fresh wrapper does not have).
                 Spacer()
                 Button(done ? "Done" : "Cancel") { onFinished(); dismiss() }
                 if !done {
@@ -140,19 +133,6 @@ struct SetupSheet: View {
                     failure = error.localizedDescription
                 }
             }
-        }
-    }
-
-    private func chooseInstaller() {
-        let panel = NSOpenPanel()
-        panel.title = "Choose your server's Windows installer"
-        panel.allowedContentTypes = [UTType(filenameExtension: "exe") ?? .data]
-        panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let exe = panel.url else { return }
-        do {
-            try Bootstrap.runInstaller(exe, log: { l in Task { @MainActor in lines.append(l) } })
-        } catch {
-            failure = error.localizedDescription
         }
     }
 }

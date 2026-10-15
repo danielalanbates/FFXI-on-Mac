@@ -34,6 +34,9 @@ enum Headless {
             || a.contains("--selftest-updater")
             || a.contains("--selftest-perf")
             || a.contains("--selftest-ui-text")
+            || a.contains("--selftest-primary-action")
+            || a.contains("--next-action")
+            || a.contains("--fix")
             || a.contains("--selftest-single-instance")
             || a.contains("--selftest-single-instance-probe")
     }
@@ -82,6 +85,9 @@ enum Headless {
         if args.contains("--selftest-ui-text") {
             runUITextSelfTest()
         }
+        if args.contains("--selftest-primary-action") {
+            runPrimaryActionSelfTest()
+        }
         if let at = args.firstIndex(of: "--selftest-single-instance-probe") {
             runSingleInstanceProbe(Array(args[(at + 1)...]))
         }
@@ -94,6 +100,8 @@ enum Headless {
             FileHandle.standardError.write(Data("unknown self-test \(unknown)\n".utf8))
             exit(2)
         }
+        if args.contains("--next-action") { runNextAction() }
+        if args.contains("--fix") { runFix() }
         guard args.contains("--check") else { return }
         var only: String? = nil
         if let w = args.firstIndex(of: "--world"), w + 1 < args.count { only = args[w + 1] }
