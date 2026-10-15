@@ -673,7 +673,10 @@ extension Headless {
         check("Move never resolves a link to the whole Mac, a drive or home",
               !InstallMove.resolvable("/", install: []) && !InstallMove.resolvable("/Volumes/x10", install: [])
                 && !InstallMove.resolvable(fm.homeDirectoryForCurrentUser.path, install: [])
-                && !InstallMove.resolvable("/a", install: ["/a/b"]) && InstallMove.resolvable("/Volumes/x10/FFXI/SquareEnix", install: ["/a"]))
+                && !InstallMove.resolvable("/a", install: ["/a/b"]) && InstallMove.resolvable("/Volumes/x10/FFXI/SquareEnix", install: ["/a"])
+                && !InstallMove.resolvable("/Users", install: []) && !InstallMove.resolvable("/Applications", install: [])
+                && !InstallMove.resolvable("/System/Library", install: []) && !InstallMove.resolvable("/usr/local", install: [])
+                && InstallMove.resolvable("/Users/someone/Games/SquareEnix", install: ["/a"]))
 
         InstallLocation.defaults = savedDefaults
         defaults.removePersistentDomain(forName: suite)

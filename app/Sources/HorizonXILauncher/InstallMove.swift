@@ -234,12 +234,16 @@ enum InstallMove {
     }
 
     /// A link's target that is safe to copy as data: not the whole Mac, a whole drive, the home
-    /// folder, or a folder that holds the install itself.
+    /// folder or one that holds it (/Users), a top-level folder (/Applications), macOS's own
+    /// folders, or a folder that holds the install itself. A link in the game's folder to any of
+    /// those stays a link: copied as data it would copy the Mac, not the game.
     static func resolvable(_ real: String, install: [String]) -> Bool {
         let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
-        if real == "/" || real == home { return false }
+        if real == "/" || real == home || home.hasPrefix(real + "/") { return false }
         let parts = real.split(separator: "/")
+        if parts.count <= 1 { return false }
         if parts.count <= 2, parts.first == "Volumes" { return false }
+        if let top = parts.first, ["System", "Library", "usr", "bin", "sbin", "dev", "cores"].contains(String(top)) { return false }
         return !install.contains { $0.hasPrefix(real + "/") }
     }
 
