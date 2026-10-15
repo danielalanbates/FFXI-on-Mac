@@ -57,7 +57,6 @@ extension Headless {
         x.horizonInstalled = p.horizonInstalled
         x.clientInstalled = p.clientInstalled
         x.clientRequired = server.requiredClient
-        x.canUpdateClient = server.name == "HorizonXI" || server.installKind == .catseyeLauncher
         x.otherJob = Runner.workInFlight ? Runner.workInFlightReason : nil
         x.wineStuck = WineserverStopWait.anyStuck
         let user = Credentials.username(forWorld: server.name)

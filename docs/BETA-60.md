@@ -22,8 +22,18 @@ Daniel's directives for this build, oldest first:
 The big button under the account fields is always the next thing to do. Its label is one of
 **Setup, Update, Repair, Play, Stop** (Play Another where a world allows two clients), or a
 running job's progress: "Setting up… 42%", "Updating… 12%", "Repairing…", "Checking…",
-"Starting…", "Stopping…" (greyed). One short line under it says why when it is not PLAY; PLAY
-itself has no line. Nothing anywhere tells the user to restart the Mac.
+"Starting…", "Stopping…", "Moving… 40%", or a wait the user did not start: "Waiting…",
+"Running…", "Wine is closing…" (greyed). One short line under it says why when it is not PLAY;
+PLAY itself has no line. Nothing anywhere tells the user to restart the Mac.
+
+**Never a greyed-out PLAY** (Daniel, 2026-10-15: "take out the button that says 'play' and
+replace it with an update or repair text field when the game is not playable. the user should
+never encounter a greyed out play button"). A game that cannot start is an enabled Setup, Update
+or Repair whose click starts the fix or opens the exact place it is made, or a wait's progress
+label. The one PLAY that does not start the game is the missing account on HorizonXI (its loader
+cannot ask): enabled, its click puts the cursor in the account field. `--selftest-primary-action`
+asserts, over every state and every action, that a "Play"/"Play Another" label is always enabled
+and that every other state is an enabled Setup/Update/Repair or a progress label.
 
 `Primary.decide` (PrimaryAction.swift) is pure: `PrimaryInputs` in, `PrimaryDecision` out. The
 window, `--next-action` and `--selftest-primary-action` all use it. First match wins:
@@ -35,8 +45,8 @@ window, `--next-action` and `--selftest-primary-action` all use it. First match 
 | Own job (busy reason) | `working:*` | Setting up… / Updating… / Repairing… / Starting… / Stopping… (+ %) | — |
 | Game starting (first 90 s) | `working:starting` | Starting… | — |
 | Running here, one client allowed | `stop` | Stop (never on Return; asks first) | — |
-| Running from another launcher | `blocked` | Play (grey) | Already running from another launcher. |
-| Another world's job in the shared prefix | `blocked` | Play (grey) | Waiting for another job to finish. |
+| Running from another launcher | `working:runningElsewhere` | Running… | Already running from another launcher. |
+| Another world's job in the shared prefix | `working:waiting` | Waiting… | Waiting for another job to finish. |
 | No install, still scanning | `working:checking` | Checking… | — |
 | No install, remembered wrapper's drive ghost/unplugged | `setup:wrapper-drive` | Setup | The 'x10' drive isn't connected — reconnect it or press Setup. |
 | No install, that drive merely unmounted | `repair:mount` | Repair | The 'x10' drive isn't mounted. |
@@ -51,14 +61,14 @@ window, `--next-action` and `--selftest-primary-action` all use it. First match 
 | No download route, no folder, or ambiguous folder | `setup:choose-folder` | Setup | Choose where X's game files are. |
 | Patched game Wine (wine-coop) missing | `setup:game-wine` | Setup | The game's Wine isn't installed yet. |
 | Wine's library links (rpath) | `repair:wine` | Repair | Wine needs a quick repair. |
-| Any other failing check | `blocked` | Play (grey) | the check's own short line |
-| Local world: status loading / not built / below disk floor | `working:checking` / `setup:local-server` | Checking… / Setup (grey below the floor unless "Set up anyway") | The local server isn't set up yet. / Not enough free space for the local server. |
-| No login host | `blocked` | Play (grey) | This world has no login address. |
-| Client older than the world requires, updater exists (HorizonXI, CatsEyeXI) | `update` | Update | X needs a client update. |
-| … no updater | `blocked` | Play (grey) | Needs client N; you have M. |
+| Any other failing check | `repair:check-<id>` | Repair (install.sh, with the checks shown) | the check's own short line |
+| Local world: status loading / not built / below disk floor | `working:checking` / `setup:local-server` | Checking… / Setup (below the floor its click shows the numbers and asks "Set Up Anyway") | The local server isn't set up yet. / Not enough free space for the local server. |
+| No login host | `repair:host` | Repair (opens Setup & Diagnostics at the login host) | This world has no login address. |
+| Client older than the world requires, updater in the launcher (HorizonXI, CatsEyeXI) | `update` | Update | X needs a client update. |
+| … no updater in the launcher | `update` | Update (the world's own installer, client zip or download page; else its home page) | X needs a client update. |
 | HorizonXI newer than installed (not deferred this session) | `update` | Update | HorizonXI 2.0.5 is available. |
-| No account, and the loader cannot ask (HorizonXI) | `blocked` | Play (grey) | Type your account name and password above. |
-| Wine still closing after a Stop | `blocked` | Play (grey) | Wine is still closing from the last game. |
+| Wine still closing after a Stop | `working:closing` | Wine is closing… | — |
+| No account, and the loader cannot ask (HorizonXI) | `account` | Play (enabled; the click puts the cursor in the account field) | Type your account name and password above. |
 | Ready | `play` / `play-another` | Play / Play Another | none |
 
 Notes on the mapping:

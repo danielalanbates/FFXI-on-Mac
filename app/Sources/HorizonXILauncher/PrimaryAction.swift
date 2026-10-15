@@ -13,6 +13,12 @@ import AppKit
 /// a world allows two clients), or what is running ("Setting up… 42%"). Anything else the user
 /// needs to know is the one short line under it.
 ///
+/// Never a greyed-out PLAY (Daniel, 2026-10-15: "the user should never encounter a greyed out
+/// play button"). A game that cannot start is an enabled Setup, Update or Repair whose click
+/// starts the fix or opens the exact place it is made; a wait is a progress label ("Waiting…",
+/// "Wine is closing…"). The one PLAY that does not start the game is the missing account on a
+/// world whose loader cannot ask for it: still enabled, its click puts the cursor in the field.
+///
 /// `Primary.decide` is pure: plain values in, one decision out, so `--selftest-primary-action`
 /// and `--next-action` exercise exactly what the window shows. `PrimaryFixer` performs the jobs
 /// that need no window, for the button and for `--fix` alike; the window runs Setup's chain
@@ -30,11 +36,15 @@ enum PrimaryAction: Equatable {
     case stop
     case play
     case playAnother
-    /// Play cannot start yet and there is nothing to press: PLAY, greyed, with the reason.
-    case blocked(String)
+    /// No account typed, and the world's loader cannot ask for one (HorizonXI). PLAY, enabled:
+    /// the click puts the cursor in the account fields.
+    case enterAccount
 
     enum Work: String {
-        case settingUp, updating, repairing, checking, starting, stopping
+        case settingUp, updating, repairing, checking, starting, stopping, moving
+        /// Something the user did not start here: another world's job, a client another
+        /// launcher started, Wine still closing after a Stop.
+        case waiting, runningElsewhere, closing
 
         var label: String {
             switch self {
@@ -44,6 +54,19 @@ enum PrimaryAction: Equatable {
             case .checking: return "Checking…"
             case .starting: return "Starting…"
             case .stopping: return "Stopping…"
+            case .moving: return "Moving…"
+            case .waiting: return "Waiting…"
+            case .runningElsewhere: return "Running…"
+            case .closing: return "Wine is closing…"
+            }
+        }
+
+        /// The line under a wait the user did not start here; their own jobs need none.
+        var reason: String? {
+            switch self {
+            case .waiting: return "Waiting for another job to finish."
+            case .runningElsewhere: return "Already running from another launcher."
+            default: return nil
             }
         }
     }
@@ -63,8 +86,9 @@ enum PrimaryAction: Equatable {
         case chooseFolder
         /// The patched game Wine (wine-coop) is not on this Mac. See docs/WINE-BUILD.md.
         case gameWine
-        /// The local world's server is not built yet. Disabled below its disk floor.
-        case localServer(enabled: Bool)
+        /// The local world's server is not built yet. `lowSpace`: the disk is below its floor
+        /// and "Set up anyway" is not ticked, so the click asks first.
+        case localServer(lowSpace: Bool)
     }
 
     enum RepairNeed: Equatable {
@@ -74,6 +98,10 @@ enum PrimaryAction: Equatable {
         case mount(drive: String, device: String)
         /// macOS refuses this app the game's drive: Full Disk Access (or Removable Volumes).
         case access
+        /// The world has no login address: the click opens its settings at the host field.
+        case host
+        /// Any other failing check: Repair (install.sh), with the checks shown.
+        case check(id: String, line: String)
     }
 
     /// Stable name for `--next-action` output and scripts.
@@ -86,7 +114,7 @@ enum PrimaryAction: Equatable {
         case .stop: return "stop"
         case .play: return "play"
         case .playAnother: return "play-another"
-        case .blocked: return "blocked"
+        case .enterAccount: return "account"
         }
     }
 
@@ -110,6 +138,8 @@ enum PrimaryAction: Equatable {
             case .wine: return "wine"
             case .mount: return "mount"
             case .access: return "access"
+            case .host: return "host"
+            case .check(let id, _): return "check-" + id
             }
         default: return ""
         }
@@ -164,7 +194,6 @@ struct PrimaryInputs {
     var updateDeferred = false
     var clientInstalled: String? = nil
     var clientRequired: String = ""
-    var canUpdateClient = false     // HorizonXI (update script) or CatsEyeXI (their launcher)
 
     var localReady: Bool? = nil     // nil: still loading
     var localBelowFloor = false
@@ -198,9 +227,9 @@ enum Primary {
         if x.starting { return make(.working(.starting, progress: nil), x) }
         if x.runningHere, !x.allowsMultipleClients { return make(.stop, x) }
         if x.runningElsewhere, !x.allowsMultipleClients {
-            return make(.blocked("Already running from another launcher."), x)
+            return make(.working(.runningElsewhere, progress: nil), x)
         }
-        if x.otherJob != nil { return make(.blocked("Waiting for another job to finish."), x) }
+        if x.otherJob != nil { return make(.working(.waiting, progress: nil), x) }
 
         guard x.hasInstall else {
             if x.scanning { return make(.working(.checking, progress: nil), x) }
@@ -227,18 +256,18 @@ enum Primary {
         if x.patchedWineMissing { return make(.setup(.gameWine), x) }
         if bad.contains(where: { fixedByRepair.contains($0.id) }) { return make(.repair(.wine), x) }
         if let other = bad.first(where: { !fixedByPlay.contains($0.id) }) {
-            return make(.blocked(other.footer), x)
+            return make(.repair(.check(id: other.id, line: other.footer)), x)
         }
         if x.isLocal {
             guard let ready = x.localReady else { return make(.working(.checking, progress: nil), x) }
-            if !ready { return make(.setup(.localServer(enabled: !x.localBelowFloor || x.localForce)), x) }
+            if !ready { return make(.setup(.localServer(lowSpace: x.localBelowFloor && !x.localForce)), x) }
         }
-        if x.hostEmpty, !x.isLocal { return make(.blocked("This world has no login address."), x) }
+        if x.hostEmpty, !x.isLocal { return make(.repair(.host), x) }
+        // A world without an in-launcher updater still gets Update: its click opens that world's
+        // own route (their installer, client zip or download page).
         if !x.clientRequired.isEmpty, let have = x.clientInstalled,
            ClientVersion.isOlder(have, than: x.clientRequired) {
-            return make(x.canUpdateClient
-                        ? .update(world: x.world, to: x.clientRequired)
-                        : .blocked("Needs client \(x.clientRequired); you have \(have)."), x)
+            return make(.update(world: x.world, to: x.clientRequired), x)
         }
         if x.world == "HorizonXI", !x.updateDeferred, let have = x.horizonInstalled,
            let latest = x.horizonLatest, isNewer(latest, than: have) {
@@ -247,21 +276,20 @@ enum Primary {
         // HorizonXI's loader cannot ask for the account (its console is never shown), so Play
         // without one would sit at a prompt nobody sees. Worlds whose loader window creates the
         // account need nothing typed.
-        if x.accountNeeded, !x.isLocal, !x.accountInLoader {
-            return make(.blocked("Type your account name and password above."), x)
-        }
-        if x.wineStuck { return make(.blocked("Wine is still closing from the last game."), x) }
+        if x.wineStuck { return make(.working(.closing, progress: nil), x) }
+        if x.accountNeeded, !x.isLocal, !x.accountInLoader { return make(.enterAccount, x) }
         return make(x.runningHere || x.runningElsewhere ? .playAnother : .play, x)
     }
 
     /// What a running job is, from its busy reason ("Repairing", "Updating Wine",
-    /// "Downloading", "Installing Eden", …).
+    /// "Downloading", "Installing Eden", "Moving", …).
     static func work(forJob reason: String) -> PrimaryAction.Work {
         let r = reason.lowercased()
         if r.hasPrefix("repair") { return .repairing }
         if r.hasPrefix("updat") { return .updating }
         if r.hasPrefix("start") { return .starting }
         if r.hasPrefix("stop") { return .stopping }
+        if r.hasPrefix("mov") { return .moving }
         if r.hasPrefix("check") || r.hasPrefix("look") { return .checking }
         return .settingUp
     }
@@ -289,7 +317,7 @@ enum Primary {
         switch a {
         case .working(let work, let p):
             let pct = p.map { " \(Int((min(max($0, 0), 1) * 100).rounded(.down)))%" } ?? ""
-            return .init(action: a, label: work.label + pct, enabled: false, reason: nil, progress: p)
+            return .init(action: a, label: work.label + pct, enabled: false, reason: work.reason, progress: p)
         case .setup(let need):
             switch need {
             case .install:
@@ -305,10 +333,10 @@ enum Primary {
                 return .init(action: a, label: "Setup", enabled: true, reason: "Choose where \(w)'s game files are.")
             case .gameWine:
                 return .init(action: a, label: "Setup", enabled: true, reason: "The game's Wine isn't installed yet.")
-            case .localServer(let enabled):
-                return .init(action: a, label: "Setup", enabled: enabled,
-                             reason: enabled ? "The local server isn't set up yet."
-                                             : "Not enough free space for the local server.")
+            case .localServer(let lowSpace):
+                return .init(action: a, label: "Setup", enabled: true,
+                             reason: lowSpace ? "Not enough free space for the local server."
+                                              : "The local server isn't set up yet.")
             }
         case .update(let world, let to):
             return .init(action: a, label: "Update", enabled: true,
@@ -321,11 +349,15 @@ enum Primary {
                 return .init(action: a, label: "Repair", enabled: true, reason: Preflight.driveLine(d, .unmounted(device: "")))
             case .access:
                 return .init(action: a, label: "Repair", enabled: true, reason: "Allow FFXI on Mac in Full Disk Access.")
+            case .host:
+                return .init(action: a, label: "Repair", enabled: true, reason: "This world has no login address.")
+            case .check(_, let line):
+                return .init(action: a, label: "Repair", enabled: true, reason: line)
             }
         case .stop:
             return .init(action: a, label: "Stop", enabled: true, reason: nil, destructive: true)
-        case .blocked(let why):
-            return .init(action: a, label: "Play", enabled: false, reason: why)
+        case .enterAccount:
+            return .init(action: a, label: "Play", enabled: true, reason: "Type your account name and password above.")
         case .play:
             return .init(action: a, label: "Play", enabled: true, reason: nil)
         case .playAnother:
@@ -389,7 +421,7 @@ enum Primary {
     /// folder, an account) or would launch the game.
     static func isHeadlessFixable(_ a: PrimaryAction) -> Bool {
         switch a {
-        case .repair(.wine), .repair(.mount), .update, .setup(.game): return true
+        case .repair(.wine), .repair(.check), .repair(.mount), .update, .setup(.game): return true
         default: return false
         }
     }
@@ -399,7 +431,7 @@ enum Primary {
     static func perform(_ a: PrimaryAction, install i: Install, server s: Server, runner: Runner,
                         done: @escaping (Bool) -> Void) -> Bool {
         switch a {
-        case .repair(.wine):
+        case .repair(.wine), .repair(.check):
             runner.repair(i, done: done)
         case .setup(.game) where s.installKind == .horizonTorrent || s.local:
             // The local server plays HorizonXI's client: its download is HorizonXI's.

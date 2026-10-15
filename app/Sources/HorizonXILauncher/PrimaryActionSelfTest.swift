@@ -7,7 +7,9 @@ import Foundation
 /// The rules it holds the button to (Daniel, 2026-10-15): the label is one of Setup, Update,
 /// Repair, Play, Stop, Play Another, or a running job's progress; anything not installed or a
 /// dependency not done is Setup; a drive that is gone is Setup (reconnect it or put the game
-/// elsewhere) and never "restart"; PLAY says nothing when the game is ready.
+/// elsewhere) and never "restart"; PLAY says nothing when the game is ready; and never a
+/// greyed-out PLAY: a game that cannot start is an enabled Setup, Update or Repair, or a wait's
+/// progress label.
 extension Headless {
     @MainActor static func runPrimaryActionSelfTest() -> Never {
         var results: [(String, Bool)] = []
@@ -84,15 +86,17 @@ extension Headless {
         x = base; x.checks = [bad("reg32"), bad("reglayout"), bad("com"), bad("sandbox")]
         expect("registry / COM / sandbox only -> Play, no line (Play fixes them)", x, .play, enabled: true, reason: .some(nil))
         x = base; x.checks = [bad("mystery")]
-        expect("unknown failing check -> Play greyed with its line", x, .blocked("mystery short"), enabled: false)
+        expect("unknown failing check -> Repair with its line, never a grey Play", x,
+               .repair(.check(id: "mystery", line: "mystery short")), enabled: true, reason: "mystery short")
 
         // Local server.
         x = base; x.isLocal = true; x.localReady = false
-        expect("local server not built -> Setup", x, .setup(.localServer(enabled: true)), enabled: true)
+        expect("local server not built -> Setup", x, .setup(.localServer(lowSpace: false)), enabled: true)
         x.localBelowFloor = true
-        expect("local server, disk below its floor -> Setup greyed", x, .setup(.localServer(enabled: false)), enabled: false)
+        expect("local server, disk below its floor -> Setup, enabled (the click asks first)", x,
+               .setup(.localServer(lowSpace: true)), enabled: true, reason: "Not enough free space for the local server.")
         x.localForce = true
-        expect("... unless 'Set up anyway' is ticked", x, .setup(.localServer(enabled: true)), enabled: true)
+        expect("... 'Set up anyway' ticked -> plain Setup", x, .setup(.localServer(lowSpace: false)), enabled: true)
         x = base; x.isLocal = true; x.localReady = nil
         expect("local status loading -> Checking…", x, .working(.checking, progress: nil))
         x.localReady = true; x.accountNeeded = true
@@ -106,11 +110,11 @@ extension Headless {
         expect("update failed or stopped this session -> Play", x, .play)
         x = base; x.horizonInstalled = "2.0.5"; x.horizonLatest = "2.0.5"
         expect("HorizonXI current -> Play", x, .play)
-        x = base; x.world = "CatsEyeXI"; x.clientRequired = "30251204_1"; x.clientInstalled = "30240101_0"; x.canUpdateClient = true
+        x = base; x.world = "CatsEyeXI"; x.clientRequired = "30251204_1"; x.clientInstalled = "30240101_0"
         expect("CatsEye client too old -> Update", x, .update(world: "CatsEyeXI", to: "30251204_1"))
-        x.canUpdateClient = false; x.world = "Eden"
-        expect("client too old, no updater -> Play greyed with the versions", x,
-               .blocked("Needs client 30251204_1; you have 30240101_0."), enabled: false)
+        x.world = "Eden"
+        expect("client too old, no updater here -> Update (opens the world's own route)", x,
+               .update(world: "Eden", to: "30251204_1"), enabled: true, reason: "Eden needs a client update.")
 
         // Jobs, running, waiting.
         x = base; x.setupRunning = true; x.setupProgress = 0.42
@@ -133,7 +137,8 @@ extension Headless {
         x = base; x.isLocal = true; x.localReady = true; x.ownJob = "stopping"
         expect("local server stopping -> Stopping…", x, .working(.stopping, progress: nil))
         x = base; x.otherJob = "Updating"
-        expect("another world's job -> Play greyed", x, .blocked("Waiting for another job to finish."), enabled: false)
+        expect("another world's job -> Waiting…", x, .working(.waiting, progress: nil), enabled: false,
+               reason: "Waiting for another job to finish.")
         x = base; x.starting = true
         expect("starting -> Starting…", x, .working(.starting, progress: nil))
         x = base; x.runningHere = true
@@ -143,38 +148,51 @@ extension Headless {
         x.allowsMultipleClients = true
         expect("running, second client allowed -> Play Another", x, .playAnother, reason: .some(nil))
         x = base; x.runningElsewhere = true
-        expect("running in another launcher -> Play greyed", x, .blocked("Already running from another launcher."), enabled: false)
+        expect("running in another launcher -> Running…", x, .working(.runningElsewhere, progress: nil), enabled: false,
+               reason: "Already running from another launcher.")
         x = base; x.restartingLauncher = true
         expect("launcher installing its own update -> Updating…", x, .working(.updating, progress: nil), enabled: false)
         x = base; x.checksPending = true
         expect("checks for another world -> Checking…", x, .working(.checking, progress: nil), enabled: false)
         x = base; x.wineStuck = true
-        expect("Wine still closing -> Play greyed", x, .blocked("Wine is still closing from the last game."), enabled: false)
+        expect("Wine still closing -> Wine is closing…", x, .working(.closing, progress: nil), enabled: false)
 
         // Accounts and hosts.
         x = base; x.accountNeeded = true
-        expect("no account, HorizonXI's loader can't ask -> Play greyed pointing at the fields", x,
-               .blocked("Type your account name and password above."), enabled: false)
+        expect("no account, HorizonXI's loader can't ask -> Play, enabled, the click goes to the fields", x,
+               .enterAccount, enabled: true, reason: "Type your account name and password above.")
         x.accountInLoader = true; x.world = "Eden"
         expect("no account, the loader window creates it -> Play", x, .play, enabled: true)
         x = base; x.hostEmpty = true
-        expect("no login host -> Play greyed", x, .blocked("This world has no login address."))
+        expect("no login host -> Repair (opens the world's settings)", x, .repair(.host), enabled: true,
+               reason: "This world has no login address.")
+        x = base; x.isLocal = true; x.localReady = true; x.hostEmpty = true
+        expect("the local world needs no login host", x, .play)
+        x = base; x.wineStuck = true; x.accountNeeded = true
+        expect("Wine closing outranks the account line", x, .working(.closing, progress: nil))
+        x = base; x.ownJob = "Moving"; x.ownProgress = 0.4
+        let mv = Primary.decide(x)
+        seen.append(("move running", mv))
+        results.append(("a Move -> \"Moving… 40%\" (\(mv.label))", mv.label == "Moving… 40%" && !mv.enabled))
 
         // Wording, over every state above and every action: the label is one of Daniel's verbs
         // or a running job's progress; one short plain line; no "restart" anywhere.
         let allActions: [PrimaryAction] = [
             .setup(.install), .setup(.wrapperDrive("x10")), .setup(.dataDrive("Games")), .setup(.wine),
             .setup(.game(partial: false)), .setup(.game(partial: true)), .setup(.chooseFolder), .setup(.gameWine),
-            .setup(.localServer(enabled: true)), .setup(.localServer(enabled: false)),
+            .setup(.localServer(lowSpace: false)), .setup(.localServer(lowSpace: true)),
             .update(world: "HorizonXI", to: "2.0.5"), .update(world: "CatsEyeXI", to: "30251204_1"),
             .repair(.wine), .repair(.mount(drive: "Games", device: "disk9s1")), .repair(.access),
-            .stop, .play, .playAnother, .blocked("x"),
+            .repair(.host), .repair(.check(id: "x", line: "x")),
+            .stop, .play, .playAnother, .enterAccount,
             .working(.settingUp, progress: nil), .working(.settingUp, progress: 1), .working(.updating, progress: 0.123),
             .working(.repairing, progress: nil), .working(.checking, progress: nil), .working(.starting, progress: nil),
-            .working(.stopping, progress: nil),
+            .working(.stopping, progress: nil), .working(.moving, progress: 0.5), .working(.waiting, progress: nil),
+            .working(.runningElsewhere, progress: nil), .working(.closing, progress: nil),
         ]
         for a in allActions { seen.append(("action \(a.id):\(a.detail)", Primary.make(a, base))) }
-        let progress = try! NSRegularExpression(pattern: #"^(Setting up|Updating|Repairing|Checking|Starting|Stopping)…( \d{1,3}%)?$"#)
+        let progress = try! NSRegularExpression(
+            pattern: #"^(Setting up|Updating|Repairing|Checking|Starting|Stopping|Moving|Waiting|Running|Wine is closing)…( \d{1,3}%)?$"#)
         func isProgress(_ l: String) -> Bool {
             progress.firstMatch(in: l, range: NSRange(l.startIndex..., in: l)) != nil
         }
@@ -197,9 +215,30 @@ extension Headless {
                      Preflight.driveLine("Games", .unmounted(device: "disk9s1")), Primary.gameWineUnavailable]
         results.append(("drive lines and Setup's last line never say restart",
                         !lines.contains { $0.lowercased().contains("restart") }))
+        // Never a greyed-out PLAY (Daniel, 2026-10-15). Every state above and every action:
+        // Play / Play Another are always pressable; anything that does not start the game is an
+        // enabled Setup / Update / Repair, or a wait's progress label -- the one exception is
+        // the missing account, whose PLAY (enabled) puts the cursor in the field.
+        var greyPlay: [String] = [], notActionable: [String] = []
+        for (name, d) in seen {
+            if (d.label == "Play" || d.label == "Play Another"), !d.enabled { greyPlay.append(name) }
+            switch d.action {
+            case .play, .playAnother, .stop, .enterAccount: break
+            case .working:
+                if d.enabled || !isProgress(d.label) { notActionable.append("\(name): \(d.label)") }
+            case .setup, .update, .repair:
+                if !d.enabled || !["Setup", "Update", "Repair"].contains(d.label) { notActionable.append("\(name): \(d.label)") }
+            }
+        }
+        results.append(("label Play / Play Another => enabled, in every state"
+                        + (greyPlay.isEmpty ? "" : " -- " + greyPlay.joined(separator: "; ")), greyPlay.isEmpty))
+        results.append(("every state that is not Play is an enabled Setup / Update / Repair or a progress label"
+                        + (notActionable.isEmpty ? "" : " -- " + notActionable.joined(separator: "; ")), notActionable.isEmpty))
+        results.append(("Play shows only where the click starts the game, or (no account) goes to the fields",
+                        seen.allSatisfy { !$0.1.label.hasPrefix("Play") || ([.play, .playAnother, .enterAccount] as [PrimaryAction]).contains($0.1.action) }))
         results.append(("only Stop is kept off Return",
                         seen.allSatisfy { $0.1.destructive == ($0.1.action == .stop) }))
-        results.append(("Play and Play Another have no reason line",
+        results.append(("Play and Play Another have no reason line (the account's Play has its one line)",
                         Primary.make(.play, base).reason == nil && Primary.make(.playAnother, base).reason == nil))
 
         // Repair refuses before writing when the data is behind a missing drive, and names it.
@@ -227,6 +266,8 @@ extension Headless {
                         PrimaryFixer.isHeadlessFixable(.repair(.wine)) && PrimaryFixer.isHeadlessFixable(.repair(.mount(drive: "a", device: "b")))
                             && PrimaryFixer.isHeadlessFixable(.setup(.game(partial: false)))
                             && PrimaryFixer.isHeadlessFixable(.update(world: "HorizonXI", to: "2.0.5"))
+                            && PrimaryFixer.isHeadlessFixable(.repair(.check(id: "x", line: "x")))
+                            && !PrimaryFixer.isHeadlessFixable(.repair(.host)) && !PrimaryFixer.isHeadlessFixable(.enterAccount)
                             && !PrimaryFixer.isHeadlessFixable(.setup(.install)) && !PrimaryFixer.isHeadlessFixable(.setup(.dataDrive("a")))
                             && !PrimaryFixer.isHeadlessFixable(.play) && !PrimaryFixer.isHeadlessFixable(.repair(.access))
                             && !PrimaryFixer.isHeadlessFixable(.stop)))

@@ -195,6 +195,10 @@ struct ContentView: View {
     @State private var pass = ""
     @State private var remember = Credentials.remember
     @State private var showDetails = false
+    /// Where the main button sends the cursor: the account fields (no account typed) or the
+    /// world's login host in Setup & Diagnostics (no login address).
+    enum Field: Hashable { case account, password, host }
+    @FocusState private var focus: Field?
     @State private var showGraphics = false
     @State private var graphics = GraphicsSettings.load(world: nil)
     @State private var showAddons = false
@@ -286,7 +290,6 @@ struct ContentView: View {
         x.updateDeferred = updateDeferred
         x.clientRequired = s.map { feeds.requiredClients[$0.name] ?? $0.requiredClient } ?? ""
         x.clientInstalled = probe.clientInstalled
-        x.canUpdateClient = s?.name == "HorizonXI" || s?.installKind == .catseyeLauncher
         x.localReady = x.isLocal ? local.status?.ready : nil
         x.localBelowFloor = local.status?.belowFloor == true
         x.localForce = forceSetup
@@ -1205,8 +1208,8 @@ struct ContentView: View {
             // The local server auto-creates its own account on first login (see LocalServer.swift)
             // -- there is no real account to type here, so the fields are disabled rather than
             // left editable and silently ignored.
-            field("Account name", text: $user, secure: false, disabled: store.selected?.local == true)
-            field("Password", text: $pass, secure: true, disabled: store.selected?.local == true)
+            field("Account name", text: $user, secure: false, disabled: store.selected?.local == true, focus: .account)
+            field("Password", text: $pass, secure: true, disabled: store.selected?.local == true, focus: .password)
             Toggle("Remember me", isOn: $remember)
                 .toggleStyle(.checkbox).font(.system(size: 12)).foregroundStyle(Vana.muted)
                 .help("Remembered in a mode-600 file in Application Support. The game loader also receives it in its command line.")
@@ -1266,6 +1269,7 @@ struct ContentView: View {
                         Text("SERVER CONNECTION").font(.system(size: 12)).tracking(2).foregroundStyle(Vana.muted)
                         TextField("login host", text: Binding(
                             get: { s.host }, set: { var c = s; c.host = $0; store.update(c) }))
+                            .focused($focus, equals: .host)
                             .textFieldStyle(.roundedBorder).font(.system(size: 12))
                         HStack(spacing: 6) {
                             TextField("boot profile .ini", text: Binding(
@@ -1368,12 +1372,13 @@ struct ContentView: View {
     }
 
     private func field(_ title: String, text: Binding<String>, secure: Bool,
-                       disabled: Bool = false) -> some View {
+                       disabled: Bool = false, focus field: Field) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title.uppercased()).font(.system(size: 12)).tracking(1.5).foregroundStyle(Vana.muted)
             Group {
                 if secure { SecureField("", text: text) } else { TextField("", text: text) }
             }
+            .focused($focus, equals: field)
             .textFieldStyle(.plain)
             .disabled(disabled)
             .padding(8)
@@ -1580,17 +1585,45 @@ struct ContentView: View {
         guard now.action == a, now.enabled else { return }
         guard let s = store.selected else { return }
         switch a {
+        case .setup(.localServer(lowSpace: true)):
+            // Below the disk floor: say the numbers and set it up only on a yes ("Set up anyway").
+            let alert = NSAlert()
+            alert.messageText = "Not enough free space for the local server."
+            if let st = local.status {
+                alert.informativeText = String(format: "%.1f GB free; it needs about %.0f GB.", st.freeGB, st.needGB)
+            }
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Set Up Anyway")
+            guard alert.runModal() == .alertSecondButtonReturn else { return }
+            forceSetup = true
+            Task { await runSetup() }
         case .setup:
             Task { await runSetup() }
         case .update:
             guard let i = active else { return }
             if s.installKind == .catseyeLauncher { runner.runCatsEyeLauncher(i, dataPath: s.dataPath); return }
+            guard s.name == "HorizonXI" else {
+                // No updater in the launcher: the world's own route (installer, client zip or
+                // download page); with none known, its home page, or the folder its client is in.
+                if s.installKind != .none { downloadGameData(for: s, install: i) }
+                else if let u = Self.homePages[s.name].flatMap(URL.init(string:)) { NSWorkspace.shared.open(u) }
+                else { chooseGameData(for: s) }
+                return
+            }
             // A failed or stopped update drops back to PLAY for this session: HorizonXI's login
             // server accepts a client one version behind.
             PrimaryFixer.perform(a, install: i, server: s, runner: runner) { ok in
                 if !ok { updateDeferred = true }
                 recheck()
             }
+        case .repair(.host):
+            showDetails = true
+            DispatchQueue.main.async { focus = .host }
+        case .repair(.check):
+            // No fix of its own: the full Repair, with the checks open so what still fails shows.
+            guard let i = active else { return }
+            showDetails = true
+            PrimaryFixer.perform(a, install: i, server: s, runner: runner) { _ in recheck() }
         case .repair(.access):
             // Turning FFXI on Mac on there covers Removable Volumes too; macOS then offers to
             // quit and reopen it, and coming back re-runs the checks.
@@ -1614,7 +1647,9 @@ struct ContentView: View {
             alert.addButton(withTitle: "Keep Playing")
             alert.addButton(withTitle: "Stop")
             if alert.runModal() == .alertSecondButtonReturn { runner.stop() }
-        case .working, .blocked:
+        case .enterAccount:
+            focus = user.trimmingCharacters(in: .whitespaces).isEmpty ? .account : .password
+        case .working:
             break
         }
     }
