@@ -295,7 +295,8 @@ enum Credentials {
             .filter { $0.lowercased().hasSuffix(".exe") }
         let named = BootProfile.loaderName(in: text)
         guard let pick = BootProfile.loaderToName(named: named, present: present, worldLoader: loader),
-              let out = BootProfile.withLoader(pick, in: text, addIfMissing: !loader.isEmpty),
+              let out = BootProfile.withLoader(pick, in: text, addIfMissing: !loader.isEmpty,
+                                               folder: install.bootLoaderDir.lastPathComponent),
               writeFile(out, to: url) else { return nil }
         return "\(named ?? "none") -> \(pick)"
     }

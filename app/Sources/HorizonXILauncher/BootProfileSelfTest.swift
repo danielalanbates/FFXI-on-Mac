@@ -224,6 +224,16 @@ extension Headless {
         Credentials.fixBootLoader("supernova.ini", in: s)
         checks.append(("a world with no loader of its own: a missing one is still replaced as before (xiloader.exe)",
                        BootProfile.loaderName(in: read(profileURL(s, "supernova.ini"))) == "xiloader.exe"))
+        let bm = Install(wrapper: tmp.appendingPathComponent("bootmod.app"), prefixName: "prefix")
+        for d in ["ffxi-bootmod", "config/boot"] {
+            try? fm.createDirectory(at: bm.gameDir.appendingPathComponent(d), withIntermediateDirectories: true)
+        }
+        fm.createFile(atPath: bm.gameDir.appendingPathComponent("Ashita-cli.exe").path, contents: Data())
+        fm.createFile(atPath: bm.gameDir.appendingPathComponent("ffxi-bootmod/xiloader.exe").path, contents: Data())
+        write("[ashita.boot]\nfile = .\\\\ffxi-bootmod\\\\gone.exe\n", profileURL(bm, "bootmod.ini"))
+        Credentials.fixBootLoader("bootmod.ini", in: bm)
+        checks.append(("a client whose loaders are in ffxi-bootmod/ gets that folder written, not bootloader/",
+                       read(profileURL(bm, "bootmod.ini")).contains(#"file        = .\\ffxi-bootmod\\xiloader.exe"#)))
         checks.append(("`file` is read from [ashita.boot] only, not any key starting with 'file'",
                        BootProfile.loaderName(in: "[other]\nfilename = x.exe\n[ashita.boot]\nfile = .\\\\bootloader\\\\y.exe\n") == "y.exe"))
 

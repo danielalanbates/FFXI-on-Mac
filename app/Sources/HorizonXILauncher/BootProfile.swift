@@ -164,10 +164,12 @@ enum BootProfile {
         return base.isEmpty ? nil : base
     }
 
-    /// `text` booting `loader` out of bootloader/, written the way `fixBootLoader` always has.
+    /// `text` booting `loader` out of `folder` (the client's loader folder, `Install.bootLoaderDir`,
+    /// which is where `loader` was found), written the way `fixBootLoader` always has.
     /// A profile with no `file` line gets one only when `addIfMissing`.
-    static func withLoader(_ loader: String, in text: String, addIfMissing: Bool) -> String? {
-        let line = "file        = .\\\\bootloader\\\\\(loader)"
+    static func withLoader(_ loader: String, in text: String, addIfMissing: Bool,
+                           folder: String = "bootloader") -> String? {
+        let line = "file        = .\\\\\(folder)\\\\\(loader)"
         var lines = TextFile.lines(of: text)
         if let n = lineIndex("file", section: "ashita.boot", in: lines) {
             lines[n] = line
