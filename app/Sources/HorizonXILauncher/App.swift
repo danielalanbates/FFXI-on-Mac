@@ -191,6 +191,8 @@ struct ContentView: View {
     /// The world's news feed, every 15 minutes while the window can be seen (one small GET).
     private let newsTick = Timer.publish(every: 900, on: .main, in: .common).autoconnect()
     @State private var worldHover = false
+    /// The account and local-server cards' own height, measured: what they keep beside the news.
+    @State private var cardsHeight: CGFloat?
     @State private var forceSetup = false
     @State private var newServer = false
     @State private var newName = ""
@@ -502,8 +504,10 @@ struct ContentView: View {
             .padding(.horizontal, 34).padding(.top, 34).padding(.bottom, 20)
 
             // The world's own news (ServerFeeds.news): only when it publishes a feed and there
-            // are posts. Sized first, so the cards below scroll rather than squeeze it.
-            if let s = store.selected, !s.newsURL.isEmpty, let items = feeds.news[s.name], !items.isEmpty {
+            // are posts. It takes what the cards and the details below leave, up to its cap, and
+            // gives way (to its minimum) before they do: "Getting an account" is what a new
+            // player needs, and in a 600pt window a panel sized first left it 30pt.
+            if let items = newsItems, let s = store.selected {
                 NewsPanel(items: items, pageTemplate: s.newsPageURL)
                     .frame(maxWidth: 500, alignment: .leading)
                     .padding(.horizontal, 34).padding(.top, -8).padding(.bottom, 4)
@@ -512,24 +516,38 @@ struct ContentView: View {
 
             // Scrolled rather than clipped: the cards below already overflow a 632pt window once
             // the signup list is open, and an overflowing VStack pushes the game's title off the
-            // top of the window instead of cutting the bottom off.
+            // top of the window instead of cutting the bottom off. Beside the news, held to their
+            // own height and laid out first, so the panel is what shrinks.
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     accountCard
                     localServerCard
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .background(GeometryReader { g in
+                    Color.clear.preference(key: CardsHeightKey.self, value: g.size.height)
+                })
             }
+            .onPreferenceChange(CardsHeightKey.self) { cardsHeight = $0 }
             .scrollIndicators(.hidden)
+            .frame(maxHeight: newsItems != nil ? (cardsHeight ?? .infinity) : .infinity)
+            .layoutPriority(newsItems != nil ? 2 : 0)
             Spacer(minLength: 0)
 
             if showDetails {
                 ScrollView { statusList.padding(.horizontal, 34) }
                     .frame(maxHeight: 200)
+                    .layoutPriority(newsItems != nil ? 2 : 0)
             }
             logStrip
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The selected world's posts, when it publishes a feed and has any: the news panel's rows.
+    private var newsItems: [NewsItem]? {
+        guard let s = store.selected, !s.newsURL.isEmpty, let items = feeds.news[s.name], !items.isEmpty else { return nil }
+        return items
     }
 
     /// One dropdown for every server, kept next to the account fields since choosing a world and
@@ -2741,4 +2759,10 @@ struct ContentView: View {
         case .bad: return Vana.ember
         }
     }
+}
+
+/// The left column's cards' measured height (`ContentView.hero`).
+private struct CardsHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
