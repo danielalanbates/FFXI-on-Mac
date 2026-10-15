@@ -66,6 +66,10 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         SingleInstance.terminating = true
         SingleInstance.stopListening()
+        // "Quit anyway": the jobs end here, with everything they started and their Wine
+        // sessions, rather than running on with nobody to finish them (JobKill). Never a game:
+        // it is detached, and no job runs Wine in a prefix a game is using.
+        JobKill.endAll()
     }
 
     /// Names the work in flight (the start-up Wine update is not a download); the resume hint
@@ -1578,16 +1582,18 @@ struct ContentView: View {
                 // Stop is never one Return key away.
                 .keyboardShortcut(d.destructive ? nil : .defaultAction)
                 .disabled(!d.enabled)
-                // The running job's own Stop, beside its progress (it used to sit in a banner,
-                // and the installers' in Setup & Diagnostics).
+                // The running job's own Stop, beside its progress, for every job this window runs
+                // (Repair, a copy or Move, Wine's update, an installer, a download): no step of
+                // Setup holds the button with no way out (Daniel, 2026-10-15). What the job
+                // started ends with it, its Wine session included (JobKill).
                 if runner.updatingHorizon {
                     Button("Stop") { runner.stopHorizonUpdate() }
                         .controlSize(.small)
                         .help("Stops the download. Press the button again later to resume.")
-                } else if runner.busy, runner.busyReason.hasPrefix("Installing") || runner.busyReason.hasPrefix("Running") {
-                    Button("Stop") { if let i = active { runner.cancelInstaller(i) } }
+                } else if runner.busy {
+                    Button("Stop") { runner.stopJob() }
                         .controlSize(.small)
-                        .help("Stops the installer running inside the wrapper.")
+                        .help("Stops \(runner.busyReason.isEmpty ? "the job" : runner.busyReason.lowercased()). Press the button again to carry on.")
                 }
             }
             if let p = d.progress { ProgressView(value: p).tint(Vana.gold) }

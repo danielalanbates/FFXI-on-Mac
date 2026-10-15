@@ -55,6 +55,7 @@ final class Runner: ObservableObject {
         busy = true
         errorsAtJobStart = errorsShown
         stopRequested = false
+        jobWine = nil
     }
 
     /// The user pressed Stop on the running job (update, installer): its exit is not a failure.
@@ -161,6 +162,11 @@ final class Runner: ObservableObject {
     static func describe(_ live: [String: [pid_t]]) -> String { LiveClients.describe(live) }
 
     private var proc: Process?
+    /// The Wine session the running job works in (Repair, an installer), ended with it by Stop
+    /// and Quit (JobKill). nil for a job that runs no Wine.
+    private var jobWine: JobKill.Wine?
+    /// Stop on work this process does itself: Wine's prefix update (`updatePrefix`).
+    private let prefixUpdateStop = StopFlag()
     /// Executable Ashita boots the game in for the current launch (the boot profile's
     /// `[ashita.boot] file`): horizon-loader.exe on HorizonXI, pol.exe on CatsEyeXI, xiloader.exe
     /// elsewhere. Both the exit watcher and the x87 sidecar look for this, by name.
@@ -439,6 +445,9 @@ final class Runner: ObservableObject {
             appendLine("!! install.sh not found in the bundle"); done(false); return
         }
         beginBusy("Repairing")
+        // install.sh runs this Wine in this prefix: Stop and Quit end that session too.
+        let wine = Self.playWine(install)
+        jobWine = .init(server: wine.deletingLastPathComponent().appendingPathComponent("wineserver"), prefix: install.prefix)
         appendLine("==> repairing \(install.wrapper.path) [\(install.prefixName)]")
         // Cheap, local, and the difference between "logs in then quits" and a playable game.
         Sandbox.repair(install) { [weak self] in self?.appendLine($0) }
@@ -447,7 +456,8 @@ final class Runner: ObservableObject {
         spawn(URL(fileURLWithPath: "/bin/zsh"),
               args: [script.path, install.wrapper.path, install.prefixName,
                      install.gameDir.path, install.squareEnixWine],
-              env: ["HXI_WINE": Self.playWine(install).path], cwd: Self.scratchDir) { [weak self] code in
+              env: ["HXI_WINE": wine.path], cwd: Self.scratchDir) { [weak self] code in
+            self?.jobWine = nil
             self?.endMaintenance()
             self?.busy = false
             self?.appendLine("==> repair exited \(code)")
@@ -465,6 +475,7 @@ final class Runner: ObservableObject {
         if refuseWhileBusy("Move") { done(nil); return }
         guard claimForMaintenance("Move") else { done(nil); return }
         beginBusy("Moving")
+        InstallMove.copyStop.reset()
         moveProgress = 0
         appendLine("==> moving \(plan.install.wrapper.path) [\(plan.install.prefixName)] to \(folder.path): "
                    + "\(plan.expected)")
@@ -482,7 +493,9 @@ final class Runner: ObservableObject {
                     self.appendLine("==> moved and verified: \(moved.wrapper.path) [\(moved.prefixName)]")
                     done(moved)
                 case .failure(let e):
-                    self.appendLine("!! " + ((e as? InstallMove.Refusal)?.line ?? "Move didn't finish: \(e.localizedDescription)"))
+                    // Stopped: said in the log only, like any other Stop.
+                    if self.stopRequested { self.appendLine("==> Move stopped; the game still plays from where it was") }
+                    else { self.appendLine("!! " + ((e as? InstallMove.Refusal)?.line ?? "Move didn't finish: \(e.localizedDescription)")) }
                     done(nil)
                 }
             }
@@ -496,6 +509,7 @@ final class Runner: ObservableObject {
         if refuseWhileBusy("the copy") { done(false); return }
         guard claimForMaintenance("Copy") else { done(false); return }
         beginBusy("Copying")
+        InstallMove.copyStop.reset()
         moveProgress = 0
         appendLine("==> copying \(source.path) to \(dest.path) (the original stays)")
         let note: @Sendable (String) -> Void = { [weak self] line in Task { @MainActor in self?.logFileOnly(line) } }
@@ -511,7 +525,8 @@ final class Runner: ObservableObject {
                     self.appendLine("==> copied and verified: \(dest.path)")
                     done(true)
                 case .failure(let e):
-                    self.appendLine("!! " + ((e as? InstallMove.Refusal)?.line ?? "The copy didn't finish: \(e.localizedDescription)"))
+                    if self.stopRequested { self.appendLine("==> copy stopped; the original is unchanged") }
+                    else { self.appendLine("!! " + ((e as? InstallMove.Refusal)?.line ?? "The copy didn't finish: \(e.localizedDescription)")) }
                     done(false)
                 }
             }
@@ -566,12 +581,27 @@ final class Runner: ObservableObject {
     /// is only extracted once fully downloaded, so stopping mid-download leaves the client as it was.
     func stopHorizonUpdate() {
         guard updatingHorizon, let p = proc, p.isRunning else { return }
-        let k = Process(); k.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        k.arguments = ["-TERM", "-P", String(p.processIdentifier)]
-        try? k.run(); k.waitUntilExit()
         stopRequested = true
-        p.terminate()
+        // Everything the script started (aria2c, ditto, du), then the script, whose trap removes
+        // its half-unpacked folder.
+        let pid = p.processIdentifier
+        Task.detached { JobKill.end(pid, wine: nil) }
         appendLine("==> update stopped")
+    }
+
+    /// Stop beside the main button, for every other job of this window's: Repair, an installer,
+    /// a client download, Setup's copy, a Move, Wine's prefix update. What it started ends with
+    /// it, its Wine session included; what it finished stays, and the main button carries on.
+    func stopJob() {
+        guard busy else { return }
+        if updatingHorizon { stopHorizonUpdate(); return }
+        stopRequested = true
+        InstallMove.copyStop.raise()
+        prefixUpdateStop.raise()
+        let pid = proc.flatMap { $0.isRunning ? $0.processIdentifier : nil }
+        let wine = jobWine
+        Task.detached { JobKill.end(pid, wine: wine) }
+        appendLine("==> stopped")
     }
 
     /// Run CatsEyeXI's own launcher inside the prefix (scripts/catseye-launcher.sh). Their
@@ -609,23 +639,41 @@ final class Runner: ObservableObject {
     nonisolated static func playWine(_ install: Install) -> URL { X87Sidecar.patchedWine() ?? install.wine }
 
     /// Runs `wineboot -u` with Mono and Gecko disabled (their installers are what ask questions).
-    nonisolated static func updatePrefix(_ install: Install) -> Bool {
+    /// Bounded: a wineboot (or the wait for its wineserver) still going after `limit` seconds, or
+    /// ended by Stop, ends this prefix's Wine session and counts as not done -- "Updating Wine"
+    /// never holds the main button for good. Quit ends it too (JobKill).
+    nonisolated static func updatePrefix(_ install: Install, limit: Double = 300, stop: StopFlag? = nil) -> Bool {
         var env = ProcessInfo.processInfo.environment
         env["WINEPREFIX"] = install.prefix.path; env["WINEDEBUG"] = "-all"
         env["WINEDLLOVERRIDES"] = "mscoree,mshtml="
         env["WINEBOOT_HIDE_DIALOG"] = "1"
         env.removeValue(forKey: "DYLD_FALLBACK_LIBRARY_PATH"); env.removeValue(forKey: "DYLD_LIBRARY_PATH")
         let wine = playWine(install)
+        let session = JobKill.Wine(server: wine.deletingLastPathComponent().appendingPathComponent("wineserver"),
+                                   prefix: install.prefix)
+        let deadline = Date().addingTimeInterval(limit)
+        // True when the process ended by itself in time; otherwise it, and the session, are ended.
+        func finish(_ q: Process) -> Bool {
+            JobKill.track(q.processIdentifier, wine: session)
+            defer { JobKill.untrack(q.processIdentifier) }
+            while q.isRunning {
+                if Date() >= deadline || stop?.raised == true {
+                    JobKill.end(q.processIdentifier, wine: session)
+                    for _ in 0..<50 where q.isRunning { Thread.sleep(forTimeInterval: 0.1) }
+                    return false
+                }
+                Thread.sleep(forTimeInterval: 0.25)
+            }
+            return q.terminationStatus == 0
+        }
         let p = Process(); p.executableURL = wine; p.arguments = ["wineboot", "-u"]; p.environment = env
         p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
-        guard (try? p.run()) != nil else { return false }
-        p.waitUntilExit()
-        let k = Process(); k.executableURL = wine.deletingLastPathComponent().appendingPathComponent("wineserver"); k.arguments = ["-w"]
+        guard (try? p.run()) != nil, finish(p) else { return false }
+        let k = Process(); k.executableURL = session.server; k.arguments = ["-w"]
         k.environment = ["WINEPREFIX": install.prefix.path]
         k.standardOutput = FileHandle.nullDevice; k.standardError = FileHandle.nullDevice
         guard (try? k.run()) != nil else { return false }
-        k.waitUntilExit()
-        return p.terminationStatus == 0 && k.terminationStatus == 0
+        return finish(k)
     }
 
     /// Background check at launcher start and after a Repair. Skipped while any client runs.
@@ -661,10 +709,14 @@ final class Runner: ObservableObject {
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main,
             using: hideMaintenanceWine
         )
-        let ok = await Task.detached { Self.updatePrefix(install) }.value
+        prefixUpdateStop.reset()
+        let stop = prefixUpdateStop
+        let ok = await Task.detached { Self.updatePrefix(install, stop: stop) }.value
         notifications.removeObserver(launchObserver)
         notifications.removeObserver(activateObserver)
-        appendLine(ok ? "==> Wine is up to date" : "!! Wine prefix update did not finish")
+        if ok { appendLine("==> Wine is up to date") }
+        else if stopRequested { appendLine("==> Wine's update stopped; Play runs it again first") }
+        else { appendLine("!! Wine prefix update did not finish") }
     }
 
     /// Make sure the wrapper's installer prefix exists (see `Install.installerPrefix`). Slow the
@@ -890,6 +942,7 @@ final class Runner: ObservableObject {
         var env = ProcessInfo.processInfo.environment
         env["WINEPREFIX"] = install.prefix.path; env["WINEDEBUG"] = "-all"
         env.removeValue(forKey: "DYLD_FALLBACK_LIBRARY_PATH"); env.removeValue(forKey: "DYLD_LIBRARY_PATH")
+        jobWine = .init(server: install.wineserver, prefix: install.prefix)
         spawn(install.wine, args: args,
               env: env, cwd: exe.deletingLastPathComponent()) { [weak self] code in
             guard let self else { return }
@@ -924,6 +977,7 @@ final class Runner: ObservableObject {
             self.appendLine("==> retail client for \(s.name) into \(s.dataPath) (Square Enix's 7.7 GB download, then PlayOnline's update — leave this running)")
             var env: [String: String] = [:]
             env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")
+            self.jobWine = .init(server: ip.wineserver, prefix: ip.prefix)
             self.spawn(URL(fileURLWithPath: "/bin/zsh"),
                        args: [script.path, ip.wrapper.path, ip.prefixName, s.dataPath, s.name],
                        env: env, cwd: Self.scratchDir) { [weak self] code in
@@ -932,15 +986,6 @@ final class Runner: ObservableObject {
                 self?.reportFailure(code, "\(s.name) install failed — Open log in Setup & Diagnostics")
             }
         }
-    }
-
-    /// Stop whatever is running in the installer prefix.
-    func cancelInstaller(_ gameInstall: Install) {
-        let ip = gameInstall.installerPrefix
-        let k = Process(); k.executableURL = ip.wineserver; k.arguments = ["-k"]; k.environment = ["WINEPREFIX": ip.prefix.path]
-        try? k.run()
-        stopRequested = true
-        appendLine("==> installer prefix stopped")
     }
 
     /// Fresh HorizonXI client into `dir` via their published torrent + updates (update-client.sh install).
@@ -1024,6 +1069,7 @@ final class Runner: ObservableObject {
             appendLine("!! catseye-launcher.sh not found in the bundle"); return
         }
         beginBusy("Running CatsEyeXI's launcher")
+        jobWine = .init(server: install.wineserver, prefix: install.prefix)
         appendLine("==> CatsEyeXI launcher in \(install.prefixName)")
         spawn(URL(fileURLWithPath: "/bin/zsh"),
               args: [script.path, install.wrapper.path, install.prefixName],
@@ -1792,12 +1838,16 @@ final class Runner: ObservableObject {
             guard let s = String(data: d, encoding: .utf8) else { return }
             Task { @MainActor [weak self] in self?.appendChunk(s) }
         }
+        let wine = jobWine
         p.terminationHandler = { pr in
+            JobKill.untrack(pr.processIdentifier)
             Task { @MainActor in done(pr.terminationStatus) }
         }
         do {
             try p.run()
             proc = p
+            // Stop and Quit end it, what it started, and its Wine session (JobKill).
+            JobKill.track(p.processIdentifier, wine: wine)
         } catch {
             appendLine("!! failed to start \(exe.path): \(error.localizedDescription)")
             done(-1)

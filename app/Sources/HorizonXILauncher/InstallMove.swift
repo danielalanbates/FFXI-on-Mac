@@ -513,9 +513,15 @@ enum InstallMove {
         return lstat(u.path, &st) == 0 && st.st_mode & S_IFMT == S_IFDIR
     }
 
+    /// Raised by the Stop beside the main button (Runner.stopJob): the running copy ends, and its
+    /// partial folder goes where a failed one goes. One copy runs at a time (the maintenance lock).
+    static let copyStop = StopFlag()
+
     /// `ditto src dst`: copies files, folders and links as they are (links are not followed),
-    /// with their permissions, dates and extended attributes. Polls progress while it runs.
+    /// with their permissions, dates and extended attributes. Polls progress while it runs, and
+    /// Stop; Quit ends it (JobKill) rather than leaving it copying with nobody to switch to it.
     private static func ditto(_ src: String, _ dst: String, tick: () -> Void) throws {
+        if copyStop.raised { throw Refusal("Stopped, so nothing was switched.") }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
         p.arguments = [src, dst]
@@ -523,9 +529,15 @@ enum InstallMove {
         p.standardError = err
         p.standardOutput = FileHandle.nullDevice
         try p.run()
-        while p.isRunning { tick(); Thread.sleep(forTimeInterval: 0.5) }
+        JobKill.track(p.processIdentifier, wine: nil)
+        defer { JobKill.untrack(p.processIdentifier) }
+        while p.isRunning {
+            if copyStop.raised { p.terminate() }
+            tick(); Thread.sleep(forTimeInterval: 0.5)
+        }
         p.waitUntilExit()
         tick()
+        if copyStop.raised { throw Refusal("Stopped, so nothing was switched.") }
         guard p.terminationStatus == 0 else {
             let why = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             throw Refusal("The copy stopped: \(why.split(separator: "\n").first.map(String.init) ?? "ditto failed").")
