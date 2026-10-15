@@ -54,6 +54,10 @@ extension Headless {
         checks.append(("patch notes show their summary; notices are their title alone",
                        patch?.showsExcerpt == true && patch?.excerpt.hasPrefix("Battlefields An issue") == true
                            && items.filter { $0.category != "patch-notes" }.allSatisfy { !$0.showsExcerpt }))
+        checks.append(("the summary is the post's own sentences without its section headings",
+                       patch?.summary.hasPrefix("An issue where the orbs in \"Pulling the Plug\" would sometimes chase players should be resolved. The Light Elemental") == true
+                           && item("2026-09-27_server-notices")?.summary == item("2026-09-27_server-notices")?.body.first?.text
+                           && News.parse(Data(#"[{"slug":"a","title":"t","excerpt":"Only this","category":"patch-notes"}]"#.utf8))?.first?.summary == "Only this"))
         var utc = Calendar(identifier: .gregorian)
         utc.timeZone = TimeZone(identifier: "UTC")!
         let now = ISO8601DateFormatter().date(from: "2026-10-15T20:00:00Z")!
@@ -212,7 +216,7 @@ extension Headless {
         }
         for i in items {
             print("\(i.label.uppercased()) | \(i.title) | \(News.shortDate(i.date, fallback: i.printDate))")
-            if i.showsExcerpt { print("    \(i.excerpt)") }
+            if i.showsExcerpt { print("    \(i.summary)") }
         }
         exit(0)
     }

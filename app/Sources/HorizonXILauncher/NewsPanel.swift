@@ -9,8 +9,10 @@ struct NewsPanel: View {
     let items: [NewsItem]
     /// `Server.newsPageURL`, for the sheet's link to the post on the world's site.
     let pageTemplate: String
-    /// About six rows; the rest scroll.
-    var maxHeight: CGFloat = 318
+    /// Five to eight rows, by how many carry a summary; the rest scroll. Shrinks (to `minHeight`)
+    /// before anything below it is pushed out of a small window.
+    var maxHeight: CGFloat = 360
+    var minHeight: CGFloat = 120
 
     @State private var open: NewsItem?
     @State private var hover: String?
@@ -29,7 +31,7 @@ struct NewsPanel: View {
             })
         }
         .onPreferenceChange(NewsHeightKey.self) { contentHeight = $0 }
-        .frame(height: contentHeight > 0 ? min(contentHeight, maxHeight) : maxHeight)
+        .frame(minHeight: min(fullHeight, minHeight), maxHeight: min(fullHeight, maxHeight))
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.22)))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Vana.stroke))
         .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -38,37 +40,50 @@ struct NewsPanel: View {
         }
     }
 
+    /// The rows' own height once measured; until then, the cap.
+    private var fullHeight: CGFloat { contentHeight > 0 ? contentHeight : maxHeight }
+
     private func row(_ item: NewsItem) -> some View {
-        Button { open = item } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    NewsChip(item: item)
-                    Spacer(minLength: 4)
-                    Text(News.shortDate(item.date, fallback: item.printDate))
-                        .font(.system(size: 11)).foregroundStyle(Vana.muted)
-                        .help(item.printDate)
-                }
-                Text(item.title)
-                    .font(.system(size: 13, weight: .medium)).foregroundStyle(Vana.text)
+        Button { open = item } label: { NewsRow(item: item, hovered: hover == item.id) }
+            .buttonStyle(.plain)
+            .onHover { inside in
+                hover = inside ? item.id : (hover == item.id ? nil : hover)
+                if inside { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
+            }
+    }
+}
+
+/// One post in the panel: chip and date, the title (two lines at most), and for patch notes
+/// the summary (two lines at most).
+struct NewsRow: View {
+    let item: NewsItem
+    var hovered = false
+    var now = Date()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                NewsChip(item: item)
+                Spacer(minLength: 4)
+                Text(News.shortDate(item.date, fallback: item.printDate, now: now))
+                    .font(.system(size: 11)).foregroundStyle(Vana.muted)
+                    .help(item.printDate)
+            }
+            Text(item.title)
+                .font(.system(size: 13, weight: .medium)).foregroundStyle(Vana.text)
+                .lineLimit(2).multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+            if item.showsExcerpt {
+                Text(item.summary)
+                    .font(.system(size: 12)).foregroundStyle(Vana.muted)
                     .lineLimit(2).multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
-                if item.showsExcerpt {
-                    Text(item.excerpt)
-                        .font(.system(size: 12)).foregroundStyle(Vana.muted)
-                        .lineLimit(2).multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             }
-            .padding(.horizontal, 12).padding(.vertical, 9)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(hover == item.id ? Vana.crystal.opacity(0.07) : Color.clear)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .onHover { inside in
-            hover = inside ? item.id : (hover == item.id ? nil : hover)
-            if inside { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
-        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(hovered ? Vana.crystal.opacity(0.07) : Color.clear)
+        .contentShape(Rectangle())
     }
 }
 
@@ -125,7 +140,7 @@ struct NewsSheet: View {
                 Rectangle().fill(Vana.stroke).frame(height: 1)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 6) {
-                        ForEach(Array(item.body.enumerated()), id: \.offset) { _, b in block(b) }
+                        ForEach(Array(item.body.enumerated()), id: \.offset) { _, b in Self.block(b) }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
@@ -149,7 +164,7 @@ struct NewsSheet: View {
         .background(Vana.backdrop)
     }
 
-    @ViewBuilder private func block(_ b: NewsBlock) -> some View {
+    @ViewBuilder static func block(_ b: NewsBlock) -> some View {
         switch b {
         case .heading(let a):
             Text(a).font(.system(size: 14, weight: .semibold, design: .serif))

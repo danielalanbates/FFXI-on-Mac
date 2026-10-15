@@ -21,7 +21,15 @@ struct NewsItem: Identifiable, Equatable {
     let body: [NewsBlock]
 
     /// Patch notes carry a one- or two-line summary under the title; notices are their title.
-    var showsExcerpt: Bool { category == "patch-notes" && !excerpt.isEmpty }
+    var showsExcerpt: Bool { category == "patch-notes" && !summary.isEmpty }
+
+    /// The row's summary: the post's own sentences, section headings left out. The feed's
+    /// excerpt runs a heading into the first item ("Battlefields An issue where the orbs…"),
+    /// so it is used only for a post without a body.
+    var summary: String {
+        let lines = body.compactMap { b -> String? in if case .heading = b { return nil } else { return b.text } }
+        return lines.isEmpty ? excerpt : lines.joined(separator: " ")
+    }
 }
 
 /// The detail sheet's content. No HTML engine is involved: tags are read here and only text,
