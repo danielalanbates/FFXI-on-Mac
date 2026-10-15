@@ -59,6 +59,20 @@ extension Headless {
                 checks.append(("x87 guard: same build and sidecar stays off", after))
                 checks.append(("x87 guard: a changed sidecar is tried again", !rebuilt))
                 checks.append(("x87 guard: a different macOS build is tried again", !otherBuild))
+                // A sidecar merely gone a minute in can be timing: two sessions in a row count.
+                d.removeObject(forKey: X87Guard.defaultsKey)
+                let first = X87Guard.timingFailure(sidecar: sidecar, defaults: d)
+                let firstBroken = X87Guard.isBroken(sidecar: sidecar, defaults: d)
+                X87Guard.clearSuspect(defaults: d)
+                let afterLive = X87Guard.timingFailure(sidecar: sidecar, defaults: d)
+                let second = X87Guard.timingFailure(sidecar: sidecar, defaults: d)
+                X87Guard.markBroken(sidecar: sidecar, defaults: d)
+                checks.append(("x87 guard: one session with no sidecar is only noted",
+                               !first && !firstBroken))
+                checks.append(("x87 guard: a live sidecar in between starts the count again", !afterLive))
+                checks.append(("x87 guard: the second session in a row records it, and the note is cleared",
+                               second && d.string(forKey: X87Guard.suspectKey) == nil
+                                   && X87Guard.isBroken(sidecar: sidecar, defaults: d)))
             } catch {
                 checks.append(("x87 guard fixture", false))
             }

@@ -156,9 +156,10 @@ enum X87Sidecar {
 /// and stock Rosetta measured ~11 fps in-world. The real risk is narrower: the sidecar sets
 /// `ROSETTA_DISABLE_AOT=1` for its target before exec, so a target whose hook never installs
 /// runs Rosetta's slow JIT path with no x87 JIT behind it (the 19x loss in docs/X87-SIDECAR.md).
-/// When that is seen once, the pairing of this macOS build and this sidecar binary is recorded
-/// and later launches leave `ROSETTA_X87_PATH` off until either changes. The running client is
-/// never touched.
+/// When that is seen (once for the sidecar's own failure lines, in two sessions in a row for a
+/// sidecar simply gone, which can be timing), the pairing of this macOS build and this sidecar
+/// binary is recorded and later launches leave `ROSETTA_X87_PATH` off until either changes. The
+/// running client is never touched.
 enum X87Guard {
     static let defaultsKey = "x87.brokenFor"
 
@@ -181,7 +182,12 @@ enum X87Guard {
     /// Any i386 wine process that dies before its handshake prints it, so on its own it says
     /// nothing about the client. The client's own case is caught by its sidecar being gone
     /// (`Runner`'s check a minute after the loader appears), which this only notes in the log.
+    /// That check is timing too (a client that needs over 30 s to reach the handshake under
+    /// heavy swap looks the same), so it counts only in two sessions in a row: `suspectKey`.
     static let timeoutMarker = "[rosettax87] cooperative handshake receive failed"
+    /// The fingerprint whose last checked session had no sidecar a minute in. Cleared when a
+    /// session sees its sidecar alive.
+    static let suspectKey = "x87.suspectFor"
 
     /// The first failure line in `text`, if any.
     static func failure(in text: String) -> String? {
@@ -240,6 +246,21 @@ enum X87Guard {
     static func markBroken(sidecar: URL, defaults: UserDefaults = .standard) {
         guard let f = fingerprint(sidecar: sidecar) else { return }
         defaults.set(f, forKey: defaultsKey)
+        defaults.removeObject(forKey: suspectKey)
+    }
+
+    /// A session with no sidecar a minute in. True when the previous checked session of this
+    /// same pairing showed it too (the caller then records it); otherwise it is only noted.
+    static func timingFailure(sidecar: URL, defaults: UserDefaults = .standard) -> Bool {
+        guard let f = fingerprint(sidecar: sidecar) else { return false }
+        if defaults.string(forKey: suspectKey) == f { return true }
+        defaults.set(f, forKey: suspectKey)
+        return false
+    }
+
+    /// The sidecar was seen alive: a single earlier timing failure was not the pairing's fault.
+    static func clearSuspect(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: suspectKey)
     }
 
     /// Whether this launch uses the sidecar. `override` is `FFXI_ON_MAC_X87` from the launcher's

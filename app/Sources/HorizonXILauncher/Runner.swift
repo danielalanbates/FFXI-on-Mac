@@ -1044,7 +1044,7 @@ final class Runner: ObservableObject {
         DockIcon.apply(to: install, world: playingWorlds) { [weak self] in self?.appendLine($0) }
         // x87 acceleration on every macOS version: the best in-world numbers on record were
         // taken on macOS 27.0 with it on, and stock Rosetta is ~11 fps in-world. What is guarded
-        // instead is the one bad case, a hook that does not attach (X87Guard): seen once, this
+        // instead is the one bad case, a hook that does not attach (X87Guard): once recorded, this
         // macOS build + sidecar pairing runs stock Rosetta from the next launch on.
         // FFXI_ON_MAC_X87=0 forces it off; =1 forces it on past a recorded failure.
         let x87Override = ProcessInfo.processInfo.environment["FFXI_ON_MAC_X87"]
@@ -1203,17 +1203,26 @@ final class Runner: ObservableObject {
         let group = sessionGroup
         if snap.sidecars.contains(where: { mine.contains($0) || (group != nil && snap.groups[$0] == group) }) {
             x87Settled = true
+            X87Guard.clearSuspect()
             logFileOnly("x87: sidecar live beside the client a minute after it appeared")
         } else {
-            x87Failed("no x87 sidecar alive in this session a minute after the loader appeared")
+            x87Failed("no x87 sidecar alive in this session a minute after the loader appeared",
+                      timingOnly: true)
         }
     }
 
     /// Records the failure for this macOS build + sidecar and says so once. Never touches the
     /// running client: it plays on at stock speed, and the next launch leaves the sidecar off.
-    private func x87Failed(_ why: String) {
+    /// `timingOnly` (no sidecar a minute in, no failure line): recorded only when the previous
+    /// checked session of this pairing showed it too; the first time goes to launcher.log.
+    private func x87Failed(_ why: String, timingOnly: Bool = false) {
         guard !x87Settled, let sidecar = x87Sidecar else { return }
         x87Settled = true
+        if timingOnly, !X87Guard.timingFailure(sidecar: sidecar) {
+            logFileOnly("x87: did not attach (\(why)); recorded for macOS \(X87Guard.osBuild()) "
+                        + "only if the next session shows it too")
+            return
+        }
         X87Guard.markBroken(sidecar: sidecar)
         logFileOnly("x87: did not attach (\(why)); recorded for macOS \(X87Guard.osBuild())")
         appendLine(x87Forced ? "!! x87 acceleration didn't attach (FFXI_ON_MAC_X87=1 keeps trying it)."
