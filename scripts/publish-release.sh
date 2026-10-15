@@ -33,8 +33,9 @@ LEGACY_TAG="v3.9"
 target="" notes="" legacy_dmg="" yes=0
 while (( $# )); do
   case "$1" in
-    --notes) notes="${2:-}"; shift 2 ;;
-    --legacy-dmg) legacy_dmg="${2:-}"; shift 2 ;;
+    # zsh's `shift 2` with one argument left shifts nothing, which would loop forever.
+    --notes) (( $# >= 2 )) || { print -u2 -- "--notes needs a file"; exit 2; }; notes="$2"; shift 2 ;;
+    --legacy-dmg) (( $# >= 2 )) || { print -u2 -- "--legacy-dmg needs a file"; exit 2; }; legacy_dmg="$2"; shift 2 ;;
     --yes) yes=1; shift ;;
     -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
     *) [[ -z "$target" ]] || { print -u2 "unexpected argument: $1"; exit 2; }; target="$1"; shift ;;
