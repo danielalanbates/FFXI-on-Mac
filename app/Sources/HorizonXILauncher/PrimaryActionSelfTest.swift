@@ -64,6 +64,8 @@ extension Headless {
         expect("game not downloaded -> Setup", x, .setup(.game(partial: false)), reason: "HorizonXI isn't installed yet.")
         x = base; x.checks = [bad("ashita")]
         expect("Ashita missing -> Setup", x, .setup(.game(partial: true)), reason: "Some of HorizonXI's files are missing.")
+        x.hasGame = false
+        expect("... also when hasGame (which is Ashita) is false", x, .setup(.game(partial: true)))
         x = base; x.checks = [bad("squareenix")]
         expect("base files missing on a present drive -> Setup", x, .setup(.game(partial: true)))
         x.canDownload = false; x.world = "Nowhere"

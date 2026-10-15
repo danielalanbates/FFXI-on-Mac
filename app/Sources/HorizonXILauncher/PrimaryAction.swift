@@ -218,7 +218,10 @@ enum Primary {
         if bad.contains(where: { $0.id == "fda" }) { return make(.repair(.access), x) }
         if bad.contains(where: { $0.id == "wine" }) { return make(.setup(.wine), x) }
         if !x.hasGame || bad.contains(where: { gameFiles.contains($0.id) }) {
-            return make(x.canDownload ? .setup(.game(partial: x.hasGame)) : .setup(.chooseFolder), x)
+            // Partial: Ashita or the base data is there, so this is a repair of the download, not
+            // a first one.
+            let partial = x.hasGame || !bad.contains(where: { $0.id == "squareenix" || $0.id == "client" })
+            return make(x.canDownload ? .setup(.game(partial: partial)) : .setup(.chooseFolder), x)
         }
         if bad.contains(where: { $0.id == "worldclient" }) { return make(.setup(.chooseFolder), x) }
         if x.patchedWineMissing { return make(.setup(.gameWine), x) }
