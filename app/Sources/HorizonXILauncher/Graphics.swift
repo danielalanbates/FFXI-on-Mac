@@ -124,13 +124,16 @@ struct GraphicsSettings: Codable, Equatable {
     /// Note also that turning *quality* down does not help on this Mac: docs/SETTINGS-SWEEP.md
     /// measured it and "all low" was the slowest variant of the lot (9.71 fps against a 12.85
     /// baseline), because the client is CPU-bound and mip mapping off makes the GPU sample
-    /// full-size textures at distance. So this preset drops resolution and leaves quality alone
-    /// — fewer pixels, same work per pixel. It is here to save memory and battery on a machine
-    /// running a server, a launcher, a narrator and a client at once, not to gain frames.
+    /// full-size textures at distance. So this preset drops the window size and nothing else:
+    /// every quality value is `max4K`'s (4096 textures, 20 sound channels). It used to seed
+    /// 1024 textures and 12 channels, which was not max. It is here to save memory and battery
+    /// on a machine running a server, a launcher, a narrator and a client at once, not to gain
+    /// frames.
     static var lowSpec: GraphicsSettings {
-        GraphicsSettings(width: 640, height: 480, uiFollowsResolution: true,
-                         textureResolution: 1024, mipMapping: 2, textureCompression: 2,
-                         bumpMapping: true, environmentAnimation: true, soundChannels: 12)
+        var g = max4K
+        g.width = 640
+        g.height = 480
+        return g
     }
 
     static var balanced: GraphicsSettings {

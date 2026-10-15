@@ -887,7 +887,7 @@ struct ContentView: View {
 
             HStack {
                 Button("Low") { graphics = .lowSpec }
-                    .help("Lower resolution and texture memory use.")
+                    .help("640 × 480 window; every quality setting stays at max.")
                 Button("Balanced") { graphics = .balanced }
                     .help("1080p with standard texture detail.")
                 Button("Max (4K)") { graphics = .max4K }

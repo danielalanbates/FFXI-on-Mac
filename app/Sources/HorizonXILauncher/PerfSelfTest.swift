@@ -110,6 +110,15 @@ extension Headless {
                        env["DXVK_CONFIG_FILE"] == #"C:\dxvk-cache\dxvk.conf"#
                            && env["DXVK_STATE_CACHE_PATH"] == #"C:\dxvk-cache"#))
 
+        // Graphics: the local world's small default is a window size, never lower quality.
+        var lowQuality = GraphicsSettings.lowSpec
+        lowQuality.width = GraphicsSettings.max4K.width
+        lowQuality.height = GraphicsSettings.max4K.height
+        checks.append(("the local world's seed is max quality at 640x480 (4096 textures, 20 channels)",
+                       lowQuality == GraphicsSettings.max4K && GraphicsSettings.lowSpec.width == 640
+                           && GraphicsSettings.lowSpec.textureResolution == 4096
+                           && GraphicsSettings.lowSpec.soundChannels == 20))
+
         // Idempotent pre-launch setup: what user.reg already holds is not written again.
         let hive = RendererSetup.hiveValues("""
             WINE REGISTRY Version 2
