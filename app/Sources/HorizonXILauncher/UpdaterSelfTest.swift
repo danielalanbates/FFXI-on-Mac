@@ -113,6 +113,25 @@ extension Headless {
              UpdateRules.release(fromAPI: api(tag: "v3.9", name: "FFXI-on-Mac-3.9.dmg"))?.build.build == 0, true),
         ]
 
+        // Restart re-asks GitHub: only the release that is still exactly the latest installs.
+        if let staged = parsed {
+            func latest(_ tag: String, _ name: String) -> UpdateRelease? {
+                UpdateRules.release(fromAPI: api(tag: tag, name: name))
+            }
+            checks += [
+                ("Restart: still the latest release, installed",
+                 UpdateRules.isStillLatest(staged, latest: latest("v3.10", "FFXI-on-Mac-3.10-b60.dmg")), true),
+                ("Restart: withdrawn (nothing usable is latest), not installed",
+                 UpdateRules.isStillLatest(staged, latest: nil), false),
+                ("Restart: latest rolled back to v3.9, not installed",
+                 UpdateRules.isStillLatest(staged, latest: latest("v3.9", "FFXI-on-Mac-3.9.dmg")), false),
+                ("Restart: same tag, rebuilt asset b61, not installed",
+                 UpdateRules.isStillLatest(staged, latest: latest("v3.10", "FFXI-on-Mac-3.10-b61.dmg")), false),
+                ("Restart: overtaken by v3.11, not installed (v3.11 is staged instead)",
+                 UpdateRules.isStillLatest(staged, latest: latest("v3.11", "FFXI-on-Mac-3.11-b62.dmg")), false),
+            ]
+        }
+
         // Rejected-tag memory, in a scratch domain so the real defaults are never touched. One
         // fixed name, emptied before and after (cfprefsd may leave its empty plist behind).
         let suite = "org.batesai.horizonxi-on-mac.selftest-updater"

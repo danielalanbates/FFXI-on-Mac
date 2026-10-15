@@ -265,6 +265,21 @@ final class Updater: ObservableObject {
     private func install(_ release: UpdateRelease) async {
         if let why = await restartBlocker() { return state = .restartFailed(release, why) }
         guard UpdateWork.canSelfUpdate else { return state = .manual(release) }
+        // `.ready` never checks again, so ask once more: a release withdrawn (or replaced) since
+        // it was staged is not installed, and the line goes. Briefly; no answer (offline, rate
+        // limit) is no reason to hold back a release that verified.
+        do {
+            let latest = try await UpdateWork.fetchLatest(timeout: 8)
+            if !UpdateRules.isStillLatest(release, latest: latest) {
+                UpdateWork.note("\(release.tag) \(release.assetName) is no longer the latest release "
+                                + "(\(latest.map { "\($0.tag) \($0.assetName)" } ?? "none usable")); not installing it")
+                UpdateWork.prune(keeping: nil)
+                state = .idle
+                return check()
+            }
+        } catch {
+            UpdateWork.note("could not recheck the latest release before installing: \(error.localizedDescription)")
+        }
         guard let staged = UpdateWork.stagedApp(for: release),
               await Task.detached(priority: .userInitiated, operation: {
                   (try? UpdateWork.verify(app: staged, release: release)) != nil
@@ -436,6 +451,15 @@ enum UpdateRules {
     /// assessment itself failed (a missing path measured 1), which is no verdict at all.
     static func isRefusal(spctl status: Int32) -> Bool { status == 3 }
 
+    /// Restart installs a staged release only while it is still exactly the latest one: same
+    /// tag, same version and build. Withdrawn (nothing usable is latest), rolled back to an older
+    /// tag, replaced by a rebuilt asset, or overtaken by a newer release (which is staged and
+    /// offered instead) all say no.
+    static func isStillLatest(_ staged: UpdateRelease, latest: UpdateRelease?) -> Bool {
+        guard let latest else { return false }
+        return latest.tag == staged.tag && latest.build == staged.build
+    }
+
     enum CheckStep: Equatable { case upToDate, rejected, stage }
 
     /// What a check does with the latest release. A tag that failed verification is dropped
@@ -515,8 +539,9 @@ enum UpdateWork {
         return URLSession(configuration: c, delegate: RedirectGuard(), delegateQueue: nil)
     }()
 
-    static func fetchLatest() async throws -> UpdateRelease? {
+    static func fetchLatest(timeout: TimeInterval = 30) async throws -> UpdateRelease? {
         var req = URLRequest(url: URL(string: "https://api.github.com/repos/\(UpdateRules.repo)/releases/latest")!)
+        req.timeoutInterval = timeout
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("FFXI-on-Mac", forHTTPHeaderField: "User-Agent")
         let (data, resp) = try await session.data(for: req)
