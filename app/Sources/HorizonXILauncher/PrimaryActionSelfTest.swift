@@ -3,152 +3,214 @@ import Foundation
 /// `--selftest-primary-action`: every state the main button can be in, from plain inputs, plus
 /// Repair's refusal on a fixture whose data sits behind a missing drive. Writes only to a
 /// temporary folder; reads nothing of the real install.
+///
+/// The rules it holds the button to (Daniel, 2026-10-15): the label is one of Setup, Update,
+/// Repair, Play, Stop, Play Another, or a running job's progress; anything not installed or a
+/// dependency not done is Setup; a drive that is gone is Setup (reconnect it or put the game
+/// elsewhere) and never "restart"; PLAY says nothing when the game is ready.
 extension Headless {
     @MainActor static func runPrimaryActionSelfTest() -> Never {
         var results: [(String, Bool)] = []
         func bad(_ id: String, drive: String? = nil) -> Check {
             Check(id: id, title: id, state: .bad, detail: "", short: "\(id) short", drive: drive)
         }
-        func expect(_ name: String, _ x: PrimaryInputs, _ want: PrimaryAction, enabled: Bool? = nil) {
+        var seen: [(String, PrimaryDecision)] = []
+        func expect(_ name: String, _ x: PrimaryInputs, _ want: PrimaryAction, enabled: Bool? = nil,
+                    reason: String?? = nil) {
             let d = Primary.decide(x)
+            seen.append((name, d))
             var ok = d.action == want
             if let e = enabled { ok = ok && d.enabled == e }
-            results.append((name + "  -> \(d.action.id) \"\(d.label)\"", ok))
+            if let r = reason { ok = ok && d.reason == r }
+            results.append((name + "  -> \(d.action.id)\(d.action.detail.isEmpty ? "" : ":" + d.action.detail) \"\(d.label)\""
+                            + (d.reason.map { " / \($0)" } ?? ""), ok))
         }
         var base = PrimaryInputs()
         base.checks = [Check(id: "wine", title: "Wine", state: .ok, detail: "")]
 
-        expect("ready -> Play", base, .play, enabled: true)
+        expect("ready -> Play, no reason line", base, .play, enabled: true, reason: .some(nil))
 
-        // Drives.
+        // Drives. Daniel's Mac on 2026-10-15: SquareEnix links into a ghost-mounted 'Games'.
         var x = base; x.checks = [bad("squareenix", drive: "Games"), bad("reg32")]; x.driveStates = ["Games": .ghost]
-        expect("ghost 'Games' (Daniel 2026-10-15) -> Restart Mac, never Repair", x, .restartMac(drive: "Games"), enabled: true)
-        x.driveStates = ["Games": .unmounted(device: "disk9s1")]
-        expect("unmounted drive -> Mount (diskutil, no admin)", x, .mountDrive(drive: "Games", device: "disk9s1"))
+        expect("ghost 'Games' (Daniel 2026-10-15) -> Setup, never Repair or restart", x, .setup(.dataDrive("Games")),
+               enabled: true, reason: "The 'Games' drive isn't connected — reconnect it or press Setup.")
         x.driveStates = ["Games": .absent]
-        expect("unplugged drive -> Connect (disabled)", x, .connectDrive(drive: "Games"), enabled: false)
+        expect("unplugged data drive -> Setup", x, .setup(.dataDrive("Games")), enabled: true)
         x.driveStates = [:]
-        expect("drive with unknown state -> Connect", x, .connectDrive(drive: "Games"))
+        expect("data drive in an unknown state -> Setup", x, .setup(.dataDrive("Games")))
+        x.driveStates = ["Games": .unmounted(device: "disk9s1")]
+        expect("unmounted drive -> Repair (diskutil mount, no admin)", x, .repair(.mount(drive: "Games", device: "disk9s1")),
+               enabled: true, reason: "The 'Games' drive isn't mounted.")
         x = base; x.checks = [bad("volume", drive: "x10")]; x.driveStates = ["x10": .ghost]
-        expect("wrapper's own volume ghosted -> Restart Mac", x, .restartMac(drive: "x10"))
+        expect("the wrapper's own drive ghosted -> Setup", x, .setup(.wrapperDrive("x10")))
 
         // No install.
         x = base; x.hasInstall = false; x.scanning = true
-        expect("no install, scanning -> working", x, .working("Looking for your install", progress: nil), enabled: false)
+        expect("no install, scanning -> Checking…", x, .working(.checking, progress: nil), enabled: false)
         x.scanning = false
-        expect("no install -> Install Wine", x, .installWine, enabled: true)
+        expect("no install -> Setup", x, .setup(.install), enabled: true, reason: "HorizonXI isn't installed yet.")
         x.rememberedDrive = "x10"; x.driveStates = ["x10": .absent]
-        expect("remembered install on unplugged drive -> Connect, not Install Wine", x, .connectDrive(drive: "x10"))
+        expect("remembered install on an unplugged drive -> Setup naming the drive", x, .setup(.wrapperDrive("x10")),
+               reason: "The 'x10' drive isn't connected — reconnect it or press Setup.")
+        x.driveStates = ["x10": .unmounted(device: "disk8s2")]
+        expect("remembered install on an unmounted drive -> Repair", x, .repair(.mount(drive: "x10", device: "disk8s2")))
 
-        // Access, wine, game files.
+        // Access, Wine, the game, its folder.
         x = base; x.checks = [bad("fda"), bad("wine")]
-        expect("Full Disk Access + wine failing -> Allow Access", x, .allowAccess)
+        expect("Full Disk Access (+ wine unreadable) -> Repair", x, .repair(.access), enabled: true)
         x = base; x.checks = [bad("wine"), bad("client")]
-        expect("wine missing -> Install Wine", x, .installWine)
+        expect("Wine missing -> Setup", x, .setup(.wine), reason: "Wine isn't installed yet.")
         x = base; x.hasGame = false; x.checks = [bad("client"), bad("squareenix"), bad("ashita")]
-        expect("no client -> Download HorizonXI", x, .downloadGame(world: "HorizonXI"))
+        expect("game not downloaded -> Setup", x, .setup(.game(partial: false)), reason: "HorizonXI isn't installed yet.")
         x = base; x.checks = [bad("ashita")]
-        expect("Ashita missing -> Download", x, .downloadGame(world: "HorizonXI"))
+        expect("Ashita missing -> Setup", x, .setup(.game(partial: true)), reason: "Some of HorizonXI's files are missing.")
         x = base; x.checks = [bad("squareenix")]
-        expect("data missing on a present drive -> Download", x, .downloadGame(world: "HorizonXI"))
+        expect("base files missing on a present drive -> Setup", x, .setup(.game(partial: true)))
         x.canDownload = false; x.world = "Nowhere"
-        expect("data missing, no download route -> Choose folder", x, .chooseFolder(world: "Nowhere"))
+        expect("files missing, no download route -> Setup (choose the folder)", x, .setup(.chooseFolder))
         x = base; x.checks = [bad("worldclient")]
-        expect("ambiguous client folder -> Choose folder", x, .chooseFolder(world: "HorizonXI"))
+        expect("no folder chosen / ambiguous -> Setup (choose the folder)", x, .setup(.chooseFolder))
 
-        // Repair vs fixed by Play.
-        x = base; x.checks = [bad("rpath"), bad("reg32")]
-        expect("rpath -> Repair", x, .repair, enabled: true)
-        x = base; x.checks = [bad("reg32"), bad("reglayout"), bad("com"), bad("sandbox")]
-        expect("registry/COM/sandbox only -> Play (Play fixes them)", x, .play, enabled: true)
-        x = base; x.checks = [bad("mystery")]
-        expect("unknown failing check -> blocked with its line", x, .blocked("mystery short"), enabled: false)
-
-        // Game wine.
+        // The game Wine, Repair, and what Play fixes itself.
         x = base; x.patchedWineMissing = true
-        expect("wine-coop missing -> Game Wine Needed (disabled)", x, .needGameWine, enabled: false)
+        expect("patched game Wine missing -> Setup", x, .setup(.gameWine), enabled: true,
+               reason: "The game's Wine isn't installed yet.")
         x.checks = [bad("rpath")]
-        expect("wine-coop missing but Repair first", x, .repair)
+        expect("game Wine and Wine's links both missing -> Setup first (its chain repairs too)", x, .setup(.gameWine))
+        x = base; x.checks = [bad("rpath"), bad("reg32")]
+        expect("Wine's library links -> Repair", x, .repair(.wine), enabled: true, reason: "Wine needs a quick repair.")
+        x = base; x.checks = [bad("reg32"), bad("reglayout"), bad("com"), bad("sandbox")]
+        expect("registry / COM / sandbox only -> Play, no line (Play fixes them)", x, .play, enabled: true, reason: .some(nil))
+        x = base; x.checks = [bad("mystery")]
+        expect("unknown failing check -> Play greyed with its line", x, .blocked("mystery short"), enabled: false)
+
+        // Local server.
+        x = base; x.isLocal = true; x.localReady = false
+        expect("local server not built -> Setup", x, .setup(.localServer(enabled: true)), enabled: true)
+        x.localBelowFloor = true
+        expect("local server, disk below its floor -> Setup greyed", x, .setup(.localServer(enabled: false)), enabled: false)
+        x.localForce = true
+        expect("... unless 'Set up anyway' is ticked", x, .setup(.localServer(enabled: true)), enabled: true)
+        x = base; x.isLocal = true; x.localReady = nil
+        expect("local status loading -> Checking…", x, .working(.checking, progress: nil))
+        x.localReady = true; x.accountNeeded = true
+        expect("local world needs no account", x, .play)
 
         // Updates.
         x = base; x.horizonInstalled = "2.0.4"; x.horizonLatest = "2.0.5"
-        expect("HorizonXI behind -> Update", x, .updateGame(world: "HorizonXI", to: "2.0.5"))
+        expect("HorizonXI behind -> Update", x, .update(world: "HorizonXI", to: "2.0.5"), enabled: true,
+               reason: "HorizonXI 2.0.5 is available.")
         x.updateDeferred = true
-        expect("update deferred this session -> Play", x, .play)
+        expect("update failed or stopped this session -> Play", x, .play)
         x = base; x.horizonInstalled = "2.0.5"; x.horizonLatest = "2.0.5"
         expect("HorizonXI current -> Play", x, .play)
         x = base; x.world = "CatsEyeXI"; x.clientRequired = "30251204_1"; x.clientInstalled = "30240101_0"; x.canUpdateClient = true
-        expect("CatsEye client too old -> Update", x, .updateGame(world: "CatsEyeXI", to: "30251204_1"))
+        expect("CatsEye client too old -> Update", x, .update(world: "CatsEyeXI", to: "30251204_1"))
         x.canUpdateClient = false; x.world = "Eden"
-        expect("client too old, no updater -> disabled line", x, .clientTooOld(have: "30240101_0", need: "30251204_1"), enabled: false)
+        expect("client too old, no updater -> Play greyed with the versions", x,
+               .blocked("Needs client 30251204_1; you have 30240101_0."), enabled: false)
 
-        // Busy, running, waiting.
-        x = base; x.ownJob = "Downloading"; x.ownProgress = 0.42
+        // Jobs, running, waiting.
+        x = base; x.setupRunning = true; x.setupProgress = 0.42
         let dl = Primary.decide(x)
-        results.append(("own download -> \"\(dl.label)\" disabled with progress",
-                        dl.action == .working("Downloading", progress: 0.42) && !dl.enabled && dl.label == "Downloading 42%"))
+        seen.append(("setup running", dl))
+        results.append(("Setup running -> \"\(dl.label)\" greyed with progress",
+                        dl.action == .working(.settingUp, progress: 0.42) && !dl.enabled && dl.label == "Setting up… 42%"))
+        x = base; x.ownJob = "Downloading"; x.ownProgress = 0.07
+        expect("HorizonXI download -> Setting up… 7%", x, .working(.settingUp, progress: 0.07))
+        x = base; x.ownJob = "Updating"; x.ownProgress = 0.12
+        let up = Primary.decide(x)
+        seen.append(("update running", up))
+        results.append(("update running -> \"Updating… 12%\"", up.label == "Updating… 12%" && !up.enabled))
         x = base; x.ownJob = "Repairing"; x.checks = [bad("squareenix", drive: "Games")]
-        expect("busy outranks a missing drive", x, .working("Repairing", progress: nil))
+        expect("a running job outranks a missing drive", x, .working(.repairing, progress: nil))
+        x = base; x.ownJob = "Updating Wine"
+        expect("Wine prefix update -> Updating…", x, .working(.updating, progress: nil))
+        x = base; x.ownJob = "Installing Eden"
+        expect("another world's installer -> Setting up…", x, .working(.settingUp, progress: nil))
+        x = base; x.isLocal = true; x.localReady = true; x.ownJob = "stopping"
+        expect("local server stopping -> Stopping…", x, .working(.stopping, progress: nil))
         x = base; x.otherJob = "Updating"
-        expect("another world's job -> wait", x, .wait("Updating"), enabled: false)
+        expect("another world's job -> Play greyed", x, .blocked("Waiting for another job to finish."), enabled: false)
         x = base; x.starting = true
-        expect("starting -> working", x, .working("Starting", progress: nil))
+        expect("starting -> Starting…", x, .working(.starting, progress: nil))
         x = base; x.runningHere = true
         let stop = Primary.decide(x)
-        results.append(("running here -> Stop, never on Return", stop.action == .stop && stop.destructive && stop.enabled))
+        seen.append(("running", stop))
+        results.append(("running here -> Stop, never on Return", stop.action == .stop && stop.destructive && stop.enabled && stop.reason == nil))
         x.allowsMultipleClients = true
-        expect("running, second client allowed -> Play Another", x, .playAnother)
+        expect("running, second client allowed -> Play Another", x, .playAnother, reason: .some(nil))
         x = base; x.runningElsewhere = true
-        expect("running in another launcher -> disabled", x, .runningElsewhere, enabled: false)
+        expect("running in another launcher -> Play greyed", x, .blocked("Already running from another launcher."), enabled: false)
         x = base; x.restartingLauncher = true
-        expect("launcher restarting -> disabled", x, .restartingLauncher, enabled: false)
+        expect("launcher installing its own update -> Updating…", x, .working(.updating, progress: nil), enabled: false)
         x = base; x.checksPending = true
-        expect("checks for another world -> Checking…", x, .checking, enabled: false)
+        expect("checks for another world -> Checking…", x, .working(.checking, progress: nil), enabled: false)
         x = base; x.wineStuck = true
-        expect("wineserver stuck -> wait", x, .wait("Wine is still closing."), enabled: false)
+        expect("Wine still closing -> Play greyed", x, .blocked("Wine is still closing from the last game."), enabled: false)
 
-        // Accounts, hosts, local server.
+        // Accounts and hosts.
         x = base; x.accountNeeded = true
-        expect("no account -> Add Account", x, .enterAccount)
-        x.isLocal = true; x.localReady = true
-        expect("local world needs no account", x, .play)
-        x = base; x.isLocal = true; x.localReady = false
-        expect("local server not built -> Set Up Server", x, .setUpLocalServer)
-        x.localReady = nil
-        expect("local status loading -> working", x, .working("Checking the server", progress: nil))
+        expect("no account, HorizonXI's loader can't ask -> Play greyed pointing at the fields", x,
+               .blocked("Type your account name and password above."), enabled: false)
+        x.accountInLoader = true; x.world = "Eden"
+        expect("no account, the loader window creates it -> Play", x, .play, enabled: true)
         x = base; x.hostEmpty = true
-        expect("no login host -> blocked", x, .blocked("This world has no login address."))
+        expect("no login host -> Play greyed", x, .blocked("This world has no login address."))
 
-        // Wording rules: short labels, one short reason line, no jargon, Return never on
-        // Stop / Restart Mac.
-        let all: [PrimaryAction] = [.stop, .runningElsewhere, .restartMac(drive: "Games"),
-            .mountDrive(drive: "Games", device: "disk9s1"), .connectDrive(drive: "Games"), .allowAccess,
-            .installWine, .needGameWine, .downloadGame(world: "HorizonXI"), .chooseFolder(world: "HorizonXI"),
-            .repair, .updateGame(world: "HorizonXI", to: "2.0.5"), .clientTooOld(have: "30240101_0", need: "30251204_1"),
-            .setUpLocalServer, .enterAccount, .play, .playAnother, .checking]
-        let jargon = ["prefix", "registry", "regsvr", "rpath", "dylib", "wineserver", "COM", "Setup & Diagnostics", "Preflight"]
-        for a in all {
-            let d = Primary.make(a, base)
-            let r = d.reason ?? ""
-            let shortOK = d.label.count <= 20 && r.count <= 60 && !r.contains("\n")
-            let plain = !jargon.contains { r.contains($0) || d.label.contains($0) }
-            let returnOK = !(a == .stop || a.id == "restart-mac") || d.destructive
-            results.append(("wording: \(a.id) short=\(shortOK) plain=\(plain) return=\(returnOK)", shortOK && plain && returnOK))
+        // Wording, over every state above and every action: the label is one of Daniel's verbs
+        // or a running job's progress; one short plain line; no "restart" anywhere.
+        let allActions: [PrimaryAction] = [
+            .setup(.install), .setup(.wrapperDrive("x10")), .setup(.dataDrive("Games")), .setup(.wine),
+            .setup(.game(partial: false)), .setup(.game(partial: true)), .setup(.chooseFolder), .setup(.gameWine),
+            .setup(.localServer(enabled: true)), .setup(.localServer(enabled: false)),
+            .update(world: "HorizonXI", to: "2.0.5"), .update(world: "CatsEyeXI", to: "30251204_1"),
+            .repair(.wine), .repair(.mount(drive: "Games", device: "disk9s1")), .repair(.access),
+            .stop, .play, .playAnother, .blocked("x"),
+            .working(.settingUp, progress: nil), .working(.settingUp, progress: 1), .working(.updating, progress: 0.123),
+            .working(.repairing, progress: nil), .working(.checking, progress: nil), .working(.starting, progress: nil),
+            .working(.stopping, progress: nil),
+        ]
+        for a in allActions { seen.append(("action \(a.id):\(a.detail)", Primary.make(a, base))) }
+        let progress = try! NSRegularExpression(pattern: #"^(Setting up|Updating|Repairing|Checking|Starting|Stopping)…( \d{1,3}%)?$"#)
+        func isProgress(_ l: String) -> Bool {
+            progress.firstMatch(in: l, range: NSRange(l.startIndex..., in: l)) != nil
         }
+        let jargon = ["prefix", "registry", "regsvr", "rpath", "dylib", "wineserver", "COM", "Setup & Diagnostics", "Preflight"]
+        var badLabels: [String] = [], badLines: [String] = [], restarts: [String] = []
+        for (name, d) in seen {
+            if !(Primary.verbs.contains(d.label) || (isProgress(d.label) && !d.enabled)) { badLabels.append("\(name): \(d.label)") }
+            let r = d.reason ?? ""
+            if r.count > 72 || r.contains("\n") || jargon.contains(where: { r.contains($0) }) { badLines.append("\(name): \(r)") }
+            if (d.label + " " + r).lowercased().contains("restart") { restarts.append(name) }
+            if case .working = d.action, d.enabled { badLabels.append("\(name): a job's progress is pressable") }
+        }
+        results.append(("every label is Setup / Update / Repair / Play / Stop / Play Another or a job's progress"
+                        + (badLabels.isEmpty ? "" : " -- " + badLabels.joined(separator: "; ")), badLabels.isEmpty))
+        results.append(("every reason is one short plain line" + (badLines.isEmpty ? "" : " -- " + badLines.joined(separator: "; ")),
+                        badLines.isEmpty))
+        results.append(("no 'restart' in any label or reason (Daniel, 2026-10-15)"
+                        + (restarts.isEmpty ? "" : " -- " + restarts.joined(separator: "; ")), restarts.isEmpty))
+        let lines = [Preflight.driveMessage("Games"), Preflight.driveLine("Games", .ghost), Preflight.driveLine("Games", .absent),
+                     Preflight.driveLine("Games", .unmounted(device: "disk9s1")), Primary.gameWineUnavailable]
+        results.append(("drive lines and Setup's last line never say restart",
+                        !lines.contains { $0.lowercased().contains("restart") }))
+        results.append(("only Stop is kept off Return",
+                        seen.allSatisfy { $0.1.destructive == ($0.1.action == .stop) }))
         results.append(("Play and Play Another have no reason line",
                         Primary.make(.play, base).reason == nil && Primary.make(.playAnother, base).reason == nil))
 
         // Repair refuses before writing when the data is behind a missing drive, and names it.
         let fm = FileManager.default
         let tmp = fm.temporaryDirectory.appendingPathComponent("ffxi-primary-\(UUID().uuidString)", isDirectory: true)
-        defer { try? fm.removeItem(at: tmp) }
         let gone = "NoSuchDrive-\(UUID().uuidString.prefix(8))"
         let fake = Install(wrapper: tmp.appendingPathComponent("fake.app"), prefixName: "prefix")
         try? fm.createDirectory(at: fake.gameDir, withIntermediateDirectories: true)
         try? fm.createSymbolicLink(atPath: fake.gameDir.appendingPathComponent("SquareEnix").path,
                                    withDestinationPath: "/Volumes/\(gone)/FFXI/SquareEnix")
         let why = Runner.repairBlocker(fake) ?? ""
-        results.append(("Repair refuses on a missing drive, naming it", why.contains("'\(gone)'") && why.contains("nothing was changed")))
+        results.append(("Repair refuses on a missing drive, naming it: \(why)",
+                        why.contains("'\(gone)'") && why.contains("nothing was changed") && !why.lowercased().contains("restart")))
         results.append(("an unknown drive is 'absent'", Preflight.driveState(gone) == .absent))
         try? fm.removeItem(at: fake.gameDir.appendingPathComponent("SquareEnix"))
         try? fm.createDirectory(at: fake.squareEnix.appendingPathComponent("FINAL FANTASY XI"), withIntermediateDirectories: true)
@@ -159,10 +221,14 @@ extension Headless {
         }
         results.append(("Repair proceeds when the DLLs are there", Runner.repairBlocker(fake) == nil))
         results.append(("the mount table lists /", Preflight.mountTableLists("/")))
-        results.append(("headless fixes are only the no-person ones",
-                        PrimaryFixer.isHeadlessFixable(.repair) && PrimaryFixer.isHeadlessFixable(.mountDrive(drive: "a", device: "b"))
-                            && !PrimaryFixer.isHeadlessFixable(.restartMac(drive: "a")) && !PrimaryFixer.isHeadlessFixable(.play)
-                            && !PrimaryFixer.isHeadlessFixable(.allowAccess) && !PrimaryFixer.isHeadlessFixable(.stop)))
+        results.append(("headless fixes are only the jobs that need no person",
+                        PrimaryFixer.isHeadlessFixable(.repair(.wine)) && PrimaryFixer.isHeadlessFixable(.repair(.mount(drive: "a", device: "b")))
+                            && PrimaryFixer.isHeadlessFixable(.setup(.game(partial: false)))
+                            && PrimaryFixer.isHeadlessFixable(.update(world: "HorizonXI", to: "2.0.5"))
+                            && !PrimaryFixer.isHeadlessFixable(.setup(.install)) && !PrimaryFixer.isHeadlessFixable(.setup(.dataDrive("a")))
+                            && !PrimaryFixer.isHeadlessFixable(.play) && !PrimaryFixer.isHeadlessFixable(.repair(.access))
+                            && !PrimaryFixer.isHeadlessFixable(.stop)))
+        try? fm.removeItem(at: tmp)
 
         var failed = 0
         for (name, ok) in results {

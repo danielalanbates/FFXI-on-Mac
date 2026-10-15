@@ -4,13 +4,14 @@ import Foundation
 /// `--selftest-primary-action`: the main button without the window.
 ///
 ///     FFXI-on-Mac --next-action HorizonXI
-///     restart-mac | Restart Mac | The 'Games' drive is stuck. A restart brings it back.
+///     setup:data-drive | Setup | The 'Games' drive isn't connected — reconnect it or press Setup.
 ///
 /// `--next-action` is read-only and safe while playing. Exit 0 = Play, 10 = something to do,
 /// 2 = no install. It does not ask the network, so it never offers a HorizonXI update.
 ///
-/// `--fix` runs the same `PrimaryFixer` the button runs, for the actions that need no person
-/// (Repair, Download, Update, Mount). It refuses unless `--prefix` names the prefix to work on
+/// `--fix` runs the same `PrimaryFixer` the button runs, for the jobs that need no person
+/// (Repair, Mount, Update, and Setup's HorizonXI download). Choosing where things go, the setup
+/// sheet and System Settings stay with the window. It refuses unless `--prefix` names the prefix to work on
 /// (`…/Some.app/Contents/SharedSupport/prefix10`), so it never touches the remembered install by
 /// accident. Its log goes to $TMPDIR/ffxi-on-mac-fix.log, not launcher.log.
 extension Headless {
@@ -40,6 +41,7 @@ extension Headless {
         x.canDownload = server.local || server.installKind != .none
         x.hostEmpty = !server.local && server.host.trimmingCharacters(in: .whitespaces).isEmpty
         x.allowsMultipleClients = server.allowsMultipleClients
+        x.accountInLoader = server.accountURL.isEmpty && server.accountHow.contains("loader window")
         guard let base else {
             x.hasInstall = false
             if let r = Primary.rememberedDrive() { x.rememberedDrive = r.0; x.driveStates[r.0] = r.1 }
@@ -58,13 +60,15 @@ extension Headless {
         x.canUpdateClient = server.name == "HorizonXI" || server.installKind == .catseyeLauncher
         x.otherJob = Runner.workInFlight ? Runner.workInFlightReason : nil
         x.wineStuck = WineserverStopWait.anyStuck
-        x.accountNeeded = Credentials.username(forWorld: server.name).isEmpty && !p.profileHasAccount
+        let user = Credentials.username(forWorld: server.name)
+        x.accountNeeded = (user.isEmpty || Credentials.password(for: user, world: server.name).isEmpty) && !p.profileHasAccount
         if server.local { x.localReady = true }   // not probed headless; Play checks it
         return Primary.decide(x)
     }
 
     static func line(_ d: PrimaryDecision) -> String {
-        "\(d.action.id) | \(d.label) | \(d.reason ?? "")" + (d.enabled ? "" : "  (disabled)")
+        let id = d.action.detail.isEmpty ? d.action.id : d.action.id + ":" + d.action.detail
+        return "\(id) | \(d.label) | \(d.reason ?? "")" + (d.enabled ? "" : "  (disabled)")
     }
 
     @MainActor static func runNextAction() -> Never {
@@ -96,7 +100,7 @@ extension Headless {
         let d = headlessDecision(base: base, server: server)
         print("before: " + line(d))
         guard PrimaryFixer.isHeadlessFixable(d.action), d.enabled else {
-            print(d.action == .play ? "nothing to fix" : "refusing: \(d.action.id) needs a person (or the window)")
+            print(d.action == .play ? "nothing to fix" : "refusing: \(line(d)) needs a person (or the window)")
             exit(d.action == .play ? 0 : 3)
         }
         let runner = Runner()

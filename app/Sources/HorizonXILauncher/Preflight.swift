@@ -8,17 +8,17 @@ struct Check: Identifiable {
     let title: String
     let state: State
     let detail: String
-    /// One line for the footer when this is what keeps Play grey. Empty: the title, pointing at
-    /// Setup & Diagnostics, where `detail` is.
+    /// One plain line for when this is what keeps Play grey and no button fixes it. Empty: the
+    /// title. (Setup & Diagnostics shows `detail`.)
     var short: String = ""
     /// Name of the drive (`/Volumes/<name>`) the failing path lives on, or passes through by a
     /// symlink, when that drive is not there. Its own line says everything; `detail` adds paths.
     var drive: String? = nil
 
-    /// The footer's line for a failing check.
+    /// The line under the main button for a failing check (see Primary.decide).
     var footer: String {
         if let d = drive { return Preflight.driveMessage(d) }
-        return short.isEmpty ? "\(title) — see Setup & Diagnostics" : short
+        return short.isEmpty ? title : short
     }
 }
 
@@ -61,30 +61,30 @@ enum Preflight {
                 add("fda", "Drive readable by this app", false, "",
                     "macOS is refusing to let this app read \(vol.path)"
                     + (Self.isTimeMachineDestination(vol) ? " — it is your Time Machine backup drive, which only apps with Full Disk Access may read." : ".")
-                    + " Give FFXI on Mac Full Disk Access (System Settings › Privacy & Security › Full Disk Access), then press ↻ — or keep the game on a different drive.",
-                    short: "Needs Full Disk Access to read \(vol.lastPathComponent)")
+                    + " Give FFXI on Mac Full Disk Access (System Settings › Privacy & Security › Full Disk Access), then quit and reopen it — or keep the game on a different drive.",
+                    short: "Allow FFXI on Mac in Full Disk Access.")
                 return out
             }
         }
 
         add("wine", "Wine binary", fm.isExecutableFile(atPath: install.wine.path),
             install.wine.path, "missing \(install.wine.path)",
-            short: "Wine is missing — see Setup & Diagnostics", path: install.wine.path)
+            short: "Wine isn't installed yet.", path: install.wine.path)
 
         add("client", "Game folder", fm.fileExists(atPath: install.gameDir.path),
             install.gameDir.path, "no client at \(install.gameDir.path)",
-            short: "Game folder not found — see Setup & Diagnostics", path: install.gameDir.path)
+            short: "The game isn't installed yet.", path: install.gameDir.path)
 
         let se = install.squareEnix
         let ffxi = se.appendingPathComponent("FINAL FANTASY XI")
         add("squareenix", "FINAL FANTASY XI data", fm.fileExists(atPath: ffxi.path),
             se.path, "no SquareEnix/FINAL FANTASY XI under \(se.deletingLastPathComponent().path)",
-            short: "FINAL FANTASY XI data not found — see Setup & Diagnostics", path: ffxi.path)
+            short: "Some game files are missing.", path: ffxi.path)
 
         add("ashita", "Ashita-cli.exe", fm.fileExists(atPath: install.ashitaCLI.path),
             "present — launch must go through Ashita, not xiloader",
             "missing \(install.ashitaCLI.path)",
-            short: "Ashita-cli.exe missing — see Setup & Diagnostics", path: install.ashitaCLI.path)
+            short: "Some game files are missing.", path: install.ashitaCLI.path)
 
         // The wrong-client trap. A world pointed at a folder that holds several clients gets
         // whichever one the search reached first, and every downstream step then succeeds --
@@ -93,7 +93,7 @@ enum Preflight {
         // August 2026. Blocking, not a warning: there is no safe guess to fall back to.
         if let why = install.clientAmbiguity {
             add("worldclient", "Client belongs to this world", false, "", why,
-                short: "This world's client folder is ambiguous — see Setup & Diagnostics")
+                short: "Choose this world's game folder.")
         } else if let w = install.worldName, install.dataRoot != nil || !install.ownsWrapperClient {
             add("worldclient", "Client belongs to this world", true, install.gameDir.path,
                 "not \(w)'s own client")
@@ -109,7 +109,7 @@ enum Preflight {
         add("rpath", "dylib rpath fix", linked > 0,
             "\(linked) dylibs linked into wine/lib",
             "no dylibs in wine/lib\(libErr) — wineserver will fail to load (run Repair)",
-            short: "Wine needs Repair — see Setup & Diagnostics", path: libDir.path)
+            short: "Wine needs a quick repair.", path: libDir.path)
 
         // FINDINGS #3: must exist in the 32-bit (Wow6432Node) view or the game reads nothing.
         var regErr = ""
@@ -122,21 +122,21 @@ enum Preflight {
         add("reg32", "PlayOnline registry (32-bit view)", hasWow,
             "Wow6432Node\\PlayOnlineUS present",
             "missing from the 32-bit view\(regErr) — the game will exit silently (run Repair)",
-            short: "Game registry needs Repair — see Setup & Diagnostics", path: install.systemReg.path)
+            short: "Play sets the game up on the way in.", path: install.systemReg.path)
 
         // The layout itself: 0001 must be the FINAL FANTASY XI dir, not PlayOnlineViewer.
         let layoutOK = reg.range(of: #""0001"=".*FINAL FANTASY XI""#, options: .regularExpression) != nil
         add("reglayout", "InstallFolder layout", layoutOK,
             "0001 = FINAL FANTASY XI (correct)",
             "0001 does not point at the FINAL FANTASY XI dir — FFXiMain.dll will not load",
-            short: "Game registry needs Repair — see Setup & Diagnostics", path: install.systemReg.path)
+            short: "Play sets the game up on the way in.", path: install.systemReg.path)
 
         // FINDINGS #4: three in-proc COM servers, all required.
         let comOK = reg.contains("FFXi.FFXiEntry") && reg.contains("FFXiMain.GameMain")
         add("com", "FFXI COM servers registered", comOK,
             "FFXi.FFXiEntry + FFXiMain.GameMain registered",
             "COM servers not registered (run Repair)",
-            short: "Game registry needs Repair — see Setup & Diagnostics", path: install.systemReg.path)
+            short: "Play sets the game up on the way in.", path: install.systemReg.path)
 
         let polcore = install.squareEnix
             .appendingPathComponent("PlayOnlineViewer/viewer/com/polcore.dll")
@@ -154,7 +154,7 @@ enum Preflight {
                 "off, while the Sandbox POL plugin is loaded — the game will log in and then "
                 + "exit about two seconds later with no error. Run Repair, or set "
                 + "use_interface_bypass = 1 in config/sandbox/sandbox.ini.",
-                short: "Sandbox setting needs Repair — see Setup & Diagnostics")
+                short: "Play sets the game up on the way in.")
         }
 
         add("d3dmetal", "D3DMetal renderer", fm.fileExists(atPath: install.d3dMetal.path),
@@ -166,8 +166,10 @@ enum Preflight {
 
     static var blocking: (([Check]) -> Bool) = { $0.contains { $0.state == .bad } }
 
+    /// Daniel, 2026-10-15: "restarting the mac shouldn't be listed." The drive is reconnected,
+    /// or Setup puts the game somewhere else.
     static func driveMessage(_ name: String) -> String {
-        "The '\(name)' drive isn't available — reconnect it or restart the Mac."
+        "The '\(name)' drive isn't connected — reconnect it or press Setup."
     }
 
     /// The `/Volumes/<name>` that `path` lives on, or reaches through a symlink anywhere along
@@ -205,9 +207,10 @@ enum Preflight {
     // MARK: - Why a drive is missing (b60)
 
     /// Ghost: the mount table lists `/Volumes/<name>` but the path does not exist (2026-10-14,
-    /// 'Games' on Daniel's Mac) -- only a restart clears it. Unmounted: macOS knows the volume
-    /// but it is not mounted -- `diskutil mount` fixes it without admin rights. Absent: neither
-    /// knows it; it has to be plugged in.
+    /// 'Games' on Daniel's Mac). Unmounted: macOS knows the volume but it is not mounted --
+    /// `diskutil mount` fixes it without admin rights (Repair). Absent: neither knows it. Ghost
+    /// and absent read the same to the user: reconnect the drive, or press Setup and put the
+    /// game somewhere else.
     enum DriveState: Equatable { case ghost, unmounted(device: String), absent }
 
     static func driveState(_ name: String) -> DriveState {
@@ -257,10 +260,8 @@ enum Preflight {
     /// The one line for a missing drive, by why it is missing.
     static func driveLine(_ name: String, _ state: DriveState?) -> String {
         switch state {
-        case .ghost?: return "The '\(name)' drive is stuck. A restart brings it back."
-        case .unmounted?: return "The '\(name)' drive is connected but not mounted."
-        case .absent?: return "Connect the '\(name)' drive."
-        case nil: return driveMessage(name)
+        case .unmounted?: return "The '\(name)' drive isn't mounted."
+        case .ghost?, .absent?, nil: return driveMessage(name)
         }
     }
 

@@ -11,9 +11,8 @@ import Foundation
 /// releases -- a template .app and a wine engine -- unpacked into each other. This does exactly
 /// that, then applies the rpath fix and boots the prefix.
 ///
-/// What it does NOT do is fetch the game. FFXI's data is Square Enix's, and this project does
-/// not touch it: the last step hands the user's own server installer to the prefix and lets it
-/// run. See docs/SETUP.md.
+/// What it does NOT do is fetch the game: that is the next step of the main button's Setup
+/// (HorizonXI's own published torrent, or the world's own installer). See docs/SETUP.md.
 enum Bootstrap {
 
     // MARK: - What we fetch
@@ -287,7 +286,8 @@ enum Bootstrap {
 
     private static func bootPrefix(log: @escaping @Sendable (String) -> Void) async throws {
         let i = install
-        if FileManager.default.fileExists(atPath: i.driveC.path) {
+        // system.reg, not drive_c: a wineboot that was killed half way leaves drive_c without it.
+        if FileManager.default.fileExists(atPath: i.systemReg.path) {
             log("the Windows drive already exists")
             return
         }
@@ -298,6 +298,10 @@ enum Bootstrap {
         var env = ProcessInfo.processInfo.environment
         env["WINEPREFIX"] = i.prefix.path
         env["WINEDEBUG"] = "-all"
+        // Mono's and Gecko's install prompts would wait for a click nobody knows to make.
+        env["WINEDLLOVERRIDES"] = "mscoree,mshtml="
+        env["WINEBOOT_HIDE_DIALOG"] = "1"
+        env.removeValue(forKey: "DYLD_FALLBACK_LIBRARY_PATH"); env.removeValue(forKey: "DYLD_LIBRARY_PATH")
         // wine writes its first-run chatter to stderr; it is noise unless it fails.
         p.environment = env
         let out = Pipe()
@@ -306,30 +310,11 @@ enum Bootstrap {
         try p.run()
         p.waitUntilExit()
         let text = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        guard FileManager.default.fileExists(atPath: i.driveC.path) else {
+        guard FileManager.default.fileExists(atPath: i.systemReg.path) else {
             throw Err("Wine could not create its Windows drive:\n"
                       + text.suffix(400).trimmingCharacters(in: .whitespacesAndNewlines))
         }
         log("the Windows drive is ready")
-    }
-
-    // MARK: - Installing the game into it
-
-    /// Runs a Windows installer (the server's own) inside the prefix. The user picks the file;
-    /// we never fetch game data ourselves.
-    static func runInstaller(_ exe: URL, log: @escaping @Sendable (String) -> Void) throws {
-        let i = install
-        guard isBuilt else { throw Err("Wine is not set up yet.") }
-        log("running \(exe.lastPathComponent) inside the prefix…")
-        let p = Process()
-        p.executableURL = i.wine
-        p.arguments = [exe.path]
-        var env = ProcessInfo.processInfo.environment
-        env["WINEPREFIX"] = i.prefix.path
-        p.environment = env
-        try p.run()
-        log("The installer is open. Follow its own steps; this window will notice when it "
-            + "finishes and the game files appear.")
     }
 
     struct Err: LocalizedError {

@@ -1,14 +1,18 @@
 import SwiftUI
 import AppKit
-import UniformTypeIdentifiers
 
 /// First-run setup, as one button and a running log.
 ///
 /// This is the whole reason the project can be handed to someone who does not know what a wine
 /// prefix is. Everything it does is in `Bootstrap`; this is just the face of it.
+///
+/// Since b60 it is step 1–2 of the main button's Setup (ContentView.runSetup): it says where Wine
+/// and its Windows drive will go and builds nothing until "Set it up" is pressed. On success it
+/// closes itself and the main button carries on with the game.
 struct SetupSheet: View {
-    /// Called when wine is in place, so the launcher can rescan and pick the new install up.
-    var onFinished: () -> Void
+    /// Called once: true when wine is in place (the launcher rescans and Setup carries on),
+    /// false when the sheet was cancelled.
+    var onFinished: (Bool) -> Void
     @Environment(\.dismiss) private var dismiss
 
     @State private var running = false
@@ -17,6 +21,10 @@ struct SetupSheet: View {
     @State private var lines: [String] = []
     @State private var failure: String? = nil
     @State private var gameFound = Bootstrap.install.hasGame
+    /// Where Wine and its Windows drive go (`Bootstrap.wrapperURL`), and whether that is an
+    /// existing wrapper whose Wine is only being replaced.
+    private let location = Bootstrap.wrapperURL
+    private let repairing = Bootstrap.target != nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -26,6 +34,11 @@ struct SetupSheet: View {
                      + "Wine with a blank Windows drive for FFXI to live in. About 250 MB and "
                      + "five minutes. You can leave it running.")
                     .font(.callout).foregroundStyle(Vana.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(repairing ? "Wine is replaced in \(location.path); its Windows drive and game stay as they are."
+                               : "It goes in \(location.path).")
+                    .font(.system(size: 12)).foregroundStyle(Vana.text)
+                    .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -85,7 +98,9 @@ struct SetupSheet: View {
                 // b60: the HorizonXI download is the main window's button (the old installer
                 // route here needed renderer pieces a fresh wrapper does not have).
                 Spacer()
-                Button(done ? "Done" : "Cancel") { onFinished(); dismiss() }
+                // Cancel while it runs stops Setup's chain here; the build itself finishes in the
+                // background and the launcher picks it up.
+                Button(done ? "Done" : "Cancel") { onFinished(done); dismiss() }
                 if !done {
                     Button(running ? "Working…" : "Set it up") { start() }
                         .buttonStyle(.borderedProminent)
@@ -124,7 +139,9 @@ struct SetupSheet: View {
                     done = true
                     current = nil
                     gameFound = Bootstrap.install.hasGame
-                    onFinished()
+                    // The main button carries on from here (the game, then PLAY).
+                    onFinished(true)
+                    dismiss()
                 }
             } catch {
                 await MainActor.run {

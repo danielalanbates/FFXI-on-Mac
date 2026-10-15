@@ -49,40 +49,39 @@ extension Headless {
         let se = pre.first { $0.id == "squareenix" }
         checks.append(("Preflight: the data check fails naming the drive",
                        se?.state == .bad && se?.drive == gone && se?.footer == Preflight.driveMessage(gone)))
-        checks.append(("Preflight: the footer gives the drive line ahead of an earlier failing check",
-                       PlayStatus.footer(hasInstall: true, scanning: false, busyReason: nil, starting: false,
-                                         world: "HorizonXI", hasGame: true, checks: pre)
-                           == "The '\(gone)' drive isn't available — reconnect it or restart the Mac."))
+        checks.append(("the drive line says reconnect it or press Setup, never restart",
+                       Preflight.driveMessage(gone) == "The '\(gone)' drive isn't connected — reconnect it or press Setup."))
         checks.append(("Preflight: a file simply missing on a present drive names no drive",
                        pre.first { $0.id == "wine" }.map { $0.state == .bad && $0.drive == nil } == true))
 
-        // Footer.
+        // The line under the main button (Primary.decide replaced PlayStatus.footer in b60).
         let ok = [Check(id: "wine", title: "Wine binary", state: .ok, detail: "")]
-        let wine = [Check(id: "wine", title: "Wine binary", state: .bad, detail: "missing /x",
-                          short: "Wine is missing — see Setup & Diagnostics")]
-        let plain = [Check(id: "x", title: "Something", state: .bad, detail: "long detail")]
-        func footer(installed install: Bool = true, scanning: Bool = false, busy: String? = nil, starting: Bool = false,
-                    hasGame: Bool? = true, _ c: [Check]) -> String? {
-            PlayStatus.footer(hasInstall: install, scanning: scanning, busyReason: busy, starting: starting,
-                              world: "CatsEyeXI", hasGame: hasGame, checks: c)
+        func reason(installed install: Bool = true, scanning: Bool = false, busy: String? = nil, starting: Bool = false,
+                    hasGame: Bool = true, _ c: [Check]) -> String? {
+            var x = PrimaryInputs()
+            x.world = "CatsEyeXI"; x.hasInstall = install; x.scanning = scanning; x.ownJob = busy
+            x.starting = starting; x.hasGame = hasGame; x.checks = c
+            return Primary.decide(x).reason
         }
-        checks.append(("footer: nothing when ready", footer(ok) == nil))
-        checks.append(("footer: no 'ready to play', 'game running' or 'setup incomplete' anywhere",
-                       ![footer(ok), footer(starting: true, ok), footer(plain)].contains {
+        let wine = [Check(id: "wine", title: "Wine binary", state: .bad, detail: "missing /x", short: "Wine isn't installed yet.")]
+        let plain = [Check(id: "x", title: "Something", state: .bad, detail: "long detail")]
+        checks.append(("reason: nothing when ready", reason(ok) == nil))
+        checks.append(("reason: nothing while a job runs or the game starts (the button says it)",
+                       reason(busy: "Updating Wine", wine) == nil && reason(starting: true, ok) == nil
+                           && reason(installed: false, scanning: true, ok) == nil))
+        checks.append(("reason: no 'ready to play', 'game running' or 'setup incomplete' anywhere",
+                       ![reason(ok), reason(starting: true, ok), reason(plain)].contains {
                            ["ready to play", "game running", "setup incomplete"].contains($0 ?? "") }))
-        checks.append(("footer: scanning / nothing installed",
-                       footer(installed: false, scanning: true, ok) == "Looking for your install…"
-                           && footer(installed: false, ok) == "Nothing installed yet"))
-        checks.append(("footer: busy names the work", footer(busy: "Updating Wine", wine) == "Updating Wine…"
-                           && footer(busy: "Updating HorizonXI", ok) == "Updating HorizonXI…"))
-        checks.append(("footer: Starting…", footer(starting: true, ok) == "Starting…"))
-        checks.append(("footer: not installed", footer(hasGame: false, wine) == "CatsEyeXI not installed"))
-        checks.append(("footer: first failing check's short line",
-                       footer(wine) == "Wine is missing — see Setup & Diagnostics"
-                           && footer(plain) == "Something — see Setup & Diagnostics"))
-        checks.append(("footer: every line is one sentence, no line break",
-                       [footer(wine), footer(plain), footer(busy: "Downloading CatsEyeXI", ok), se?.footer]
-                           .allSatisfy { ($0 ?? "").count <= 90 && !($0 ?? "").contains("\n") }))
+        checks.append(("reason: nothing installed", reason(installed: false, ok) == "CatsEyeXI isn't installed yet."))
+        checks.append(("reason: not installed", reason(hasGame: false, ok) == "CatsEyeXI isn't installed yet."))
+        checks.append(("reason: Wine missing", reason(wine) == "Wine isn't installed yet."))
+        checks.append(("reason: an unknown failing check gives its title", reason(plain) == "Something"))
+        checks.append(("reason: the missing drive, ahead of an earlier failing check",
+                       reason(pre) == Preflight.driveMessage(gone)))
+        checks.append(("reason: every line is one sentence, no line break, no menu to dig in",
+                       [reason(wine), reason(plain), reason(pre), se?.footer]
+                           .allSatisfy { ($0 ?? "").count <= 90 && !($0 ?? "").contains("\n")
+                                         && !($0 ?? "").contains("Setup & Diagnostics") }))
 
         // Log strip: errors only.
         checks.append(("strip: only '!!' lines of a chunk", Runner.errorLines(in:

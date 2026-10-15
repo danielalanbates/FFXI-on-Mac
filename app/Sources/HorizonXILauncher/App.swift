@@ -238,7 +238,13 @@ struct ContentView: View {
     /// A HorizonXI update failed or was stopped: Play this session anyway (its login server
     /// accepts a client one version behind).
     @State private var updateDeferred = false
-    @FocusState private var accountFocused: Bool
+    /// Setup's chain (runSetup) is running, and how far, for the button.
+    @State private var setupRunning = false
+    @State private var setupProgress: Double?
+    /// The chain waits on the setup sheet through this.
+    @State private var setupSheetWaiter = SheetWaiter()
+    /// Worlds whose download page Setup opened this session: the next press runs the installer.
+    @State private var websiteOpened: Set<String> = []
     private var fdaBlocked: Bool { checks.contains(where: { $0.id == "fda" && $0.state == .bad }) }
 
     /// The drive the selected world's files are on (or link to), when it is not there.
@@ -255,6 +261,7 @@ struct ContentView: View {
         x.canDownload = x.isLocal || (s?.installKind ?? Server.InstallKind.none) != .none
         x.hostEmpty = s.map { !$0.local && $0.host.trimmingCharacters(in: .whitespaces).isEmpty } ?? false
         x.allowsMultipleClients = s?.allowsMultipleClients == true
+        x.accountInLoader = s.map { $0.accountURL.isEmpty && $0.accountHow.contains("loader window") } == true
         x.hasInstall = selected != nil
         x.scanning = scanning
         if let r = rememberedDrive { x.rememberedDrive = r.name; x.driveStates[r.name] = r.state }
@@ -264,8 +271,10 @@ struct ContentView: View {
         x.hasGame = probe.hasGame
         x.patchedWineMissing = probe.patchedWineMissing
         x.restartingLauncher = updateInstalling
+        x.setupRunning = setupRunning
+        x.setupProgress = runner.updatingHorizon ? runner.updateProgress : setupProgress
         if runner.busy { x.ownJob = runner.busyReason.isEmpty ? "Working" : runner.busyReason }
-        else if x.isLocal, local.busy { x.ownJob = "Setting up the server" }
+        else if x.isLocal, local.busy { x.ownJob = local.activity.isEmpty ? "setting up" : local.activity }
         x.ownProgress = runner.updatingHorizon ? runner.updateProgress : nil
         if !runner.busy, Runner.workInFlight { x.otherJob = Runner.workInFlightReason ?? "Another job is running" }
         x.runningHere = runner.running
@@ -279,7 +288,10 @@ struct ContentView: View {
         x.clientInstalled = probe.clientInstalled
         x.canUpdateClient = s?.name == "HorizonXI" || s?.installKind == .catseyeLauncher
         x.localReady = x.isLocal ? local.status?.ready : nil
-        x.accountNeeded = user.trimmingCharacters(in: .whitespaces).isEmpty && !probe.profileHasAccount
+        x.localBelowFloor = local.status?.belowFloor == true
+        x.localForce = forceSetup
+        // An account typed without its password is not applied to the boot profile (launchClient).
+        x.accountNeeded = (user.trimmingCharacters(in: .whitespaces).isEmpty || pass.isEmpty) && !probe.profileHasAccount
         return x
     }
 
@@ -516,7 +528,12 @@ struct ContentView: View {
         .sheet(isPresented: $newServer) { addServerSheet }
         .sheet(isPresented: $showGraphics) { graphicsSheet }
         .sheet(isPresented: $showAddons) { addonsSheet }
-        .sheet(isPresented: $showSetup) { SetupSheet { refresh() } }
+        // Setup's chain waits on this sheet; closed any other way, the chain stops there.
+        .sheet(isPresented: $showSetup, onDismiss: { setupSheetWaiter.finish(false) }) {
+            SetupSheet { ok in
+                if !setupSheetWaiter.finish(ok), ok { refresh() }
+            }
+        }
     }
 
     /// What the selected server permits. See `AddonPolicy` for why an unsourced policy shows
@@ -998,20 +1015,15 @@ struct ContentView: View {
                     }
 
                     HStack(spacing: 8) {
-                        if !s.ready {
-                            Button(s.source ? "Continue setup" : "Set up server") {
-                                local.setup(force: s.belowFloor && forceSetup,
-                                            log: { runner.appendLine($0) })
-                            }
-                            .disabled(local.busy || (s.belowFloor && !forceSetup))
-                            .help("Downloads Homebrew packages and the LandSandBoat source, imports "
-                                  + "the game database and compiles the server. Half an hour or more "
-                                  + "the first time; it can be re-run if it stops.")
-                            if s.belowFloor {
-                                Toggle("Set up anyway", isOn: $forceSetup)
-                                    .toggleStyle(.checkbox).font(.system(size: 12))
-                                    .foregroundStyle(Vana.muted)
-                            }
+                        // Building it is the main button's Setup (b60); only the override for a
+                        // tight disk stays here.
+                        if !s.ready, s.belowFloor {
+                            Toggle("Set up anyway", isOn: $forceSetup)
+                                .toggleStyle(.checkbox).font(.system(size: 12))
+                                .foregroundStyle(Vana.muted)
+                                .help("Setup downloads Homebrew packages and the LandSandBoat source, imports "
+                                      + "the game database and compiles the server. Half an hour or more "
+                                      + "the first time; it can be re-run if it stops.")
                         }
                         if s.ready {
                             Button(s.running ? "Stop server" : "Start server") {
@@ -1193,8 +1205,7 @@ struct ContentView: View {
             // The local server auto-creates its own account on first login (see LocalServer.swift)
             // -- there is no real account to type here, so the fields are disabled rather than
             // left editable and silently ignored.
-            field("Account name", text: $user, secure: false, disabled: store.selected?.local == true,
-                  focus: $accountFocused)
+            field("Account name", text: $user, secure: false, disabled: store.selected?.local == true)
             field("Password", text: $pass, secure: true, disabled: store.selected?.local == true)
             Toggle("Remember me", isOn: $remember)
                 .toggleStyle(.checkbox).font(.system(size: 12)).foregroundStyle(Vana.muted)
@@ -1313,7 +1324,8 @@ struct ContentView: View {
                         // Also reachable when an install already exists: a wrapper can be
                         // broken past what Repair fixes, and rebuilding a fresh one beside it
                         // is faster than diagnosing wine by hand.
-                        Button("Install dependencies…") { showSetup = true }
+                        Button("Install dependencies…") { prepareWineSetup(); showSetup = true }
+                            .disabled(setupRunning)
                             .help("Installs Rosetta 2 and Wine, and creates the Windows drive FFXI installs into")
                     }
                     .padding(.top, 4)
@@ -1360,13 +1372,11 @@ struct ContentView: View {
     }
 
     private func field(_ title: String, text: Binding<String>, secure: Bool,
-                       disabled: Bool = false, focus: FocusState<Bool>.Binding? = nil) -> some View {
+                       disabled: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title.uppercased()).font(.system(size: 12)).tracking(1.5).foregroundStyle(Vana.muted)
             Group {
-                if secure { SecureField("", text: text) }
-                else if let focus { TextField("", text: text).focused(focus) }
-                else { TextField("", text: text) }
+                if secure { SecureField("", text: text) } else { TextField("", text: text) }
             }
             .textFieldStyle(.plain)
             .disabled(disabled)
@@ -1516,9 +1526,9 @@ struct ContentView: View {
         }
     }
 
-    /// The next required action, as one button: Install Wine, Download, Mount, Restart Mac,
-    /// Repair, Update, Add Account, Stop -- and PLAY only when the game is ready. One short line
-    /// under it says why when it is not PLAY.
+    /// The next required action, as one button: Setup, Update, Repair, Play or Stop (Play
+    /// Another where a world allows two clients), or the running job's progress. One short line
+    /// under it says why when it is not PLAY; nothing at all when the game is ready.
     private var playButton: some View {
         let d = primary
         let dim = !d.enabled || d.destructive
@@ -1539,7 +1549,7 @@ struct ContentView: View {
                         .shadow(color: Vana.gold.opacity(dim ? 0 : 0.35), radius: 10, y: 3)
                 }
                 .buttonStyle(.plain)
-                // Stop and Restart Mac are never one Return key away.
+                // Stop is never one Return key away.
                 .keyboardShortcut(d.destructive ? nil : .defaultAction)
                 .disabled(!d.enabled)
                 if runner.updatingHorizon {
@@ -1553,7 +1563,8 @@ struct ContentView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Circle().fill(d.enabled ? Vana.gold : Vana.ember).frame(width: 6, height: 6)
                     Text(r).font(.system(size: 12)).foregroundStyle(Vana.text)
-                        .lineLimit(1).truncationMode(.tail)
+                        .lineLimit(2).truncationMode(.tail)
+                        .fixedSize(horizontal: false, vertical: true)
                         .help(r)
                 }
             }
@@ -1565,18 +1576,32 @@ struct ContentView: View {
     private func perform(_ a: PrimaryAction) {
         let now = primary
         guard now.action == a, now.enabled else { return }
-        if case .installWine = a { prepareWineSetup(); showSetup = true; return }
         guard let s = store.selected else { return }
-        if let i = active,
-           PrimaryFixer.perform(a, install: i, server: s, runner: runner, done: { ok in
-               if case .updateGame = a, !ok { updateDeferred = true }
-               recheck()
-           }) { return }
         switch a {
+        case .setup:
+            Task { await runSetup() }
+        case .update:
+            guard let i = active else { return }
+            if s.installKind == .catseyeLauncher { runner.runCatsEyeLauncher(i, dataPath: s.dataPath); return }
+            // A failed or stopped update drops back to PLAY for this session: HorizonXI's login
+            // server accepts a client one version behind.
+            PrimaryFixer.perform(a, install: i, server: s, runner: runner) { ok in
+                if !ok { updateDeferred = true }
+                recheck()
+            }
+        case .repair(.access):
+            // Turning FFXI on Mac on there covers Removable Volumes too; macOS then offers to
+            // quit and reopen it, and coming back re-runs the checks.
+            NSWorkspace.shared.open(PrimaryFixer.fullDiskAccessPane)
+        case .repair:
+            guard let i = active else { return }
+            PrimaryFixer.perform(a, install: i, server: s, runner: runner) { _ in recheck() }
         case .play, .playAnother:
             // Registry and COM entries Preflight found missing are written by Play itself
-            // (GameRegistry.point); forget the cache so it really does write them.
-            if let i = active, checks.contains(where: { ["reg32", "reglayout", "com"].contains($0.id) && $0.state == .bad }) {
+            // (GameRegistry.point); forget its cache so it really does write them. Never under a
+            // running client: its registry must not change (Runner.gate).
+            if let i = active, sessions.live.isEmpty,
+               checks.contains(where: { ["reg32", "reglayout", "com"].contains($0.id) && $0.state == .bad }) {
                 GameRegistry.invalidate(i)
             }
             play()
@@ -1587,33 +1612,188 @@ struct ContentView: View {
             alert.addButton(withTitle: "Keep Playing")
             alert.addButton(withTitle: "Stop")
             if alert.runModal() == .alertSecondButtonReturn { runner.stop() }
-        case .restartMac:
-            guard sessions.live.isEmpty, sessions.elsewhere.isEmpty, !Runner.workInFlight, !local.busy else {
-                notice = "Close the game and wait for jobs to finish first."; return
-            }
-            PrimaryFixer.restartMac()
-        case .allowAccess:
-            NSWorkspace.shared.open(PrimaryFixer.fullDiskAccessPane)
-        case .chooseFolder:
-            chooseGameData(for: s)
-        case .enterAccount:
-            accountFocused = true
-        case .setUpLocalServer:
-            local.setup(force: false, log: { runner.appendLine($0) })
-        case .downloadGame:
-            guard let i = active else { return }
-            // The local server plays HorizonXI's client: its download is HorizonXI's.
-            if s.local { runner.installHorizon(into: i.gameDir) { _ in recheck() } }
-            else { downloadGameData(for: s, install: i) }
-        case .updateGame:
-            if let i = active, s.installKind == .catseyeLauncher { runner.runCatsEyeLauncher(i, dataPath: s.dataPath) }
-        default:
+        case .working, .blocked:
             break
         }
     }
 
-    /// Install Wine repairs the selected wrapper when that is the one whose wine is missing,
-    /// instead of building a second, empty wrapper and switching to it (G11).
+    // MARK: - Setup: every missing step, from one click
+
+    /// Waits for the setup sheet (Wine and the Windows drive) to finish or be closed.
+    final class SheetWaiter {
+        private var cont: CheckedContinuation<Bool, Never>?
+        func wait() async -> Bool { await withCheckedContinuation { cont = $0 } }
+        /// True when a chain was waiting for this.
+        @discardableResult func finish(_ ok: Bool) -> Bool {
+            guard let c = cont else { return false }
+            cont = nil
+            c.resume(returning: ok)
+            return true
+        }
+    }
+
+    /// The decision as it would be with no chain running: what Setup still has to do.
+    private var nextNeed: PrimaryAction {
+        var x = primaryInputs
+        x.setupRunning = false
+        return Primary.decide(x).action
+    }
+
+    /// SETUP. Runs every step that is still missing, in order, re-reading the state before each
+    /// one, so pressing it again after a stop, a failure or a cancelled sheet carries on where
+    /// it left off and never redoes finished work:
+    ///
+    ///   1. location -- where Wine and its Windows drive go, and where the game files go when
+    ///      their drive is gone or the world has no folder yet (`setupLocationStep`);
+    ///   2. Wine and the Windows drive (Bootstrap, in the setup sheet);
+    ///   3. the patched game Wine -- no pinned download yet, so it is said at the end;
+    ///   4. the game: HorizonXI's base, Ashita and every update (update-client.sh install),
+    ///      or the world's own installer;
+    ///   5. registry, COM and Wine's library links (Repair, install.sh);
+    ///   6. the local server's build, for the local world;
+    ///   7. the checks again, so the button becomes the next thing -- PLAY when all is done.
+    ///
+    /// Nothing is deleted or overwritten without a click: the sheet and the folder panel are the
+    /// clicks, and every job here only adds what is missing.
+    private func runSetup() async {
+        guard !setupRunning else { return }
+        let world = store.selectedID
+        setupRunning = true
+        setupProgress = nil
+        notice = ""
+        let r = runner
+        var gameWineMissing = false
+        defer {
+            setupRunning = false
+            setupProgress = nil
+            if gameWineMissing, nextNeed == .setup(.gameWine) { notice = Primary.gameWineUnavailable }
+            recheck()
+        }
+        // Each step at most once per press: a step that did not fix its need says why in its
+        // own "!!" line, and the next press tries again.
+        var done: [PrimaryAction.SetupNeed] = []
+        var configured = false
+        func configureIfNeeded() async -> Bool {
+            guard !configured else { return true }
+            guard checks.contains(where: { Primary.configuredAfterDownload.contains($0.id) && $0.state == .bad })
+            else { return true }
+            configured = true
+            return await setupConfigureStep(r)
+        }
+        for _ in 0..<10 {
+            await recheckSettled()
+            guard store.selectedID == world else { return }   // the user switched worlds
+            let need: PrimaryAction.SetupNeed
+            switch nextNeed {
+            case .setup(let n): need = n
+            case .repair(.wine):
+                // Step 5 on its own (Wine's library links), when it is all that is left.
+                guard !configured, await configureIfNeeded() else { return }
+                continue
+            default: return                                     // nothing left to set up
+            }
+            if done.contains(need) { return }
+            done.append(need)
+            switch need {
+            case .install, .wrapperDrive, .wine:
+                guard await setupLocationStep(need) else { return }
+                await refreshAsync()
+            case .dataDrive, .chooseFolder:
+                guard await setupLocationStep(need) else { return }
+            case .game:
+                guard await setupGameStep(r) else { return }
+                // Step 5 right away: a fresh prefix has no registry, COM or library links yet.
+                await recheckSettled()
+                guard await configureIfNeeded() else { return }
+            case .gameWine:
+                // No pinned download for it yet (see Primary.gameWineUnavailable). Everything
+                // after it still gets done, and the line at the end says what is left.
+                gameWineMissing = true
+                guard await configureIfNeeded() else { return }
+                if store.selected?.local == true, local.status?.ready == false {
+                    guard await setupLocalServerStep(r) else { return }
+                }
+                return
+            case .localServer:
+                guard await setupLocalServerStep(r) else { return }
+            }
+        }
+    }
+
+    /// The chain's recheck: back once the newest checks are on screen. A job ending also
+    /// rechecks (onChange of busy), and a newer recheck discards an older one's answer, so
+    /// waiting for our own is not enough.
+    private func recheckSettled() async {
+        await recheckAsync()
+        for _ in 0..<100 where checksInFlight > 0 { try? await Task.sleep(nanoseconds: 100_000_000) }
+    }
+
+    /// Setup step 1: where things go. The install-location chooser belongs here and only here:
+    /// it decides `Bootstrap.target` (the wrapper -- Wine plus its Windows drive -- to build, or
+    /// to repair in place) for `.install`, `.wrapperDrive` and `.wine`, and the world's
+    /// `dataPath` (where its game files go) for `.dataDrive` and `.chooseFolder`. Today the
+    /// wrapper goes where the setup sheet says before it builds anything (`Bootstrap.wrapperURL`,
+    /// or the selected wrapper when only its Wine is missing), and the game files go in a folder
+    /// the user picks. Returns false when the user cancelled; nothing has been written then.
+    private func setupLocationStep(_ need: PrimaryAction.SetupNeed) async -> Bool {
+        switch need {
+        case .install, .wrapperDrive, .wine:
+            prepareWineSetup()
+            showSetup = true
+            return await setupSheetWaiter.wait()
+        case .dataDrive, .chooseFolder:
+            guard let s = store.selected else { return false }
+            let before = s.dataPath
+            chooseGameData(for: s)
+            guard let now = store.servers.first(where: { $0.name == s.name }) else { return false }
+            return !now.dataPath.isEmpty && now.dataPath != before
+        default:
+            return true
+        }
+    }
+
+    /// Setup step 4: the game files. HorizonXI's (and the local world's, which plays HorizonXI's
+    /// client) come by torrent with progress on the button; another world's come from its own
+    /// installer, which runs on and is picked up by the recheck when it ends.
+    private func setupGameStep(_ r: Runner) async -> Bool {
+        guard let s = store.selected, let i = active else { return false }
+        if s.installKind == .horizonTorrent || s.local {
+            return await withCheckedContinuation { c in
+                r.installHorizon(into: i.gameDir) { ok in c.resume(returning: ok) }
+            }
+        }
+        if s.installKind == .website {
+            // Their page is the only source. The first press opens it; once the installer is
+            // downloaded, the next press runs it inside the wrapper.
+            if websiteOpened.contains(s.name) {
+                runLocalInstaller(for: s, install: i)
+            } else {
+                websiteOpened.insert(s.name)
+                downloadGameData(for: s, install: i)
+                info("\(s.name)'s download page is open. When it has downloaded, press Setup again.")
+            }
+            return false
+        }
+        downloadGameData(for: s, install: i)
+        return false
+    }
+
+    /// Setup step 5: registry, COM and Wine's library links (install.sh, with Play's Wine).
+    private func setupConfigureStep(_ r: Runner) async -> Bool {
+        guard let i = active else { return false }
+        return await withCheckedContinuation { c in r.repair(i) { ok in c.resume(returning: ok) } }
+    }
+
+    /// Setup step 6: the local world's server (lsb-server.sh setup).
+    private func setupLocalServerStep(_ r: Runner) async -> Bool {
+        guard !local.busy, let st = local.status, !(st.belowFloor && !forceSetup) else { return false }
+        return await withCheckedContinuation { c in
+            local.setup(force: st.belowFloor && forceSetup, log: { r.appendLine($0) }) { ok in c.resume(returning: ok) }
+        }
+    }
+
+    /// Setup repairs the selected wrapper when that is the one whose wine is missing, instead
+    /// of building a second, empty wrapper and switching to it (G11).
     private func prepareWineSetup() {
         if let i = selected, !FileManager.default.isExecutableFile(atPath: i.wine.path) {
             Bootstrap.target = i.wrapper
@@ -1755,7 +1935,7 @@ struct ContentView: View {
         if server.local {
             guard let s = local.status, s.ready else {
                 if local.status == nil { info("Still checking the local server") }
-                else { notice = "Local server not set up — press Set up server" }
+                else { notice = "The local server isn't set up yet — press Setup." }
                 return
             }
             if !s.running {
@@ -1927,7 +2107,9 @@ struct ContentView: View {
         scanning = true
         let found = await Task.detached(priority: .userInitiated) { Install.discover() }.value
         scanning = false
-        guard !found.isEmpty else { return }
+        // Nothing found: the checks still run, so the button can name a remembered install's
+        // missing drive instead of offering a setup from scratch (G6).
+        guard !found.isEmpty else { await recheckAsync(); return }
         installs = found
         if let cur = selected, !found.contains(where: { $0.id == cur.id }), cur.hasGame {
             // The selected install still holds the game but was not found (its wine is broken,
@@ -1946,6 +2128,9 @@ struct ContentView: View {
 
     /// Mount, unmount and activation rechecks: one at a time, the latest folded into a single rerun.
     private func autoRecheck() {
+        // Nothing selected (the install's drive was gone at launch): a drive coming back may
+        // bring it back, which only a scan finds.
+        if selected == nil, !scanning { refresh(); return }
         if checksInFlight > 0 { recheckPending = true; return }
         recheck()
     }

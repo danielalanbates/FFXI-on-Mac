@@ -29,6 +29,14 @@ final class Runner: ObservableObject {
     @Published var updateProgress: Double = 0
     @Published var updateLabel = ""
     private var updateStep = (n: 1, total: 1)
+    /// A fresh install's base download and unzip (9.4 GB, nearly all of the time) fills the
+    /// first 85% of the bar, its updates the rest; an update alone fills all of it. Setup's
+    /// button reads this, so it must not jump back to 0% when the updates start.
+    private var installingBase = false
+    private var phase = (start: 0.0, span: 1.0)
+    private func setProgress(_ inPhase: Double) {
+        updateProgress = phase.start + phase.span * min(max(inPhase, 0), 1)
+    }
     @Published var busy = false {
         didSet {
             if busy != oldValue { Runner.busyCount += busy ? 1 : -1 }
@@ -255,19 +263,24 @@ final class Runner: ObservableObject {
             // aria2's readout becomes the progress bar instead of hundreds of log lines.
             for line in s.split(whereSeparator: \.isNewline) {
                 let l = String(line)
-                if let m = l.range(of: #"==> update (\S+) \((\d+)/(\d+)\)"#, options: .regularExpression) {
+                if installingBase, l.contains("==> base client in place") || l.contains("==> already has a client") {
+                    installingBase = false
+                    phase = (0.85, 0.15)
+                    updateStep = (1, 1)
+                    setProgress(0)
+                } else if let m = l.range(of: #"==> update (\S+) \((\d+)/(\d+)\)"#, options: .regularExpression) {
                     let parts = l[m].dropFirst(11).split(separator: " ")
                     let nums = parts.last?.trimmingCharacters(in: CharacterSet(charactersIn: "()")).split(separator: "/") ?? []
                     if nums.count == 2, let n = Int(nums[0]), let t = Int(nums[1]) {
                         updateStep = (n, max(t, 1))
                         updateLabel = "\(parts.first ?? "") · \(n) of \(t)"
                     }
-                    updateProgress = Double(updateStep.n - 1) / Double(updateStep.total)
+                    setProgress(Double(updateStep.n - 1) / Double(updateStep.total))
                 } else if let m = l.range(of: #"\((\d+)%\)"#, options: .regularExpression),
                           let pct = Double(l[m].dropFirst().dropLast(2)) {
-                    updateProgress = (Double(updateStep.n - 1) + pct / 100 * 0.9) / Double(updateStep.total)
+                    setProgress((Double(updateStep.n - 1) + pct / 100 * 0.9) / Double(updateStep.total))
                 } else if l.contains("==> extracting") {
-                    updateProgress = (Double(updateStep.n - 1) + 0.9) / Double(updateStep.total)
+                    setProgress((Double(updateStep.n - 1) + 0.9) / Double(updateStep.total))
                 }
             }
             s = s.split(separator: "\n", omittingEmptySubsequences: false)
@@ -476,14 +489,12 @@ final class Runner: ObservableObject {
         }
         beginBusy("Updating")
         updatingHorizon = true
+        installingBase = false; phase = (0, 1)
         updateProgress = 0; updateLabel = ""; updateStep = (1, 1)
         appendLine("==> updating HorizonXI game files in \(install.gameDir.path)")
-        var env: [String: String] = [:]
-        // aria2c comes from Homebrew; a bundled app's PATH does not include it.
-        env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")
         spawn(URL(fileURLWithPath: "/bin/zsh"),
               args: [script.path, "horizon", install.gameDir.path],
-              env: env, cwd: Self.scratchDir) { [weak self] code in
+              env: Self.downloadEnvironment(), cwd: Self.scratchDir) { [weak self] code in
             self?.endMaintenance()
             self?.busy = false
             self?.updatingHorizon = false
@@ -491,6 +502,17 @@ final class Runner: ObservableObject {
             self?.reportFailure(code, "HorizonXI update failed — Open log in Setup & Diagnostics")
             done(code == 0)
         }
+    }
+
+    /// What update-client.sh needs to fetch: Homebrew's aria2c when there is one (a bundled
+    /// app's PATH does not include it), otherwise the script fetches aria2's own macOS build once
+    /// into `tools/` (pinned by size and SHA-256; see update-client.sh `ensure_aria2`).
+    static func downloadEnvironment() -> [String: String] {
+        var env: [String: String] = [:]
+        env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")
+        env["HXI_TOOLS"] = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("HorizonXI-on-Mac/tools", isDirectory: true).path
+        return env
     }
 
     /// Stop a running HorizonXI update. aria2c resumes from its .aria2 file next time, and a zip
@@ -877,23 +899,27 @@ final class Runner: ObservableObject {
     /// Fresh HorizonXI client into `dir` via their published torrent + updates (update-client.sh install).
     func installHorizon(into dir: URL, done: @escaping (Bool) -> Void = { _ in }) {
         if refuseWhileBusy("the HorizonXI client install") { done(false); return }
+        // Files behind a drive that is gone cannot be fetched into: say so before anything is
+        // written (update-client.sh checks again, for the CLI).
+        if let d = Preflight.unavailableDrive(for: dir.appendingPathComponent("SquareEnix/FINAL FANTASY XI").path) {
+            appendLine("!! " + Preflight.driveLine(d, Preflight.driveState(d))); done(false); return
+        }
         guard let script = Self.updateScript() else {
             appendLine("!! update-client.sh not found in the bundle"); done(false); return
         }
         beginBusy("Downloading")
         // The same progress readout as an update (and the same Stop).
         updatingHorizon = true
+        installingBase = true; phase = (0, 0.85)
         updateProgress = 0; updateLabel = ""; updateStep = (1, 1)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         appendLine("==> installing HorizonXI into \(dir.path) (9.4 GB torrent — leave this running)")
-        var env: [String: String] = [:]
-        env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")
         spawn(URL(fileURLWithPath: "/bin/zsh"), args: [script.path, "install", dir.path],
-              env: env, cwd: Self.scratchDir) { [weak self] code in
+              env: Self.downloadEnvironment(), cwd: Self.scratchDir) { [weak self] code in
             self?.busy = false
             self?.updatingHorizon = false
             self?.appendLine("==> install exited \(code)")
-            self?.reportFailure(code, "HorizonXI download didn't finish — press Download again to resume")
+            self?.reportFailure(code, "HorizonXI download didn't finish — press Setup again to resume")
             done(code == 0)
         }
     }
@@ -1006,7 +1032,7 @@ final class Runner: ObservableObject {
         // With no client live this launch stops that same wineserver on the main thread (the
         // renderer step, then `wineserver -w`) and the window would hang on it: refuse instead.
         if !g.clientsLive, WineserverStopWait.anyStuck {
-            let why = "Wine is still shutting down from the last Stop. If this stays, restart the Mac."
+            let why = "Wine is still closing from the last game — try Play again in a minute."
             logFileOnly("!! " + why)
             return why
         }
@@ -1488,7 +1514,7 @@ final class Runner: ObservableObject {
                         await MainActor.run {
                             owner?.logFileOnly("wineserver -k/-w still running after "
                                                + "\(Int(Runner.wineserverStopLimit)) s; launch lock released")
-                            owner?.appendLine("!! Wine didn't shut down — if the game won't start, restart the Mac.")
+                            owner?.appendLine("!! Wine is still closing from the last game; Play waits for it.")
                         }
                     }
                 } else if !left.isEmpty {
