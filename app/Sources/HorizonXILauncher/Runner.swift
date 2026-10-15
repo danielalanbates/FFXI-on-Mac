@@ -47,8 +47,8 @@ final class Runner: ObservableObject {
             else { Runner.busyReasons[ObjectIdentifier(self)] = nil; busyReason = "" }
         }
     }
-    /// What `busy` is, in a few words ("Updating Wine"): the footer's line while Play is grey,
-    /// and what the quit alert names. Set through `beginBusy`.
+    /// What `busy` is, in a few words ("Updating Wine"): what the button's progress, its Stop
+    /// and the quit alert name. Set through `beginBusy`.
     @Published private(set) var busyReason = ""
     private func beginBusy(_ reason: String) {
         busyReason = reason
@@ -1864,8 +1864,11 @@ final class Runner: ObservableObject {
         do {
             try p.run()
             proc = p
-            // Stop and Quit end it, what it started, and its Wine session (JobKill).
+            // Stop and Quit end it, what it started, and its Wine session (JobKill). One that
+            // already ended (its untrack ran first) is not left tracked: Quit would signal
+            // whatever reused its pid.
             JobKill.track(p.processIdentifier, wine: wine)
+            if !p.isRunning { JobKill.untrack(p.processIdentifier) }
         } catch {
             appendLine("!! failed to start \(exe.path): \(error.localizedDescription)")
             done(-1)

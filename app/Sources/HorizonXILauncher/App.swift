@@ -2346,13 +2346,13 @@ struct ContentView: View {
 
     private func play() {
         guard let i = active else { return }
-        // Only a handed-over --play gets here (PLAY is grey); the launcher is about to quit.
+        // Only a handed-over --play gets here (the button says "Updating…"); the launcher is about to quit.
         if updateInstalling {
             runner.logFileOnly("!! not playing: the launcher is restarting to update")
             return
         }
         if runner.busy {
-            // Only a forwarded --play gets here (PLAY is grey while busy); not an error to keep.
+            // Only a forwarded --play gets here (the button is the job's progress); not an error to keep.
             info("Wait for the install/update to finish")
             runner.logFileOnly("!! " + notice)
             return
