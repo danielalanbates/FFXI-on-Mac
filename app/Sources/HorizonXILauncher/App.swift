@@ -134,7 +134,8 @@ struct ContentView: View {
     @StateObject private var store = ServerStore()
     @StateObject private var local = LocalServer()
     @StateObject private var feeds = ServerFeeds()
-    @StateObject private var updater = Updater()
+    /// One for the whole process (see Updater.shared), not one per window.
+    @ObservedObject private var updater = Updater.shared
     @StateObject private var ra = RAProgress()
     @State private var bannerIndex = 0
     /// One timer for the life of the view. Built inline in `newsBanner`'s body it was a *new*
@@ -281,8 +282,8 @@ struct ContentView: View {
             // Pick up each server's own published addon list, so the app's compiled-in snapshot
             // does not go stale between releases. Silent on failure -- offline must still launch.
             await feeds.refreshAsync(servers: store.servers)
-            // Check GitHub Releases and, if there is a newer build, download it automatically.
-            // The update is only *applied* when the user presses Restart (updateBanner).
+            // Check GitHub Releases and, if there is a newer build, download it silently. The
+            // update is only *applied* when the user presses Restart (updateBanner).
             updater.start()
             await fetchHorizonLatest()
         }
@@ -446,9 +447,6 @@ struct ContentView: View {
     /// invented to fill the space.** No FFXI private server publishes a news feed a launcher can
     /// read (see `ServerFeeds` for what was checked), so there are no headlines to rotate; the
     /// moment one does, fetched items appear here first and are marked as such.
-    /// Shown only when an update has finished downloading and is staged: one line and a Restart
-    /// button. While a download is in flight it shows quiet progress; otherwise it renders nothing,
-    /// so the normal launcher is undisturbed.
     /// HorizonXI game update, shown at the top of the news only when the installed client is
     /// actually behind what api.horizonxi.com publishes (or while an update is running).
     @ViewBuilder private var gameUpdateBanner: some View {
@@ -498,43 +496,53 @@ struct ContentView: View {
         if let v { horizonLatest = v }
     }
 
+    /// The launcher's own update: one line, and only when there is something to act on (see
+    /// Updater). Checking, downloading and staging show nothing.
     @ViewBuilder private var updateBanner: some View {
         switch updater.state {
-        case .ready(let release):
-            HStack(spacing: 10) {
-                Image(systemName: "arrow.down.circle.fill").foregroundStyle(Vana.gold)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Update \(release.version) is ready").font(.system(size: 12)).foregroundStyle(Vana.text)
-                    Text("Restart to finish installing it.").font(.system(size: 12)).foregroundStyle(Vana.muted)
-                }
-                Spacer()
-                Button("Restart") { updater.restartToUpdate() }
-                    .buttonStyle(.borderedProminent).controlSize(.small)
-                    .disabled(!sessions.live.isEmpty || !sessions.elsewhere.isEmpty)
-                    .help(!sessions.live.isEmpty || !sessions.elsewhere.isEmpty
-                          ? "Finish your game before restarting for the update."
-                          : "Install the ready update and reopen the launcher.")
+        case .ready(let release), .installing(let release):
+            updateRow(icon: "arrow.down.circle.fill", tint: Vana.gold,
+                      text: "Launcher \(release.label) ready") { restartButton }
+        case .restartFailed(let release, let why):
+            updateRow(icon: "exclamationmark.circle.fill", tint: Vana.ember, text: why.message) {
+                if why.canRetry { restartButton } else { EmptyView() }
             }
-            .padding(10)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Vana.gold.opacity(0.12)))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Vana.gold.opacity(0.35), lineWidth: 1))
-            .padding(.top, 6)
-        case .downloading(let frac):
-            HStack(spacing: 8) {
-                ProgressView(value: frac).frame(width: 120)
-                Text("Downloading update… \(Int(frac * 100))%").font(.system(size: 12)).foregroundStyle(Vana.muted)
-            }.padding(.top, 6)
-        case .staging:
-            Text("Preparing update…").font(.system(size: 12)).foregroundStyle(Vana.muted).padding(.top, 6)
-        case .failed(let msg):
-            // Only worth showing when it is about an update that exists, not routine offline noise.
-            if msg.contains("available") {
-                Text(msg).font(.system(size: 12)).foregroundStyle(Vana.ember)
-                    .fixedSize(horizontal: false, vertical: true).padding(.top, 6)
+            .help(why.detail ?? "Launcher \(release.label)")
+        case .manual(let release):
+            updateRow(icon: "arrow.down.circle", tint: Vana.gold,
+                      text: "Launcher \(release.label) available") {
+                Link("Download", destination: release.pageURL).font(.system(size: 12))
             }
-        case .idle, .checking:
+        case .idle:
             EmptyView()
         }
+    }
+
+    private func updateRow<Action: View>(icon: String, tint: Color, text: String,
+                                         @ViewBuilder action: () -> Action) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon).foregroundStyle(tint)
+            Text(text).font(.system(size: 12)).foregroundStyle(Vana.text).lineLimit(1)
+            Spacer()
+            action()
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Vana.gold.opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Vana.gold.opacity(0.35), lineWidth: 1))
+        .padding(.top, 6)
+    }
+
+    /// Off while a game is running here or elsewhere, while a download or install is running,
+    /// and once pressed. Updater.restartToUpdate refuses the same cases.
+    private var restartButton: some View {
+        let gameLive = !sessions.live.isEmpty || !sessions.elsewhere.isEmpty
+        let installing: Bool = { if case .installing = updater.state { return true }; return false }()
+        return Button("Restart") { updater.restartToUpdate() }
+            .buttonStyle(.borderedProminent).controlSize(.small)
+            .disabled(gameLive || Runner.workInFlight || installing)
+            .help(gameLive ? "Close the game first."
+                  : Runner.workInFlight ? "Finish the running download first."
+                  : "Install the update and reopen the launcher.")
     }
 
     /// Live players-online for the selected world, under the news banner. Only shown when the
