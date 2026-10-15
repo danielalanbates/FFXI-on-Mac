@@ -374,6 +374,9 @@ struct ContentView: View {
         // the button into the next step (or PLAY) without anyone pressing ↻.
         .onChange(of: runner.busy) { busy in if !busy { recheck() } }
         .onChange(of: local.busy) { busy in if !busy { recheck() } }
+        // A session started, stopped or exited (any world's): look again at what runs
+        // elsewhere at once, rather than on the next tick.
+        .onChange(of: sessions.live.map(\.id)) { _ in Task { await refreshElsewhere() } }
         // The selected world's game has exited: what was said about it is over.
         .onChange(of: runner.running) { running in
             guard !running else { return }
@@ -396,6 +399,9 @@ struct ContentView: View {
         // Coming back to the launcher, too, at most every 5 s and never while a game is starting
         // (Preflight reads the game drive, which the starting client is busy with).
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            // What runs elsewhere, every time: a "Running…" left from a game that has since
+            // ended must not wait for the next tick (one `ps`).
+            Task { await refreshElsewhere() }
             guard !launchUnderWay, Date().timeIntervalSince(lastActivationRecheck) >= 5 else { return }
             lastActivationRecheck = Date()
             autoRecheck()
@@ -425,16 +431,16 @@ struct ContentView: View {
             Task { await runForwarded() }
         }
         // Clients started by another launcher are only visible to a process scan. One `ps`.
-        .task { await sessions.refreshElsewhere(install: active, profiles: bootProfiles) }
+        .task { await refreshElsewhere() }
         .onReceive(elsewhereTick) { _ in
             guard NSApplication.shared.occlusionState.contains(.visible) else { return }
-            Task { await sessions.refreshElsewhere(install: active, profiles: bootProfiles) }
+            Task { await refreshElsewhere() }
         }
         // And at once when the window comes back into view, so the list is never 15 s stale.
         // News too, when it was last asked for more than 15 minutes ago.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeOcclusionStateNotification)) { _ in
             guard NSApplication.shared.occlusionState.contains(.visible) else { return }
-            Task { await sessions.refreshElsewhere(install: active, profiles: bootProfiles) }
+            Task { await refreshElsewhere() }
             Task { await feeds.refreshNews(servers: store.servers, minInterval: 900) }
         }
         // Discovery walks /Volumes, and an external drive can make that take tens of seconds.
@@ -449,6 +455,9 @@ struct ContentView: View {
             if selected == nil, let remembered = Install.remembered() {
                 selected = remembered
                 installs = [remembered]
+                // A game the previous launcher left running is this one's before any --play
+                // (Leftovers): Play then sees it as this window's, not a stranger's.
+                await refreshElsewhere()
                 // A forwarded --play must not reach Wine before its prefix is current.
                 // This normally returns immediately; a stale prefix is updated once
                 // under Runner's maintenance lock before commands are consumed.
@@ -1569,6 +1578,18 @@ struct ContentView: View {
         store.servers.map { ($0.name, $0.bootProfile) }
     }
 
+    /// The worlds a client left running by an earlier launcher may be adopted into.
+    private var adoptWorlds: [Sessions.World] {
+        guard let i = selected else { return [] }
+        return store.servers.map { Sessions.World(name: $0.name, host: LiveClients.normalize($0.host),
+                                                  profile: $0.bootProfile, install: i.forServer($0)) }
+    }
+
+    /// Clients elsewhere, and what an earlier launcher left behind (Sessions.refreshElsewhere).
+    private func refreshElsewhere() async {
+        await sessions.refreshElsewhere(install: active, profiles: bootProfiles, worlds: adoptWorlds)
+    }
+
     /// Clients this window did not start, named by the world whose host (or boot profile's
     /// `--server`) they were given.
     private var elsewhere: [(host: String, name: String, pids: [pid_t])] {
@@ -1713,7 +1734,10 @@ struct ContentView: View {
             alert.informativeText = "The game closes without logging out."
             alert.addButton(withTitle: "Keep Playing")
             alert.addButton(withTitle: "Stop")
-            if alert.runModal() == .alertSecondButtonReturn { runner.stop() }
+            if alert.runModal() == .alertSecondButtonReturn {
+                runner.stop()
+                Task { await refreshElsewhere() }
+            }
         case .enterAccount:
             focus = user.trimmingCharacters(in: .whitespaces).isEmpty ? .account : .password
         case .working:
@@ -2303,7 +2327,7 @@ struct ContentView: View {
                         Circle().fill(Vana.crystal).frame(width: 6, height: 6)
                         Text(s.id).font(.system(size: 12)).foregroundStyle(Vana.text)
                         Spacer()
-                        Button("Stop") { s.runner.stop() }
+                        Button("Stop") { s.runner.stop(); Task { await refreshElsewhere() } }
                             .font(.system(size: 12))
                             .help("Ends \(s.id)'s client only. Other worlds keep running.")
                     }

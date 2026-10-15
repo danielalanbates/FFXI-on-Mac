@@ -39,6 +39,8 @@ enum Headless {
             || a.contains("--selftest-setup-progress")
             || a.contains("--selftest-boot-profile")
             || a.contains("--selftest-news")
+            || a.contains("--selftest-leftovers")
+            || a.contains("--leftovers-report")
             || a.contains("--news-preview")
             || a.contains("--progress-trace")
             || a.contains("--next-action")
@@ -106,7 +108,11 @@ enum Headless {
         if args.contains("--selftest-news") {
             runNewsSelfTest()
         }
+        if args.contains("--selftest-leftovers") {
+            runLeftoversSelfTest()
+        }
         if args.contains("--news-preview") { runNewsPreview() }
+        if args.contains("--leftovers-report") { runLeftoversReport() }
         if args.contains("--progress-trace") { runProgressTrace() }
         if let at = args.firstIndex(of: "--selftest-single-instance-probe") {
             runSingleInstanceProbe(Array(args[(at + 1)...]))

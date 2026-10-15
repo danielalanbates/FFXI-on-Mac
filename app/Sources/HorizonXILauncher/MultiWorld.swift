@@ -35,6 +35,9 @@ enum LiveClients {
         /// is "is anything live in the prefix"; its world is known only if it was given
         /// `--server`.
         var other = false
+        /// Its executable is one of this launcher's wine builds or the x87 sidecar (`OwnWine`).
+        /// What `Leftovers.adoptable` asks before calling a client this launcher's own.
+        var ownWine = true
 
         /// A loader whose world can be read: a known loader, or any program given `--server`.
         /// What the duplicate rule, the Running list and a session's group test go by.
@@ -55,6 +58,10 @@ enum LiveClients {
         /// sidecar lives exactly as long as the process it hooked, so a client launched with
         /// `ROSETTA_X87_PATH` and no sidecar left in its session was never accelerated.
         var sidecars: Set<pid_t> = []
+        /// The wineservers, and wine's own programs (`wineSystemPrograms`), whose executable is
+        /// this launcher's wine (`OwnWine`). See `Leftovers.serverless`.
+        var ownWineservers: [pid_t] = []
+        var ownSystemPrograms: [pid_t] = []
 
         var byHost: [String: [pid_t]] { LiveClients.byHost(clients) }
 
@@ -117,6 +124,7 @@ enum LiveClients {
             if command == "wineserver" || command.hasSuffix("/wineserver") || command.contains("/wineserver -") {
                 snap.wineservers.append(pid)
                 snap.wine.insert(pid)
+                if isOurs(pid) { snap.ownWineservers.append(pid) }
                 continue
             }
             let tokens = tokenize(command)
@@ -128,7 +136,12 @@ enum LiveClients {
             snap.wine.insert(pid)
             let injecting = isInjector(program)
             let known = injecting || isLoader(program)
-            if !known, isWineSystemProgram(program) || !isOurs(pid) { continue }
+            if !known, isWineSystemProgram(program) {
+                if isOurs(pid) { snap.ownSystemPrograms.append(pid) }
+                continue
+            }
+            let ours = isOurs(pid)
+            if !known, !ours { continue }
             var host = ""
             var bootFile = ""
             let rest = tokens[(at + 1)...]
@@ -142,9 +155,11 @@ enum LiveClients {
                 }
             }
             snap.clients.append(Client(pid: pid, group: group, host: normalize(host), injecting: injecting,
-                                       bootFile: bootFile, other: !known))
+                                       bootFile: bootFile, other: !known, ownWine: ours))
         }
         snap.wineservers.sort()
+        snap.ownWineservers.sort()
+        snap.ownSystemPrograms.sort()
         snap.clients.sort { $0.pid < $1.pid }
         return snap
     }
@@ -247,8 +262,15 @@ enum LiveClients {
         let data = out.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
         let own = OwnWine.current()
-        return parse(String(decoding: data, as: UTF8.self),
-                     isOurs: { own.owns(executable: executablePath(of: $0)) })
+        // Most of these share one executable (wine's): resolve each path once per scan.
+        var seen: [String: Bool] = [:]
+        return parse(String(decoding: data, as: UTF8.self), isOurs: { pid in
+            guard let e = executablePath(of: pid) else { return false }
+            if let known = seen[e] { return known }
+            let ours = own.owns(executable: e)
+            seen[e] = ours
+            return ours
+        })
     }
 
     /// The file a process is running, as the kernel has it. Not `ps -o comm`: wine rewrites
@@ -655,10 +677,33 @@ final class Sessions: ObservableObject {
     /// duplicate refusal checks it as well as the Host field, so PLAY/RUNNING must too.
     @Published private(set) var bootHosts: [String: String] = [:]
 
+    /// A world a leftover client may belong to: the session it is adopted into (`Leftovers`).
+    struct World {
+        let name: String
+        /// The Host field, normalised.
+        let host: String
+        let profile: String
+        /// The selected install, pointed at this world's game folder.
+        let install: Install
+    }
+
+    /// Sessions this refresh adopted (newest last), for the window to log or show.
+    @Published private(set) var adoptedCount = 0
+    private var cleaning = false
+
     /// The scan and the boot-profile reads (which may sit on an external volume) run off the
     /// main actor; only a change is published.
-    func refreshElsewhere(install: Install? = nil, profiles: [(world: String, profile: String)] = []) async {
-        let (snap, boot) = await Task.detached { () -> (LiveClients.Snapshot, [String: String]) in
+    ///
+    /// Also takes on what an earlier run of this launcher left behind (`Leftovers`): a client of
+    /// its own, in `install`'s prefix, becomes a session with its Stop; wine's own programs left
+    /// with no wineserver are ended quietly. Neither happens while another launcher is alive, a
+    /// launch or job of this one is under way, or without `install`.
+    func refreshElsewhere(install: Install? = nil, profiles: [(world: String, profile: String)] = [],
+                          worlds: [World] = []) async {
+        let before = Runner.playingGroups
+        let prefix = install.map { $0.prefix.path } ?? ""
+        let (snap, boot, evidence, prefixPath, serverless) = await Task.detached {
+            () -> (LiveClients.Snapshot, [String: String], (groups: [pid_t: String], servers: [pid_t: String?]), String, [pid_t]) in
             var boot: [String: String] = [:]
             if let install {
                 for p in profiles {
@@ -667,13 +712,48 @@ final class Sessions: ObservableObject {
                     }
                 }
             }
-            return (LiveClients.snapshot(), boot)
+            let snap = LiveClients.snapshot()
+            guard !prefix.isEmpty else { return (snap, boot, ([:], [:]), "", []) }
+            let ev = Leftovers.evidence(snap, ownGroups: before.groups, ownHostsWithoutGroup: before.hostsWithoutGroup)
+            let left = Leftovers.serverless(snap, parentOf: Leftovers.parentPID,
+                                            prefixSocketExists: Leftovers.prefixSocketExists(prefix))
+            return (snap, boot, ev, OwnWine.resolve(prefix), left)
         }.value
+        if boot != bootHosts { bootHosts = boot }
+
+        if let install, !prefixPath.isEmpty, !SingleInstance.otherLauncherAlive() {
+            // Against this launcher's sessions as they are now, not as they were before the scan.
+            let own = Runner.playingGroups
+            let orphans = Leftovers.adoptable(snap, ownGroups: own.groups, ownHostsWithoutGroup: own.hostsWithoutGroup,
+                                              prefix: prefixPath, prefixOfGroup: evidence.groups,
+                                              serverPrefixes: evidence.servers, otherLauncherAlive: false)
+            for o in orphans {
+                let hostKeys = { (w: World) in Set([w.host, self.bootHosts[w.name] ?? ""]).subtracting([""]) }
+                let w = worlds.first { hostKeys($0).contains(o.host) }
+                let name = w?.name ?? (o.host.isEmpty ? "Unknown world" : o.host)
+                // The world's own session when it is idle, else a further one (a world that
+                // allows several clients, one of them running here already).
+                let idle = runner(for: name)
+                let r = !idle.running && !idle.busy ? idle : newSession(for: name)
+                r.adopt(group: o.group, host: o.host, world: name, install: w?.install ?? install,
+                        profile: w?.profile ?? "horizonxi.ini", pids: o.pids)
+                if r.running { adoptedCount += 1 }
+            }
+            if !serverless.isEmpty, !cleaning, !Runner.anyPlaying, !Runner.workInFlight {
+                cleaning = true
+                let ended = await Task.detached { await Leftovers.endServerless(serverless, prefix: prefix) }.value
+                cleaning = false
+                if !ended.isEmpty {
+                    Runner.appendToLogFile("i  ended \(ended.count) wine program(s) left with no wineserver (pid "
+                                           + ended.map(String.init).joined(separator: ",") + ")")
+                }
+            }
+        }
+
         let own = Runner.playingGroups
         let found = MultiWorld.elsewhere(snap.clients, ownGroups: own.groups,
                                          ownHostsWithoutGroup: own.hostsWithoutGroup)
         if found != elsewhere { elsewhere = found }
-        if boot != bootHosts { bootHosts = boot }
     }
 
     /// Is `world` playing in a client this window did not start, under its Host field or the

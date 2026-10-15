@@ -217,8 +217,9 @@ final class Runner: ObservableObject {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("HorizonXI-on-Mac", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        // `--fix` runs against test prefixes: its log must not rotate the real launcher.log away.
-        if CommandLine.arguments.contains("--fix") {
+        // `--fix` runs against test prefixes, and self-tests may drive a Runner: neither may
+        // rotate the real launcher.log away.
+        if CommandLine.arguments.contains("--fix") || CommandLine.arguments.contains(where: { $0.hasPrefix("--selftest-") }) {
             let f = FileManager.default.temporaryDirectory.appendingPathComponent("ffxi-on-mac-fix.log")
             FileManager.default.createFile(atPath: f.path, contents: nil)
             return f
@@ -1599,6 +1600,39 @@ final class Runner: ObservableObject {
         guard narratorStarted else { return }
         narratorStarted = false
         Narration.terminateNarrator()
+    }
+
+    /// Take on a client an earlier run of this launcher started and left running (see
+    /// `Leftovers`): from here it is this session's, exactly as if this run had launched it.
+    /// The button and the RUNNING list offer its Stop, which ends its group (loader, sidecar)
+    /// and, once nothing else is left, that prefix's wineserver; the exit watcher brings the
+    /// button back when it ends. Nothing is written and nothing is signalled here.
+    /// `watch: false` is for --selftest-leftovers, which has no real client to watch.
+    func adopt(group: pid_t, host: String, world: String, install: Install, profile: String,
+               pids: [pid_t], watch: Bool = true) {
+        guard !running, !busy, group > 1 else { return }
+        launchGeneration += 1
+        hostKey = host
+        Runner.playing[ObjectIdentifier(self)] = Playing(world: world, host: host, group: group,
+                                                         groupHeldLoader: true)
+        running = true
+        // It is long past starting: no "Starting…", and no "didn't start" line when it ends.
+        starting = false
+        sessionGroup = group
+        groupHeldLoader = true
+        preexistingPIDs = []
+        currentInstall = install
+        currentProfile = profile
+        currentWorld = world
+        gamePID = nil
+        loginFailure = ""
+        x87Sidecar = nil
+        x87Settled = true
+        sessionSeenAlive = true
+        sessionExplained = true
+        logFileOnly("==> \(world) was left running by an earlier launcher (pid "
+                    + pids.map(String.init).joined(separator: ",") + ", process group \(group)): adopted, Stop ends it")
+        if watch { watchGameProcess() }
     }
 
     /// Stop this session's own client, in the prefix it was launched in.

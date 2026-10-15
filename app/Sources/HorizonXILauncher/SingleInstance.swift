@@ -69,7 +69,7 @@ enum SingleInstance {
     static func isExempt(_ args: [String]) -> Bool {
         args.contains { $0.hasPrefix("--selftest-") } || args.contains("--check")
             || args.contains("--next-action") || args.contains("--fix")
-            || args.contains("--news-preview")
+            || args.contains("--news-preview") || args.contains("--leftovers-report")
     }
 
     // MARK: - The lock
@@ -212,6 +212,24 @@ enum SingleInstance {
             guard let d = app.launchDate else { return true }
             return started.timeIntervalSince(d) > racing
         }
+    }
+
+    /// Is any launcher process other than this one alive? One that holds the lock (this process
+    /// does not), or any app of this bundle id or executable, however recently started (a launch
+    /// about to hand over and exit counts too: it is asked again on the next refresh). A game
+    /// started by a launcher that is still running is that launcher's to track and stop
+    /// (`Leftovers`).
+    @MainActor static func otherLauncherAlive() -> Bool {
+        let me = ProcessInfo.processInfo.processIdentifier
+        let exe = Bundle.main.executableURL?.resolvingSymlinksInPath()
+        if NSWorkspace.shared.runningApplications.contains(where: { app in
+            app.processIdentifier != me && !app.isTerminated
+                && (app.bundleIdentifier == bundleID
+                    || (exe != nil && app.executableURL?.resolvingSymlinksInPath() == exe))
+        }) { return true }
+        if heldFD != nil { return false }
+        guard let pid = holderPID(), pid > 1, pid != me else { return false }
+        return kill(pid, 0) == 0 || errno == EPERM
     }
 
     // MARK: - Start-up
