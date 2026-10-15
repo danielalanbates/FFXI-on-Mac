@@ -91,11 +91,14 @@ if [[ -d "$REPO/app/build/FFXI-on-Mac.app" ]]; then
   SRC="$REPO/app/build/FFXI-on-Mac.app"
 elif command -v swift >/dev/null 2>&1; then
   info "Building it (about a minute)…"
-  "$REPO/app/bundle.sh" >/dev/null || die "Build failed."
+  "$REPO/app/bundle.sh" "$REPO/app/build" >/dev/null || die "Build failed."
   SRC="$REPO/app/build/FFXI-on-Mac.app"
 else
   die "No prebuilt app and no Swift toolchain. Install Xcode Command Line Tools:
       xcode-select --install"
+fi
+if /usr/bin/pgrep -f 'FFXI-on-Mac.app/Contents/MacOS|horizon-loader|Ashita-cli|wineserver' >/dev/null; then
+  die "FFXI on Mac or the game is running. Quit it (in game, type /shutdown) and run this again."
 fi
 rm -rf "/Applications/FFXI-on-Mac.app"
 cp -R "$SRC" /Applications/ || die "Could not copy to /Applications."
@@ -106,7 +109,7 @@ say "\nDone."
 cat <<'TXT'
 
   Open FFXI on Mac from /Applications, pick your server, type your account
-  name and password, and press PLAY. Your password goes into the macOS Keychain.
+  name and password, and press PLAY. Your password is saved for your Mac user only.
 
   Two things to expect:
 

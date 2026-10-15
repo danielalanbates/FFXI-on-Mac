@@ -50,10 +50,12 @@ not the gameplay stability gates above.
 
 ## The local .app is a different thing from the release
 `/Applications/FFXI-on-Mac.app` must stay playable at ALL times — Daniel plays on it
-during development. It tracks the working tree: rebuild and reinstall it (`app/bundle.sh`,
-then copy into `/Applications`) as soon as a fix lands, so his session is never stuck on a
-stale build. Never replace the bundle while the launcher or a client is running; check
-with `pgrep -fl "FFXI-on-Mac|horizon-loader|wine"` first and wait for an idle moment.
+during development. It tracks the working tree: rebuild and reinstall it
+(`./app/bundle.sh /Applications`, version and build in `app/VERSION`) as soon as a fix lands, so
+his session is never stuck on a stale build. Never replace the bundle while the launcher or a
+client is running: `bundle.sh` refuses `/Applications` while
+`pgrep -f 'FFXI-on-Mac.app/Contents/MacOS|horizon-loader|Ashita-cli|wineserver'` matches, and
+moves the replaced bundle to `~/Downloads/FFXI-on-Mac-build/archive-apps/` (one live copy).
 
 The GitHub release is the opposite: slow, gated, at most weekly. Fast local .app,
 rare public release.

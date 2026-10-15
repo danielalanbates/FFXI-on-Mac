@@ -196,8 +196,8 @@ Everything above happens automatically. If you'd rather do it by hand, or you're
 Building it yourself needs only Apple's Command Line Tools:
 
 ```sh
-./app/bundle.sh          # build the .app
-./scripts/package.sh     # build the .dmg
+./app/bundle.sh ~/Downloads/FFXI-build    # build the .app (an output folder is required)
+./scripts/package.sh                      # signed + notarised .dmg; needs HXI_SIGN_ID, see CONTRIBUTING
 ```
 
 Tested on: MacBook Pro M1, 8 GB, macOS 26.5, Wine 10.0 (Sikarugir), Ashita 4.3.1.2.

@@ -28,9 +28,14 @@ The app is Swift (SwiftUI, built with Swift Package Manager) plus shell and Pyth
 Xcode needed — Apple's Command Line Tools are enough.
 
 ```sh
-./app/bundle.sh          # build the .app into app/build/
-./scripts/package.sh     # build the .dmg into dist/
+./app/bundle.sh ~/Downloads/FFXI-build    # build the .app there (an output folder is required)
+HXI_SIGN_ID=<Developer ID SHA-1> ./scripts/package.sh   # signed, notarised .dmg into dist/
 ```
+
+`app/VERSION` holds the version and build. `bundle.sh` refuses `/Applications` while the launcher,
+a game client or wine runs, and archives the bundle it replaces instead of deleting it.
+`package.sh` needs a Developer ID, a `notarytool` keychain profile (`HXI_NOTARY_PROFILE`, default
+`batesai-notary`) and clean `vanaguide`/`vanavoice` checkouts beside this repo.
 
 The measurement harness in [`scripts/harness/`](scripts/harness) launches the game, walks it to a
 known spot, samples the frame rate and shuts it down, so performance claims can be reproduced

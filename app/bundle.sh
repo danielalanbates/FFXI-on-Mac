@@ -1,19 +1,41 @@
 #!/bin/zsh
 # bundle.sh — build FFXI-on-Mac.app from the SPM executable.
 # No Xcode required; this machine only has the Command Line Tools.
+#
+#   ./app/bundle.sh <output-dir>        e.g. ./app/bundle.sh ~/Downloads/FFXI-build
+#
+# There is no default output. /Applications/FFXI-on-Mac.app is the copy Daniel plays on: build
+# elsewhere, and install there only with the launcher and every game client quit (this script
+# refuses /Applications while any of them runs). A bundle it replaces is moved into
+# ~/Downloads/FFXI-on-Mac-build/archive-apps/, never deleted. Version and build: app/VERSION.
+# Swift build intermediates stay in Downloads.
 set -euo pipefail
 
 HERE="${0:A:h}"
 REPO="${HERE:h}"
-# Keep generated bundles out of the source checkout. The playable app is HorizonXI.app;
-# this beta bundle lives beside it in /Applications. Swift build intermediates stay in Downloads.
-if [[ -n "${1:-}" ]]; then
-  OUT="$1"
-else
-  OUT="/Applications"
+if [[ -z "${1:-}" ]]; then
+  echo "usage: ${0:t} <output-dir>   (e.g. ${0:t} ~/Downloads/FFXI-build)" >&2
+  exit 2
 fi
+OUT="$1"
 APP="$OUT/FFXI-on-Mac.app"
 BUILD_DIR="${HXI_BUILD_DIR:-$HOME/Downloads/FFXI-on-Mac-build/swift-build}"
+ARCHIVE_DIR="${HXI_ARCHIVE_DIR:-$HOME/Downloads/FFXI-on-Mac-build/archive-apps}"
+
+# app/VERSION: SHORT=<CFBundleShortVersionString>, BUILD=<CFBundleVersion>. The updater compares
+# both, so a new local beta is a one-line BUILD bump there.
+APP_SHORT_VERSION="" APP_BUILD=""
+while IFS='=' read -r key value || [[ -n "$key" ]]; do
+  value="${value//[[:space:]]/}"
+  case "${key//[[:space:]]/}" in
+    SHORT) APP_SHORT_VERSION="$value" ;;
+    BUILD) APP_BUILD="$value" ;;
+  esac
+done < "$HERE/VERSION"
+if [[ ! "$APP_SHORT_VERSION" =~ '^[0-9]+(\.[0-9]+){1,2}$' || "$APP_BUILD" != <-> ]]; then
+  echo "app/VERSION must hold SHORT=<x.y[.z]> and BUILD=<number> (got '$APP_SHORT_VERSION' / '$APP_BUILD')" >&2
+  exit 1
+fi
 
 canonical_path() {
   local path="$1"
@@ -26,6 +48,20 @@ if [[ "$APP_CANONICAL" == */*.app/Contents/* ]]; then
   echo "output app cannot be created inside another application bundle: $APP_CANONICAL" >&2
   exit 1
 fi
+
+# Never swap the bundle Daniel plays on while it, the game or any wine is running. Checked before
+# the build and again right before the swap.
+LIVE_PATTERN='FFXI-on-Mac.app/Contents/MacOS|horizon-loader|Ashita-cli|wineserver'
+refuse_if_live() {
+  [[ "${APP_CANONICAL:h}" == /Applications ]] || return 0
+  if /usr/bin/pgrep -f "$LIVE_PATTERN" >/dev/null 2>&1; then
+    echo "refusing to replace $APP_CANONICAL: the launcher, a game client or wine is running." >&2
+    echo "Quit them first (in game, /shutdown; never kill a logged-in client):" >&2
+    /usr/bin/pgrep -fl "$LIVE_PATTERN" >&2 || true
+    exit 1
+  fi
+}
+refuse_if_live
 for source in "${HXI_VANAGUIDE_SOURCE:-$REPO/../vanaguide/Vanaguide}" \
               "${HXI_VANAVOICE_SOURCE:-$REPO/../vanavoice/addon/vanavoice}" \
               "${HXI_WINECURSOR_SOURCE:-$REPO/addons/winecursor}"; do
@@ -164,7 +200,23 @@ fi
 # DockIcon.swift, so it has to ride along in the launcher's Resources.
 [[ -f "$HERE/GameIcon.icns" ]] && cp "$HERE/GameIcon.icns" "$APP/Contents/Resources/GameIcon.icns"
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+# Which Vanaguide and VanaVoice commits this bundle carries: they are copied from the sibling
+# checkouts as they sit on disk. "-dirty" means uncommitted changes went in; package.sh refuses
+# that for a release and prints both revisions for the release notes.
+addon_revision() {
+  local root="$1" rev state
+  [[ -e "$root/.git" ]] || { print -r -- "unknown"; return 0; }
+  rev="$(/usr/bin/git -C "$root" rev-parse HEAD 2>/dev/null)" || { print -r -- "unknown"; return 0; }
+  if ! state="$(/usr/bin/git -C "$root" --no-optional-locks status --porcelain 2>/dev/null)" \
+     || [[ -n "$state" ]]; then
+    rev="$rev-dirty"
+  fi
+  print -r -- "$rev"
+}
+VANAGUIDE_REVISION="$(addon_revision "${VANAGUIDE_SOURCE:h}")"
+VANAVOICE_REVISION="$(addon_revision "${VANAVOICE_SOURCE:h:h}")"
+
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -185,11 +237,16 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>NSDesktopFolderUsageDescription</key><string>To find a wrapper you keep on the Desktop.</string>
   <key>NSDocumentsFolderUsageDescription</key><string>To find a wrapper you keep in Documents.</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>3.9</string>
-  <key>CFBundleVersion</key><string>58</string>
+  <key>CFBundleShortVersionString</key><string>${APP_SHORT_VERSION}</string>
+  <key>CFBundleVersion</key><string>${APP_BUILD}</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
+  <key>HXIAddonRevisions</key>
+  <dict>
+    <key>Vanaguide</key><string>${VANAGUIDE_REVISION}</string>
+    <key>VanaVoice</key><string>${VANAVOICE_REVISION}</string>
+  </dict>
 </dict>
 </plist>
 PLIST
@@ -245,13 +302,24 @@ codesign --verify --deep --strict "$APP"
 # showing the icon they cached for that path -- after a rebuild the app came up with the generic
 # executable icon even though AppIcon.icns was present and complete.
 touch "$APP"
+refuse_if_live
 if [[ -e "$APP_CANONICAL" ]]; then mv "$APP_CANONICAL" "$BACKUP"; fi
 if ! mv "$APP" "$APP_CANONICAL"; then
   [[ -e "$BACKUP" ]] && mv "$BACKUP" "$APP_CANONICAL"
   rm -rf "$STAGE"
   exit 1
 fi
-rm -rf "$BACKUP"
+# Archive rule: exactly one live copy here; the one it replaced goes to the archive, never rm.
+if [[ -e "$BACKUP" ]]; then
+  old_version="$(/usr/bin/plutil -extract CFBundleShortVersionString raw "$BACKUP/Contents/Info.plist" 2>/dev/null || print unknown)"
+  old_build="$(/usr/bin/plutil -extract CFBundleVersion raw "$BACKUP/Contents/Info.plist" 2>/dev/null || print unknown)"
+  archived="$ARCHIVE_DIR/FFXI-on-Mac-$old_version-b$old_build-$(date +%Y%m%d-%H%M%S).app"
+  if /bin/mkdir -p "$ARCHIVE_DIR" && mv "$BACKUP" "$archived"; then
+    echo "archived the previous app to $archived"
+  else
+    echo "warning: could not archive the previous app; it is still at $BACKUP" >&2
+  fi
+fi
 trap - EXIT
 LSREG=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 [[ -x "$LSREG" ]] && "$LSREG" -f "$APP_CANONICAL" >/dev/null 2>&1 || true
