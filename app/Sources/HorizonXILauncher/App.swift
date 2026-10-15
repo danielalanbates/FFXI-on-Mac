@@ -1942,13 +1942,16 @@ struct ContentView: View {
         let home = found?.home ?? choice.folder
         if bring == nil, let f = found, !f.clientInWrapper {
             // Download Fresh needs the full room: said now, before anything is written.
-            let at = FileManager.default.fileExists(atPath: home.path) ? home : home.deletingLastPathComponent()
+            var at = home.standardizedFileURL
+            while !FileManager.default.fileExists(atPath: at.path), at.path != "/" { at = at.deletingLastPathComponent() }
             let v = InstallLocation.verdict(InstallLocation.facts(for: at), need: need(found))
             if !v.isOK { notice = v.line; return false }
         }
         if let f = found {
             runner.logFileOnly("==> Setup found in \(home.path): \(f.line)")
-            if f.wrapper != nil { setupMeter.meter.drop(.wine) }
+            if let w = f.wrapper, Bootstrap.isBuilt(w.wrapper), FileManager.default.fileExists(atPath: w.systemReg.path) {
+                setupMeter.meter.drop(.wine)
+            }
             if f.gameWine != nil { setupMeter.meter.drop(.gameWine) }
             if let c = f.client, c.complete, !c.squareEnixOnly, f.clientInWrapper || bring != nil,
                let v = c.version, let l = latest, !Primary.isNewer(l, than: v) {

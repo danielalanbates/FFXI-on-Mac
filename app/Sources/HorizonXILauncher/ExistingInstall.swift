@@ -332,6 +332,9 @@ enum ExistingInstall {
     static func bareClient(at dir: URL, root: URL, name: String? = nil) -> Client? {
         let fm = FileManager.default
         let label = name ?? dir.lastPathComponent
+        // Most folders are neither: a few lstat calls say so before anything else is read.
+        let marks = ["version.json", "Ashita-cli.exe", "injector.exe", "SquareEnix", "FINAL FANTASY XI"]
+        guard marks.contains(where: { lexists(dir.appendingPathComponent($0).path) }) else { return nil }
         guard !namesAnotherWorld(dir, root: root, name: label) else { return nil }
         if label == "SquareEnix" || dir.lastPathComponent == "SquareEnix" {
             guard fm.fileExists(atPath: dir.appendingPathComponent("FINAL FANTASY XI/FFXiMain.dll").path) else { return nil }
