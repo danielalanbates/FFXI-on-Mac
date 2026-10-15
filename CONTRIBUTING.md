@@ -50,7 +50,12 @@ A few house rules, learned the hard way:
   the dead ends on purpose so nobody walks them twice.
 - **Never commit a game file.** No client DATs, no `FFXiMain.dll`, no wrapper. They belong to
   Square Enix or to CrossOver and cannot be redistributed.
-- **Never commit an account name or password.** Credentials live in the macOS Keychain.
+- **Never commit an account name or password.** Game passwords are stored in plain text in
+  `~/Library/Application Support/HorizonXI-on-Mac/accounts.json` (mode 0600), and Play writes them
+  into the game's `config/boot/<profile>.ini` because Ashita's loader takes `--pass` on its command
+  line (visible in `ps` while it runs). Only the RetroAchievements key is in the Keychain. Moving
+  game passwords to the Keychain (the `RAKeychain` pattern in `RetroAchievements.swift`) is an
+  open pathway now that builds carry a stable Developer ID; PR #35 targets the command line.
 
 ## Licence of contributions
 
