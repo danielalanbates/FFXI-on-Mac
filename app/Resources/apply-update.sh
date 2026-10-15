@@ -1,9 +1,10 @@
 #!/bin/zsh
-# apply-update.sh <launcher-pid> <staged.app> <current.app> <workdir> <requirement>
+# apply-update.sh <launcher-pid> <staged.app> <current.app> <workdir> <requirement> [<test-stubs>]
 #
 # Replace the launcher with a verified update once the launcher has quit. Started detached
-# (Detach.spawn) so it survives the launcher's exit. All paths arrive as arguments, never as
-# shell code.
+# (Detach.spawn) so it survives the launcher's exit, with `env -i` (PATH only) and `zsh -f`, so
+# nothing from the launcher's environment or the user's zsh files reaches it. All paths arrive
+# as arguments, never as shell code.
 #
 #   * Everything is logged, timestamped, to <workdir>/apply-update.log.
 #   * One helper at a time: <workdir>/apply.lock holds the owner's pid. The launcher quits only
@@ -20,7 +21,7 @@
 set -u
 setopt pipefail
 
-pid="${1:-}" staged="${2:-}" current="${3:-}" workdir="${4:-}" requirement="${5:-}"
+pid="${1:-}" staged="${2:-}" current="${3:-}" workdir="${4:-}" requirement="${5:-}" stubs="${6:-}"
 [[ -n "$pid" && -n "$staged" && -n "$current" && -n "$workdir" && -n "$requirement" ]] || exit 2
 
 log="$workdir/apply-update.log"
@@ -51,10 +52,10 @@ print -r -- "$$" > "$lock/pid"
 LSREG=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 OPEN=/usr/bin/open
 SEEN_WAIT=60
-# Test hooks for scripts/tests/apply-update-test.sh only: the launcher starts this helper with
-# PATH as its sole environment variable, so none of these is ever set in real use.
-if [[ -n "${HXI_UPDATE_TEST_STUBS:-}" ]]; then
-  OPEN="$HXI_UPDATE_TEST_STUBS/open" LSREG="$HXI_UPDATE_TEST_STUBS/lsregister" SEEN_WAIT=1
+# Test hooks for scripts/tests/apply-update-test.sh only, as a sixth argument the launcher never
+# passes (UpdateWork.helperCommand). Nothing here is read from the environment.
+if [[ -n "$stubs" ]]; then
+  OPEN="$stubs/open" LSREG="$stubs/lsregister" SEEN_WAIT=1
 fi
 candidate="${current}.next-$$"
 backup="${current}.previous-$$"

@@ -1,9 +1,11 @@
 import Foundation
 
 /// `--selftest-updater`: the update rules, headless. Version/build comparison, asset-name and tag
-/// parsing, the API-response fixture, the rejected-tag memory and the URL checks. No network, no
-/// download, nothing staged or swapped. The rejected-tag check uses its own defaults domain, never
-/// the launcher's (that would make a real launcher skip a real release).
+/// parsing, the API-response fixture, the rejected-tag memory, the URL checks, tool exit statuses,
+/// failed-Restart counting, and the helper's clean environment (a probe script started through
+/// the real detached spawn, in a temporary folder). No network, no download, nothing staged or
+/// swapped. The rejected-tag and failure checks use their own defaults domain, never the
+/// launcher's (that would make a real launcher skip a real release).
 ///
 /// `--selftest-updater --dmg <file> --tag <vX.Y> [--expect-rejected]` instead stages a release
 /// disk image exactly as the updater would (mount read-only, copy out, bundle id, version and
@@ -179,6 +181,9 @@ extension Headless {
              UpdateRules.isInside(updates + "/../updates/previous-3.9-b59.app", dir: updates), true),
         ]
 
+        // The helper starts with a clean environment, through the launcher's real spawn path.
+        checks += updaterSpawnChecks()
+
         // What apply-update.sh leaves in last-failure.
         let lasting = UpdateRules.helperFailure(from: "reason=could not move the current app aside\ntag=v3.10\nlasting=1\n")
         let once = UpdateRules.helperFailure(from: "reason=the launcher did not quit within 60 s\ntag=v3.10\nlasting=0\n")
@@ -221,6 +226,46 @@ extension Headless {
         }
         print(failures == 0 ? "all checks passed" : "\(failures) FAILED")
         exit(failures == 0 ? 0 : 1)
+    }
+
+    /// `UpdateWork.spawnHelper` with a probe in place of apply-update.sh, and a test hook plus a
+    /// marker set in this process's own environment: neither may reach the probe.
+    private static func updaterSpawnChecks() -> [(String, Bool, Bool)] {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("hxi-selftest-updater-spawn-\(getpid())")
+        try? fm.removeItem(at: dir)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let staged = dir.appendingPathComponent("staged-v0.0/FFXI-on-Mac.app")
+        let current = "/nonexistent/FFXI-on-Mac.app"
+        let probe = dir.appendingPathComponent("probe.sh")
+        let cmd = UpdateWork.helperCommand(script: probe, launcherPID: 1, staged: staged, current: current, dir: dir)
+        var checks: [(String, Bool, Bool)] = [
+            ("helper command: env -i, PATH alone, zsh -f",
+             Array(cmd.prefix(5)) == ["/usr/bin/env", "-i", "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "/bin/zsh", "-f"], true),
+            ("helper command: the script and its five arguments, no test hook", cmd.count == 11, true),
+        ]
+        // Written to a side file and renamed, so a half-written result is never read.
+        let script = #"print -rl -- "args=$#" "$(/usr/bin/env)" > "$4/probe.tmp" && /bin/mv "$4/probe.tmp" "$4/probe.out""#
+        guard (try? (script + "\n").write(to: probe, atomically: true, encoding: .utf8)) != nil else {
+            return checks + [("probe written", false, true)]
+        }
+        setenv("HXI_UPDATE_TEST_STUBS", dir.path, 1)
+        setenv("HXI_SELFTEST_LEAK", "1", 1)
+        defer { unsetenv("HXI_UPDATE_TEST_STUBS"); unsetenv("HXI_SELFTEST_LEAK") }
+        let started = UpdateWork.spawnHelper(script: probe, launcherPID: 1, staged: staged,
+                                             current: current, dir: dir) != nil
+        checks.append(("probe started through the launcher's detached spawn", started, true))
+        let out = dir.appendingPathComponent("probe.out")
+        let deadline = Date().addingTimeInterval(15)
+        while started, Date() < deadline, !fm.fileExists(atPath: out.path) { usleep(100_000) }
+        let lines = ((try? String(contentsOf: out, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+        checks += [
+            ("probe ran with the helper's five arguments", lines.first == "args=5", true),
+            ("nothing from the launcher's environment reaches it", lines.contains { $0.hasPrefix("HXI_") }, false),
+            ("its PATH is the fixed one", lines.contains("PATH=/usr/bin:/bin:/usr/sbin:/sbin"), true),
+        ]
+        return checks
     }
 
     private static func updaterFetchCheck() -> Int32 {

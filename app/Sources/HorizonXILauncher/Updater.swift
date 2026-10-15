@@ -756,11 +756,10 @@ enum UpdateWork {
             if owner > 0, fresh, kill(owner, 0) == 0 { return nil }
             try? fm.removeItem(at: lockDir)
         }
-        guard let helper = Detach.spawn(
-            URL(fileURLWithPath: "/bin/zsh"),
-            args: [script.path, String(launcherPID), staged.path, current, dir.path, UpdateRules.requirement],
-            env: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"], cwd: dir,
-            stdoutPath: dir.appendingPathComponent("apply-update.log").path) else { return nil }
+        // The copy in the work dir is what runs: it must still be the bundle's own, byte for byte.
+        guard let want = sha256(of: bundled), sha256(of: script) == want else { return nil }
+        guard let helper = spawnHelper(script: script, launcherPID: launcherPID, staged: staged,
+                                       current: current, dir: dir) else { return nil }
         let deadline = Date().addingTimeInterval(10)
         while Date() < deadline {
             if lockOwner() == helper { return helper }
@@ -769,6 +768,23 @@ enum UpdateWork {
         }
         cancelHelper(helper)
         return nil
+    }
+
+    /// The helper's command line: `env -i` with PATH alone and zsh without startup files, so
+    /// nothing from the launcher's environment (`launchctl setenv`, a test hook) or ~/.zshenv
+    /// reaches it. Detach.spawn passes the caller's whole environment through osascript.
+    static func helperCommand(script: URL, launcherPID: pid_t, staged: URL, current: String,
+                              dir: URL) -> [String] {
+        ["/usr/bin/env", "-i", "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "/bin/zsh", "-f", script.path,
+         String(launcherPID), staged.path, current, dir.path, UpdateRules.requirement]
+    }
+
+    /// Start `script` detached as the helper, logging to the work dir's apply-update.log.
+    /// `--selftest-updater` runs a probe through it to see the environment the helper gets.
+    static func spawnHelper(script: URL, launcherPID: pid_t, staged: URL, current: String, dir: URL) -> pid_t? {
+        let cmd = helperCommand(script: script, launcherPID: launcherPID, staged: staged, current: current, dir: dir)
+        return Detach.spawn(URL(fileURLWithPath: cmd[0]), args: Array(cmd.dropFirst()), env: [:], cwd: dir,
+                            stdoutPath: dir.appendingPathComponent("apply-update.log").path)
     }
 
     /// Tell a waiting helper to leave the app alone (the launcher is not quitting after all).

@@ -1,6 +1,7 @@
 #!/bin/zsh
 # Exercise app/Resources/apply-update.sh in a throwaway folder: no /Applications, no real
-# launcher, nothing opened or registered (open and lsregister are stubs that only log).
+# launcher, nothing opened or registered (open and lsregister are stubs that only log, handed to
+# the helper as its sixth argument). It runs under `env -i` and `zsh -f`, as the launcher starts it.
 #
 #   ./scripts/tests/apply-update-test.sh <notarized app signed by team MG4YW8XX2Z>
 #
@@ -22,7 +23,6 @@ check() { if eval "$2"; then print "  ok   $1"; else print "  FAIL $1"; fails=$(
 
 stubs="$T/stubs"
 mkdir -p "$stubs"
-export HXI_UPDATE_TEST_STUBS="$stubs"
 
 apps="$T/Apps" work="$T/work"
 current="$apps/FFXI-on-Mac.app" staged="$work/staged-v9.9/FFXI-on-Mac.app"
@@ -43,7 +43,9 @@ setup() {
   /usr/bin/ditto "$UPDATE" "$staged"
 }
 dead_pid() { /bin/sleep 0 & local p=$!; wait $p 2>/dev/null; print $p; }
-helper() { /bin/zsh "$HELPER" "$@"; }
+# Started the way the launcher starts it (UpdateWork.helperCommand), plus the stubs argument.
+CLEAN=(/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/zsh -f)
+helper() { "${CLEAN[@]}" "$HELPER" "$@" "$stubs"; }
 
 print "1. success: swap, reopen, register, keep exactly one previous copy"
 setup
@@ -94,8 +96,8 @@ print "5. launcher cancels (quit was cancelled): nothing touched, nothing opened
 setup
 /bin/sleep 15 &
 launcher=$!
-# Started directly, not through the helper function, so $! is the helper's own pid.
-/bin/zsh "$HELPER" "$launcher" "$staged" "$current" "$work" "$TEAM_REQ" &
+# Started directly, not through the helper function, so $! is the helper's own pid (env execs).
+"${CLEAN[@]}" "$HELPER" "$launcher" "$staged" "$current" "$work" "$TEAM_REQ" "$stubs" &
 h=$!
 for i in {1..100}; do [[ "$(cat "$work/apply.lock/pid" 2>/dev/null)" == "$h" ]] && break; /bin/sleep 0.1; done
 : > "$work/apply.cancel-$h"
@@ -143,7 +145,22 @@ check "failure note says why" "grep -qx 'reason=could not move the current app a
 check "marked as recurring" "grep -qx 'lasting=1' '$work/last-failure'"
 check "no leftovers beside the app" "[[ -z \$(ls '$apps' | grep -v '^FFXI-on-Mac.app\$') ]]"
 
-print "9. the old launcher was reopened meanwhile: nothing touched, nothing reopened, no note"
+print "9. a test hook in the environment is ignored: only the argument counts"
+setup
+poison="$T/poison"
+mkdir -p "$poison"
+for s in open lsregister; do
+  printf '#!/bin/sh\necho "$@" >> "%s/poison.calls"\n' "$T" > "$poison/$s"
+  chmod +x "$poison/$s"
+done
+# Not through env -i, so the variable really is in the helper's environment.
+HXI_UPDATE_TEST_STUBS="$poison" /bin/zsh -f "$HELPER" "$(dead_pid)" "$staged" "$current" "$work" "$TEAM_REQ" "$stubs"; rc=$?
+check "exit 0" "(( rc == 0 ))"
+check "the environment's open was never run" "[[ ! -e '$T/poison.calls' ]]"
+check "the argument's open was" "grep -qx '$current' '$T/open.calls'"
+check "the helper names no environment hook" "! grep -q 'HXI_UPDATE_TEST_STUBS' '$HELPER'"
+
+print "10. the old launcher was reopened meanwhile: nothing touched, nothing reopened, no note"
 setup
 # A stand-in running from the bundle's MacOS folder, as a launcher reopened from the Dock would.
 mkdir -p "$current/Contents/MacOS"
@@ -163,7 +180,7 @@ check "no leftovers beside the app" "[[ -z \$(ls '$apps' | grep -v '^FFXI-on-Mac
 check "staged copy kept" "[[ -d '$staged' ]]"
 check "lock released" "[[ ! -e '$work/apply.lock' ]]"
 
-print "10. launcher running from a previous copy in the work dir: the cleanup spares it"
+print "11. launcher running from a previous copy in the work dir: the cleanup spares it"
 saved="$current"
 current="$work/previous-0.9-b3.app"
 setup
