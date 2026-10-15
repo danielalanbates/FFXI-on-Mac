@@ -26,23 +26,41 @@ not exercise the renderer or registry writes, the launcher UI, or actual gamepla
 
 ## Performance evidence and limits
 
+**Correction, beta 59 (2026-10-14).** The x87 default below was wrong and is reverted: the
+launcher runs the sidecar on every macOS version again, with an automatic guard
+(`X87Guard`, docs/BETA-59.md). What the original note missed:
+
+- macOS 27 was installed on 2026-09-15 and 27.0.1 on 09-30 (`softwareupdate --history`). The
+  launcher's own FPS logs from **macOS 27.0 with `ROSETTA_X87_PATH` set** (last-spawn files)
+  show in-world medians (rows >800 draws) of 37.9 (09-25, fps.csv), 51.2 (09-26,
+  fps-local-server.csv, n=7370), 46.3 (09-27, n=31821), and 22.7 on HorizonXI on 09-26 (the
+  day the local server ran alongside). Stock Rosetta in-world was ~11 fps (August).
+- The 2.98 vs 58.02 fps figure cited below came from wrapping the command in the sidecar plus
+  a hand-set `ROSETTA_DISABLE_AOT` (X87-SIDECAR.md, "What we did wrong"), not from the
+  `ROSETTA_X87_PATH` path Play uses. It does not describe a failed cooperative hook on Play.
+- 27.0.1 has still not been measured in-world; that A/B is in docs/BETA-59.md.
+
 - The running game log shows DXVK 1.10.3+ through MoltenVK 1.4.2 on the Apple M1 GPU.
 - The launched environment has msync, fast math, command pooling, the exact readback fence,
   the 60 fps divisor, and `ROSETTA_X87_PATH` enabled.
 - The client used roughly one CPU core. Lower texture/resolution settings previously failed to
   improve the CPU-bound scenes (`SETTINGS-SWEEP.md`), which is consistent with the report but
   does not establish the new frame rate or prove a Metal regression.
-- The bundled August x87 helper predates `--probe`. Upstream `athei/x87sidecar` at
+- The bundled x87 helper predates `--probe`. It is not the August build: `vendor/x87sidecar-coop`
+  was replaced on 2026-09-24 by 3c7c2f6 ("Update x87sidecar-coop decode_opcode pattern for
+  macOS 27 libRosettaRuntime"; 472,160 bytes, SHA-256 `bdb3923d…92ef2c7`). The repo holds no
+  source or patch for that build, and the local `~/Games/hxi-workspace/src/x87sidecar` is
+  upstream 238a214 plus the attach patch (a 490,144-byte build), so it cannot be rebuilt as-is. Upstream `athei/x87sidecar` at
   `4048fcf436876f26c799ba2fa340ec73f4cca95e` built locally and its read-only `--probe`
   reported the macOS 27 Rosetta runtime **supported**. That does not prove the older bundled
   helper attached to the live HorizonXI client. Do not replace the shipping helper without a
   local-world A/B test and real play-session check.
 - Upstream's current cooperative smoke test explicitly checks only correct execution, not x87
   JIT acceleration. The project's own August measurement found 2.98 fps with a failed cooperative
-  hook versus 58.02 fps with stock Rosetta in the same rules scene. On macOS 27 the launcher now
-  defaults to stock Rosetta; `FFXI_ON_MAC_X87=1` is an explicit experimental override for a
-  controlled local-world A/B test. This is a precaution based on the measured failure mode, not
-  a new gameplay FPS result.
+  hook versus 58.02 fps with stock Rosetta in the same rules scene (but see the correction above:
+  that was the wrapped command with a hand-set `ROSETTA_DISABLE_AOT`). Builds 3.9 b58/#36
+  defaulted macOS 27 to stock Rosetta on that basis; beta 59 reverts it. `FFXI_ON_MAC_X87=0`
+  now forces stock Rosetta for an A/B, and `=1` forces the sidecar past a recorded failure.
 
 ### Offline x87 check on this Mac
 
@@ -61,8 +79,8 @@ only `ROSETTA_X87_PATH` changed. `ROSETTA_DISABLE_AOT` was not set by the shell.
 All exited 0; the prefix timestamp remained `1787146421\r\n`. The bundled helper therefore
 accelerates a direct 32-bit Wine process on macOS 27. This does **not** show that Ashita's child
 `horizon-loader.exe` receives the hook or that in-world FPS improves. The one-run numbers do not
-support replacing the bundled helper with upstream yet. Keep stock Rosetta as the launcher default
-until the local-world A/B and normal play check establish which path is faster and visually sound.
+support replacing the bundled helper with upstream yet. (Superseded for the launcher default:
+see the correction above; the local-world A/B is still owed.)
 
 Apple's [macOS 27 release notes](https://developer.apple.com/documentation/macos-release-notes/macos-27-release-notes)
 call for reassessing Rosetta compatibility after upgrading, but do not establish that Metal
@@ -86,9 +104,10 @@ The current [x87sidecar](https://github.com/athei/x87sidecar/releases/tag/v1.7.0
 documents macOS 27 support and cooperative attachment through patched Wine.
 Our bundled sidecar accelerated an isolated 32-bit Wine x87 benchmark on 27.0.1,
 but that does not show it attached to `horizon-loader.exe`. The older in-world
-failed-handshake case was a 19x loss when AOT was disabled, so keep the stock
-Rosetta default until one controlled local-world comparison proves the complete
-launch path and a normal play session stays visually correct.
+failed-handshake case was a 19x loss when AOT was disabled. (Beta 59 answers that
+risk with a guard instead of a stock-Rosetta default: a hook that does not attach is
+recorded for this macOS build and sidecar, and later launches skip the sidecar. The
+controlled local-world comparison is still owed.)
 
 On 2026-10-03 the newer upstream sidecar built at `4048fcf` reported `supported`
 from `--probe` against this Mac's installed Rosetta runtime. The upstream

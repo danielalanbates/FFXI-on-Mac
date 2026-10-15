@@ -42,15 +42,17 @@ thing it couldn't find, and **Repair** fixes the usual causes automatically.
 
 ## Performance status
 
-These measurements predate macOS 27:
+Measured in August 2026, on macOS 26:
 
 | Measured on an M1 MacBook Pro, 8 GB (the only Mac this has been tested on) | Frame rate |
 | --- | --- |
 | Out in the world, every setting maxed at 4K | ~24 fps |
 | Out in the world, max settings, lighter zone | ~28 fps |
 
-On macOS 27.0.1, the M1 test machine has been reported unplayably slow. A fresh in-world FPS
-measurement is still needed; the earlier numbers do not describe current performance.
+On macOS 27.0 (installed 2026-09-15), the launcher's own FPS logs recorded in-world medians of
+37.9-51 fps at max settings with x87 acceleration on (2026-09-25 to 09-27; 22.7 on a day the local
+server ran alongside a HorizonXI session). On macOS 27.0.1 the M1 test machine has been reported
+unplayably slow; that has not been measured in-world yet.
 
 The current investigation is in [`docs/MACOS-27-PERFORMANCE.md`](docs/MACOS-27-PERFORMANCE.md).
 
