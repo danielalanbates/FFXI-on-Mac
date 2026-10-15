@@ -13,6 +13,36 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
         NSWindow.allowsAutomaticWindowTabbing = false
     }
 
+    /// #27: started by `open … --args` without being activated, the launcher could come up with
+    /// no window at all -- and `--play` runs from the window, so nothing happened. A second
+    /// `open -a` fixed it: that is a reopen event, which makes SwiftUI create the window. If no
+    /// window is up a second after launch, send that same event to ourselves (SingleInstance
+    /// keeps it from starting a second process). Also bring back a window whose saved frame is
+    /// on a display that is no longer connected.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        DispatchQueue.main.async { Self.recenterOffscreenWindows() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            guard !SingleInstance.terminating else { return }
+            Self.recenterOffscreenWindows()
+            if NSApp.windows.contains(where: { $0.canBecomeMain && $0.isVisible }) { return }
+            if Self.showMainWindow() { return }
+            NSApp.activate(ignoringOtherApps: true)
+            // Only from a bundle: under `swift run` there is no app to reopen.
+            guard Bundle.main.bundleURL.pathExtension == "app" else { return }
+            let c = NSWorkspace.OpenConfiguration()
+            c.activates = true
+            NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: c) { _, _ in }
+        }
+    }
+
+    private static func recenterOffscreenWindows() {
+        for w in NSApp.windows where w.canBecomeMain
+            && !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(w.frame) }) {
+            w.center()
+        }
+    }
+
     /// A Dock click with the window minimised or hidden shows that window rather than letting
     /// SwiftUI open a second one. Only with no window at all is one created.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -38,14 +68,23 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
         SingleInstance.stopListening()
     }
 
+    /// Names the work in flight (the start-up Wine update is not a download); the resume hint
+    /// only where it is true.
+    static func quitQuestion(_ reason: String?) -> (message: String, info: String?) {
+        let what = reason ?? "Downloading"
+        let resumable = what.hasPrefix("Downloading") || what.hasPrefix("Installing")
+        return ("Quit while " + what.prefix(1).lowercased() + what.dropFirst() + "?",
+                resumable ? "Press Download again later and it picks up where it left off." : nil)
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // No more handed-over requests from here on: one taken now would never be acted on.
         SingleInstance.terminating = true
         guard Runner.workInFlight else { return .terminateNow }
         let a = NSAlert()
-        a.messageText = "A download or install is still running."
-        a.informativeText = "Quitting stops it. It is resumable — pressing Download again picks "
-                          + "up where it left off — but nothing more will download until you do."
+        let q = Self.quitQuestion(Runner.workInFlightReason)
+        a.messageText = q.message
+        if let info = q.info { a.informativeText = info }
         a.addButton(withTitle: "Quit anyway")
         a.addButton(withTitle: "Keep running")
         a.alertStyle = .warning
