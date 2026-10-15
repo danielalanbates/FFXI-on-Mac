@@ -19,6 +19,11 @@ enum Credentials {
         UserDefaults.standard.string(forKey: "account.user.\(world)") ?? username
     }
 
+    /// An account name was saved for this world itself (not the global fallback above).
+    static func hasSavedAccount(forWorld world: String) -> Bool {
+        !(UserDefaults.standard.string(forKey: "account.user.\(world)") ?? "").isEmpty
+    }
+
     static func setUsername(_ name: String, forWorld world: String) {
         username = name
         UserDefaults.standard.set(name, forKey: "account.user.\(world)")

@@ -60,6 +60,9 @@ struct RetroAchievementsSection: View {
                     ra.refresh(.manual, gameDir: gameDir, log: log)
                 }
                 .disabled(ra.busy || gameDir == nil)
+                .help("Progress is fetched by the launcher and written next to Vanaguide's config; "
+                      + "the game itself never goes online for it. On HorizonXI, view it in Vanaguide "
+                      + "Companion.")
                 if !keyNote.isEmpty { Text(keyNote).font(.system(size: 12)) }
             }
             Text(ra.status).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
@@ -67,11 +70,6 @@ struct RetroAchievementsSection: View {
                 Text(e).font(.system(size: 12)).foregroundStyle(Vana.ember)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("Progress is fetched by the launcher and written next to Vanaguide's config; "
-                 + "the game itself never goes online for it. On HorizonXI, view it in Vanaguide "
-                 + "Companion.")
-                .font(.system(size: 12)).foregroundStyle(Vana.muted)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .onAppear { ra.showExisting(gameDir: gameDir) }
     }

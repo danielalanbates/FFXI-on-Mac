@@ -39,7 +39,7 @@ enum Renderer: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .openGL: return "Classic (OpenGL)"
         case .vulkan: return "Vulkan"
-        case .metal:  return "Metal / DXVK (recommended)"
+        case .metal:  return "Metal (DXVK)"
         }
     }
 

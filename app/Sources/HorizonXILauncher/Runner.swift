@@ -30,7 +30,18 @@ final class Runner: ObservableObject {
     @Published var updateLabel = ""
     private var updateStep = (n: 1, total: 1)
     @Published var busy = false {
-        didSet { if busy != oldValue { Runner.busyCount += busy ? 1 : -1 } }
+        didSet {
+            if busy != oldValue { Runner.busyCount += busy ? 1 : -1 }
+            if busy { Runner.busyReasons[ObjectIdentifier(self)] = busyReason }
+            else { Runner.busyReasons[ObjectIdentifier(self)] = nil; busyReason = "" }
+        }
+    }
+    /// What `busy` is, in a few words ("Updating Wine"): the footer's line while Play is grey,
+    /// and what the quit alert names. Set through `beginBusy`.
+    @Published private(set) var busyReason = ""
+    private func beginBusy(_ reason: String) {
+        busyReason = reason
+        busy = true
     }
     /// The world, or "<world> #2" for a further client of a world that allows several.
     let session: String
@@ -43,6 +54,9 @@ final class Runner: ObservableObject {
     /// Counted across every session: installers share one installer prefix, so one at a time.
     private static var busyCount = 0
     static var workInFlight: Bool { busyCount > 0 }
+    private static var busyReasons: [ObjectIdentifier: String] = [:]
+    /// The work `workInFlight` is about, for the quit alert.
+    static var workInFlightReason: String? { busyReasons.values.filter { !$0.isEmpty }.sorted().first }
 
     /// Every session of this launcher that is playing, from the moment its launch passes the
     /// checks. A scan cannot see a launch until its injector exists; this can.
@@ -253,21 +267,41 @@ final class Runner: ObservableObject {
             appendLine("!! login refused: \(loginFailure) — stopping the loader")
             if let i = currentInstall { stop(i) }
         }
-        uiAppend(s)
+        let errors = Self.errorLines(in: s)
+        if !errors.isEmpty { uiAppend(errors) }
     }
 
+    /// Every line goes to launcher.log; only errors ("!! …", the login refusal among them) reach
+    /// the window. Progress, wine and Ashita output there was text nobody had to act on.
     func appendLine(_ s: String) {
         let line = s.hasSuffix("\n") ? s : s + "\n"
         tee(line)
-        uiAppend(line)
+        if line.hasPrefix("!!") { uiAppend(line) }
+    }
+
+    /// The "!!" lines of a chunk of raw output (scripts mark their errors that way).
+    nonisolated static func errorLines(in s: String) -> String {
+        guard s.contains("!!") else { return "" }
+        return s.split(whereSeparator: \.isNewline)
+            .map { $0.drop(while: { $0 == " " || $0 == "\t" }) }
+            .filter { $0.hasPrefix("!!") }
+            .map { $0 + "\n" }
+            .joined()
+    }
+
+    /// Empties the window's error strip (launcher.log keeps everything).
+    func clearLog() {
+        pendingLog = ""
+        uiLogLines = 0
+        log = ""
     }
 
     // MARK: - Log strip
 
-    /// What the log strip shows: the last 200 lines, at most 16 KB, published at most four
-    /// times a second. launcher.log keeps every byte (`tee`). The strip used to hold up to
-    /// 200 KB, recounted with String.count and re-laid out by SwiftUI on every 0.3 s chunk of
-    /// game output, on the main thread, for the whole session.
+    /// What the log strip shows (errors only, see `appendLine`): the last 200 lines, at most
+    /// 16 KB, published at most four times a second. launcher.log keeps every byte (`tee`). The
+    /// strip used to hold up to 200 KB, recounted with String.count and re-laid out by SwiftUI on
+    /// every 0.3 s chunk of game output, on the main thread, for the whole session.
     static let uiLogMaxBytes = 16 * 1024
     static let uiLogMaxLines = 200
     private var pendingLog = ""
@@ -357,7 +391,7 @@ final class Runner: ObservableObject {
             endMaintenance()
             appendLine("!! install.sh not found in the bundle"); return
         }
-        busy = true
+        beginBusy("Repairing Wine")
         appendLine("==> repairing \(install.wrapper.path) [\(install.prefixName)]")
         // Cheap, local, and the difference between "logs in then quits" and a playable game.
         Sandbox.repair(install) { [weak self] in self?.appendLine($0) }
@@ -388,7 +422,7 @@ final class Runner: ObservableObject {
             endMaintenance()
             appendLine("!! update-client.sh not found in the bundle"); done(false); return
         }
-        busy = true
+        beginBusy("Updating HorizonXI")
         updatingHorizon = true
         updateProgress = 0; updateLabel = ""; updateStep = (1, 1)
         appendLine("==> updating HorizonXI game files in \(install.gameDir.path)")
@@ -478,7 +512,7 @@ final class Runner: ObservableObject {
         // A stale prefix is shared maintenance. Hold the same lock as Play and Repair so a
         // click during wineboot cannot start the client against half-updated registry files.
         guard claimForMaintenance("Wine prefix update") else { return }
-        busy = true
+        beginBusy("Updating Wine")
         defer { busy = false; endMaintenance() }
         guard await Task.detached(operation: { Self.prefixStale(install) }).value else { return }
         appendLine("==> updating Wine's configuration (one time, about 20 s)")
@@ -536,8 +570,8 @@ final class Runner: ObservableObject {
     /// into a config file resolves at play time too).
     func runInstaller(from url: URL, in gameInstall: Install, dataPath: String, name: String = "") {
         if refuseWhileBusy("the installer for \(name.isEmpty ? url.lastPathComponent : name)") { return }
-        busy = true
         let nm = name.isEmpty ? url.deletingPathExtension().lastPathComponent : name
+        beginBusy("Installing \(nm)")
         Self.linkGamesFolder(nm, to: dataPath, in: gameInstall)
         ensureInstallerPrefix(gameInstall) { [weak self] install in
             guard let self else { return }
@@ -579,7 +613,7 @@ final class Runner: ObservableObject {
     func installClientZip(from url: URL, into dataPath: String, name nm: String) {
         if refuseWhileBusy("the \(nm) client download") { return }
         guard !dataPath.isEmpty else { appendLine("!! no folder chosen for \(nm)"); return }
-        busy = true
+        beginBusy("Downloading \(nm)")
         let dest = URL(fileURLWithPath: dataPath, isDirectory: true)
         let dl = dest.appendingPathComponent("installer-downloads", isDirectory: true)
         try? FileManager.default.createDirectory(at: dl, withIntermediateDirectories: true)
@@ -650,7 +684,7 @@ final class Runner: ObservableObject {
     /// inside the installer prefix. Zips are unpacked first and the first .exe inside is run.
     func runLocalInstaller(_ file: URL, in gameInstall: Install, dataPath: String, name: String) {
         if refuseWhileBusy("the installer for \(name)") { return }
-        busy = true
+        beginBusy("Installing \(name)")
         Self.linkGamesFolder(name, to: dataPath, in: gameInstall)
         ensureInstallerPrefix(gameInstall) { [weak self] install in
             guard let self else { return }
@@ -749,7 +783,7 @@ final class Runner: ObservableObject {
                 ?? (FileManager.default.isExecutableFile(atPath: dev.path) ? dev : nil) else {
             appendLine("!! retail-client.sh not found in the bundle"); return
         }
-        busy = true
+        beginBusy("Downloading \(s.name)")
         Self.linkGamesFolder(s.name, to: s.dataPath, in: gameInstall)
         ensureInstallerPrefix(gameInstall) { [weak self] ip in
             guard let self else { return }
@@ -778,7 +812,7 @@ final class Runner: ObservableObject {
     func installHorizon(into dir: URL) {
         if refuseWhileBusy("the HorizonXI client install") { return }
         guard let script = Self.updateScript() else { return }
-        busy = true
+        beginBusy("Downloading HorizonXI")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         appendLine("==> installing HorizonXI into \(dir.path) (9.4 GB torrent — leave this running)")
         var env: [String: String] = [:]
@@ -792,7 +826,7 @@ final class Runner: ObservableObject {
     func runCatsEyeLauncher(_ gameInstall: Install, dataPath: String = "") {
         Self.linkGamesFolder("CatsEyeXI", to: dataPath, in: gameInstall)
         if refuseWhileBusy("the CatsEyeXI launcher") { return }
-        busy = true
+        beginBusy("Running CatsEyeXI's launcher")
         ensureInstallerPrefix(gameInstall) { [weak self] ip in
             self?.busy = false
             Self.linkGamesFolder("CatsEyeXI", to: dataPath, in: ip)
@@ -808,7 +842,7 @@ final class Runner: ObservableObject {
                 ?? (FileManager.default.isExecutableFile(atPath: dev.path) ? dev : nil) else {
             appendLine("!! catseye-launcher.sh not found in the bundle"); return
         }
-        busy = true
+        beginBusy("Running CatsEyeXI's launcher")
         appendLine("==> CatsEyeXI launcher in \(install.prefixName)")
         spawn(URL(fileURLWithPath: "/bin/zsh"),
               args: [script.path, install.wrapper.path, install.prefixName],
@@ -876,9 +910,10 @@ final class Runner: ObservableObject {
                 beforeLaunch: () -> Void = {}) -> String? {
         let worldName = world.isEmpty ? "Vana'diel" : world
         guard let lock = LaunchLock.acquire() else {
-            let why = "Another game is still starting, or the client is being repaired or updated "
-                    + "(in this window or another launcher). Press Play again in a few seconds."
-            appendLine("!! " + why)
+            // Another game starting, a Repair/update, or a Stop's wineserver flush, in this
+            // window or another launcher. The caller shows it; the strip would repeat it.
+            let why = "Busy — try Play again in a few seconds"
+            logFileOnly("!! " + why)
             return why
         }
         // Handed off once the game is spawned: see LaunchLock.release(_:whenVisible:).
@@ -888,7 +923,7 @@ final class Runner: ObservableObject {
         let g = gate(install, renderer: perf.renderer, sync: wantSync, msyncAllowed: msyncAllowed,
                      profile: profile, world: worldName, host: host, maxClients: maxClients)
         if let why = g.refusal {
-            appendLine("!! " + why)
+            logFileOnly("!! " + why)
             return why
         }
         // The startup check can still be between its stale read and maintenance lock when
@@ -897,8 +932,8 @@ final class Runner: ObservableObject {
         if Self.prefixStale(install) {
             let why = g.clientsLive
                 ? "Finish the running game before Wine updates its configuration, then press Play."
-                : "Wine needs to update its configuration. Press Play again when it finishes."
-            appendLine("i  " + why)
+                : "Updating Wine first — press Play again when it finishes."
+            logFileOnly("i  " + why)
             if !g.clientsLive {
                 // Runs after this call returns and its defer releases the launch lock.
                 Task { await syncPrefixIfStale(install) }
@@ -1195,6 +1230,8 @@ final class Runner: ObservableObject {
                 if pids.isEmpty { break }
                 if !self.x87Settled { self.checkX87Alive(snap: snap, pids: pids) }
                 if let s = WindowMemory.currentSize(pids: pids, scale: scale) {
+                    // The window is up: "Starting…" is over (90 s is only the fallback).
+                    if self.starting { self.starting = false }
                     if self.firstWindowSize == nil { self.firstWindowSize = s }
                     self.lastWindowSize = s
                 }
