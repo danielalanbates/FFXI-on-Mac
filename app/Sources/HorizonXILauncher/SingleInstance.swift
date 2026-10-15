@@ -219,13 +219,19 @@ enum SingleInstance {
     /// about to hand over and exit counts too: it is asked again on the next refresh). A game
     /// started by a launcher that is still running is that launcher's to track and stop
     /// (`Leftovers`).
+    ///
+    /// Asked on the main actor at every refresh: only an app whose executable has this one's name
+    /// has its path resolved, so no other app's drive (an app on a sleeping external disk) is
+    /// touched.
     @MainActor static func otherLauncherAlive() -> Bool {
         let me = ProcessInfo.processInfo.processIdentifier
         let exe = Bundle.main.executableURL?.resolvingSymlinksInPath()
+        let names = Set([Bundle.main.executableURL?.lastPathComponent, exe?.lastPathComponent].compactMap { $0 })
         if NSWorkspace.shared.runningApplications.contains(where: { app in
-            app.processIdentifier != me && !app.isTerminated
-                && (app.bundleIdentifier == bundleID
-                    || (exe != nil && app.executableURL?.resolvingSymlinksInPath() == exe))
+            guard app.processIdentifier != me, !app.isTerminated else { return false }
+            if app.bundleIdentifier == bundleID { return true }
+            guard let exe, let theirs = app.executableURL, names.contains(theirs.lastPathComponent) else { return false }
+            return theirs.resolvingSymlinksInPath() == exe
         }) { return true }
         if heldFD != nil { return false }
         guard let pid = holderPID(), pid > 1, pid != me else { return false }

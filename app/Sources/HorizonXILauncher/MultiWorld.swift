@@ -683,9 +683,11 @@ final class Sessions: ObservableObject {
     /// main actor; only a change is published.
     ///
     /// Also takes on what an earlier run of this launcher left behind (`Leftovers`): a client of
-    /// its own, in `install`'s prefix, becomes a session with its Stop; wine's own programs left
-    /// with no wineserver are ended quietly. Neither happens while another launcher is alive, a
-    /// launch or job of this one is under way, or without `install`.
+    /// its own, in `install`'s prefix and of a listed world, becomes a session with its Stop;
+    /// wine's own programs left with no wineserver are ended quietly, in a task of their own.
+    /// Neither happens while another launcher is alive, a job of this one is under way, or
+    /// without `install`; a launch of this one keeps its client by group or host (`playingGroups`)
+    /// and, for the cleanup, by `anyPlaying` and the launch lock.
     func refreshElsewhere(install: Install? = nil, profiles: [(world: String, profile: String)] = [],
                           servers: [Server] = []) async {
         let before = Runner.playingGroups
@@ -714,34 +716,41 @@ final class Sessions: ObservableObject {
         }.value
         if boot != bootHosts { bootHosts = boot }
 
-        if let install, !prefixPath.isEmpty, !SingleInstance.otherLauncherAlive() {
+        // A job of this launcher (Repair, an update, CatsEyeXI's launcher) may be the very
+        // session an adoption would take over, or have started what looks left over: later.
+        if let install, !prefixPath.isEmpty, !Runner.workInFlight, !SingleInstance.otherLauncherAlive() {
             // Against this launcher's sessions as they are now, not as they were before the scan.
             let own = Runner.playingGroups
             let orphans = Leftovers.adoptable(snap, ownGroups: own.groups, ownHostsWithoutGroup: own.hostsWithoutGroup,
                                               prefix: prefixPath, prefixOfGroup: evidence.groups,
                                               serverPrefixes: evidence.servers, otherLauncherAlive: false)
             for o in orphans {
-                // The world whose Host field or boot profile's --server the loader was given.
-                let w = servers.first { s in
+                // The world whose Host field or boot profile's --server the loader was given. A
+                // client of no listed world stays elsewhere: its session would write its window
+                // size into some other world's boot profile when it ended.
+                guard let w = servers.first(where: { s in
                     Set([LiveClients.normalize(s.host), self.bootHosts[s.name] ?? ""]).subtracting([""]).contains(o.host)
-                }
-                let name = w?.name ?? (o.host.isEmpty ? "Unknown world" : o.host)
+                }) else { continue }
                 // The world's own session when it is idle, else a further one (a world that
                 // allows several clients, one of them running here already).
-                let idle = runner(for: name)
-                let r = !idle.running && !idle.busy ? idle : newSession(for: name)
+                let idle = runner(for: w.name)
+                let r = !idle.running && !idle.busy ? idle : newSession(for: w.name)
                 // Pointed at that world's folder only now, for the one world adopted: finding a
                 // world's client can walk its drive, which no refresh should do for every world.
-                r.adopt(group: o.group, host: o.host, world: name, install: w.map(install.forServer) ?? install,
-                        profile: w?.bootProfile ?? "horizonxi.ini", pids: o.pids)
+                r.adopt(group: o.group, host: o.host, world: w.name, install: install.forServer(w),
+                        profile: w.bootProfile, pids: o.pids)
             }
-            if !serverless.isEmpty, !cleaning, !Runner.anyPlaying, !Runner.workInFlight {
+            if !serverless.isEmpty, !cleaning, !Runner.anyPlaying {
                 cleaning = true
-                let ended = await Task.detached { await Leftovers.endServerless(serverless, prefix: prefix) }.value
-                cleaning = false
-                if !ended.isEmpty {
-                    Runner.appendToLogFile("i  ended \(ended.count) wine program(s) left with no wineserver (pid "
-                                           + ended.map(String.init).joined(separator: ",") + ")")
+                // Its own task: the seconds it waits (one, then up to three for SIGTERM) never
+                // hold up this refresh, the RUNNING list, or start-up's forwarded --play.
+                Task { [weak self] in
+                    let ended = await Task.detached { await Leftovers.endServerless(serverless, prefix: prefix) }.value
+                    self?.cleaning = false
+                    if !ended.isEmpty {
+                        Runner.appendToLogFile("i  ended \(ended.count) wine program(s) left with no wineserver (pid "
+                                               + ended.map(String.init).joined(separator: ",") + ")")
+                    }
                 }
             }
         }

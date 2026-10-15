@@ -15,11 +15,20 @@ import AppKit
 /// - no other launcher process is alive (`SingleInstance.otherLauncherAlive`), so nobody else
 ///   is tracking it;
 /// - every process in its group runs this launcher's wine (`OwnWine`: the patched wine-coop,
-///   the wrapper's own wine, or the x87 sidecar);
+///   the wrapper's own wine, or the x87 sidecar), and every one is a loader or injector: a group
+///   that also holds a Windows program nobody can name (CatsEyeXI's own launcher run inside the
+///   wrapper, an installer, a tool) was not started by Play, and its Stop would end that too;
+/// - it is not in this launcher's own process group, which only holds what this process started
+///   (a job such as CatsEyeXI's launcher), never what an earlier run left;
 /// - it runs in the selected install's prefix: a process of its group whose environment can be
 ///   read (the x87 sidecar, which wine does not rewrite) names that `WINEPREFIX`; or, when none
 ///   can be read (no sidecar), every wineserver of this launcher's wine serves that prefix, and
-///   one does — a wine client is always served by its own prefix's wineserver.
+///   one does — a wine client is always served by its own prefix's wineserver;
+/// - its `--server` is a world on the list (`Sessions.refreshElsewhere`): the session writes its
+///   window size into that world's boot profile when it ends, and a client of no listed world
+///   has no profile of its own to write to;
+/// - no job of this launcher (Repair, an update, CatsEyeXI's launcher) is under way: the world's
+///   session may be the one running it.
 ///
 /// Anything else — another wine (CrossOver, Whisky, XIV on Mac), another prefix, CatsEyeXI's own
 /// launcher, a launcher process that is still alive — stays "Running…" without a Stop.
@@ -45,17 +54,13 @@ enum Leftovers {
     /// slash.
     static func adoptable(_ snap: LiveClients.Snapshot, ownGroups: Set<pid_t>, ownHostsWithoutGroup: Set<String>,
                           prefix: String, prefixOfGroup: [pid_t: String], serverPrefixes: [pid_t: String?],
-                          otherLauncherAlive: Bool) -> [Orphan] {
+                          otherLauncherAlive: Bool, selfGroup: pid_t = getpgrp()) -> [Orphan] {
         guard !otherLauncherAlive, !prefix.isEmpty else { return [] }
         let want = trimmed(prefix)
-        let loaders = snap.clients.filter {
-            $0.knownLoader && $0.group > 1 && !ownGroups.contains($0.group) && !ownHostsWithoutGroup.contains($0.host)
-        }
+        let loaders = snap.clients.filter(\.knownLoader)
         var out: [Orphan] = []
-        for group in Set(loaders.map(\.group)).sorted() {
-            // Every client the scan saw in the group, the loader's own sidecar included.
-            let members = snap.clients.filter { $0.group == group }
-            guard members.allSatisfy(\.ownWine) else { continue }
+        for group in candidates(snap, ownGroups: ownGroups, ownHostsWithoutGroup: ownHostsWithoutGroup,
+                                selfGroup: selfGroup).sorted() {
             if let p = prefixOfGroup[group] {
                 guard trimmed(p) == want else { continue }
             } else {
@@ -78,6 +83,21 @@ enum Leftovers {
         guard snap.ownWineservers.isEmpty else { return [] }
         if prefixSocketExists, !snap.wineservers.isEmpty { return [] }
         return snap.ownSystemPrograms.filter { parentOf($0) == 1 }.sorted()
+    }
+
+    /// The groups that could be an earlier run's game at all, before any prefix is read: a
+    /// loader's group that is not one of this launcher's sessions (by group, or by host while one
+    /// is starting), not this process's own group, and whose every client (the loader's sidecar
+    /// included) runs this launcher's wine and is a loader or injector.
+    static func candidates(_ snap: LiveClients.Snapshot, ownGroups: Set<pid_t>, ownHostsWithoutGroup: Set<String>,
+                           selfGroup: pid_t = getpgrp()) -> Set<pid_t> {
+        let loaders = snap.clients.filter {
+            $0.knownLoader && $0.group > 1 && $0.group != selfGroup
+                && !ownGroups.contains($0.group) && !ownHostsWithoutGroup.contains($0.host)
+        }
+        return Set(loaders.map(\.group)).filter { g in
+            snap.clients.filter { $0.group == g }.allSatisfy { $0.ownWine && ($0.knownLoader || $0.injecting) }
+        }
     }
 
     private static func trimmed(_ p: String) -> String {
@@ -149,9 +169,7 @@ enum Leftovers {
     /// adopted at all (elsewhere, all own wine), so a Mac with nothing left over pays nothing.
     static func evidence(_ snap: LiveClients.Snapshot, ownGroups: Set<pid_t>,
                          ownHostsWithoutGroup: Set<String>) -> (groups: [pid_t: String], servers: [pid_t: String?]) {
-        let candidates = Set(snap.clients.filter {
-            $0.knownLoader && $0.group > 1 && !ownGroups.contains($0.group) && !ownHostsWithoutGroup.contains($0.host)
-        }.map(\.group)).filter { g in snap.clients.filter { $0.group == g }.allSatisfy(\.ownWine) }
+        let candidates = Leftovers.candidates(snap, ownGroups: ownGroups, ownHostsWithoutGroup: ownHostsWithoutGroup)
         guard !candidates.isEmpty else { return ([:], [:]) }
         let members = candidates.flatMap { snap.members(ofGroup: $0) }
         let env = prefixes(of: members + snap.ownWineservers)

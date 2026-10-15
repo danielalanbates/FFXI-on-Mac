@@ -58,6 +58,23 @@ extension Headless {
         checks.append(("CatsEyeXI's own launcher (its own wine): Running… without Stop",
                        adoptable(catsEyeOwnLauncher, groupPrefix: [:], servers: [:]).isEmpty
                            && !MultiWorld.elsewhere(catsEyeOwnLauncher.clients, ownGroups: [], ownHostsWithoutGroup: []).isEmpty))
+        // CatsEyeXI's launcher run inside the wrapper (scripts/catseye-launcher.sh): this wine, the
+        // selected prefix, and its Play starts the loader in its own group.
+        let catsEyeInWrapper = LiveClients.parse(psText + "\n" + """
+            990710 990700 C:\\CatsEyeXI-Launcher\\CatsEyeXI-Launcher.exe\u{20}
+            990712 990700 C:\\Games\\CatsEyeXI\\catseyexi-client\\Ashita\\bootloader\\xiloader.exe --server catseyexi.com
+            """)
+        checks.append(("CatsEyeXI's launcher in this wine: its game is not adopted (Stop would end the launcher too)",
+                       adoptable(catsEyeInWrapper, groupPrefix: [990401: prefix, 990700: prefix]) == [orphan]))
+        checks.append(("this launcher's own process group (its jobs) is never adopted",
+                       Leftovers.adoptable(own, ownGroups: [], ownHostsWithoutGroup: [], prefix: prefix,
+                                           prefixOfGroup: [990401: prefix], serverPrefixes: [990416: prefix],
+                                           otherLauncherAlive: false, selfGroup: 990401).isEmpty))
+        let withInjector = LiveClients.parse(psText + "\n" + """
+            990440 990401 .\\\\Ashita-cli.exe horizonxi.ini\u{20}
+            """)
+        checks.append(("an injector still in the group is the launch's own: still adopted",
+                       adoptable(withInjector).map(\.group) == [990401]))
 
         // What the window does with each.
         let sessions = Sessions()
