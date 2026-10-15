@@ -82,6 +82,8 @@ final class Runner: ObservableObject {
         var groupHeldLoader = false
     }
     private static var playing: [ObjectIdentifier: Playing] = [:]
+    /// A launch of this launcher's own is under way or playing, even before any client exists.
+    static var anyPlaying: Bool { !playing.isEmpty }
 
     private func othersPlaying() -> Int { Runner.playing.keys.filter { $0 != ObjectIdentifier(self) }.count }
 

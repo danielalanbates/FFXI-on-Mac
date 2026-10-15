@@ -80,9 +80,9 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // No more handed-over requests from here on: one taken now would never be acted on.
         SingleInstance.terminating = true
-        guard Runner.workInFlight else { return .terminateNow }
+        guard Runner.workInFlight || LocalServer.workInFlight else { return .terminateNow }
         let a = NSAlert()
-        let q = Self.quitQuestion(Runner.workInFlightReason)
+        let q = Self.quitQuestion(Runner.workInFlightReason ?? LocalServer.workInFlightReason)
         a.messageText = q.message
         if let info = q.info { a.informativeText = info }
         a.addButton(withTitle: "Quit anyway")
@@ -595,17 +595,26 @@ struct ContentView: View {
         .padding(.top, 6)
     }
 
-    /// Off while a game is running here or elsewhere, while a download or install is running,
-    /// and once pressed. Updater.restartToUpdate refuses the same cases.
+    /// Off while a game is running here or elsewhere, while a download, install or local-server
+    /// job is running, and once pressed. Updater.restartToUpdate refuses the same cases.
     private var restartButton: some View {
         let gameLive = !sessions.live.isEmpty || !sessions.elsewhere.isEmpty
-        let installing: Bool = { if case .installing = updater.state { return true }; return false }()
+        let job = Runner.workInFlight ? Runner.workInFlightReason ?? "A download"
+            : local.busy || LocalServer.workInFlight ? LocalServer.workInFlightReason ?? "The local server"
+            : nil
         return Button("Restart") { updater.restartToUpdate() }
             .buttonStyle(.borderedProminent).controlSize(.small)
-            .disabled(gameLive || Runner.workInFlight || installing)
+            .disabled(gameLive || job != nil || updateInstalling)
             .help(gameLive ? "Close the game first."
-                  : Runner.workInFlight ? "Finish the running download first."
-                  : "Install the update and reopen the launcher.")
+                  : job.map { "\($0) is running. Restart when it finishes." }
+                  ?? "Install the update and reopen the launcher.")
+    }
+
+    /// Restart was pressed: nothing may start under a launcher about to quit and a bundle about
+    /// to be replaced (Updater.install).
+    private var updateInstalling: Bool {
+        if case .installing = updater.state { return true }
+        return false
     }
 
     /// Live players-online for the selected world. Only shown when the server publishes a
@@ -1621,7 +1630,8 @@ struct ContentView: View {
         .keyboardShortcut(.defaultAction)
         // Only the *absence* of an install should block Play. Once we have one — remembered
         // or found — a still-running background rescan must not hold the user up.
-        .disabled(selected == nil || (selectedRunning && !playAgain) || blocked || runner.busy)
+        .disabled(selected == nil || (selectedRunning && !playAgain) || blocked || runner.busy
+                  || updateInstalling)
     }
 
     /// Every world playing right now, each with its own Stop. Stopping one never stops another.
@@ -1669,6 +1679,10 @@ struct ContentView: View {
             store.select(srv)
         }
         guard cmd.play else { return }
+        if updateInstalling {
+            runner.logFileOnly("!! --play\(from): not carried out, the launcher is restarting to update")
+            return
+        }
         if selected == nil { runner.appendLine("!! --play\(from): no install found yet") }
         else if runner.running, store.selected?.allowsMultipleClients != true {
             runner.appendLine("!! --play\(from): \(store.selected?.name ?? "this world") is already running in this launcher")
@@ -1702,6 +1716,11 @@ struct ContentView: View {
 
     private func play() {
         guard let i = active else { return }
+        // Only a handed-over --play gets here (PLAY is grey); the launcher is about to quit.
+        if updateInstalling {
+            runner.logFileOnly("!! not playing: the launcher is restarting to update")
+            return
+        }
         if runner.busy {
             // Only a forwarded --play gets here (PLAY is grey while busy); not an error to keep.
             info("Wait for the install/update to finish")
@@ -1762,6 +1781,11 @@ struct ContentView: View {
     }
 
     private func launchClient(_ i: Install, server: Server, runner r: Runner) {
+        // Restart was pressed while the local server was starting for this launch.
+        if updateInstalling {
+            r.logFileOnly("!! not playing: the launcher is restarting to update")
+            return
+        }
         // Two servers on the list publish no login host anywhere this project could find. Ashita
         // would take `--server ` with nothing after it and fail somewhere less obvious, so say
         // what is actually missing instead.

@@ -54,6 +54,15 @@ final class LocalServer: ObservableObject {
     /// What the busy work is, for the button label.
     @Published private(set) var activity = ""
 
+    /// Every setup, start or stop script running now, by what it is doing. Counted per child
+    /// process, not per object, so a window that goes away cannot leave a job behind. Quitting
+    /// kills a running job (a first setup's build dies on its next write), so the quit question
+    /// and Restart-to-update look here as well as at `Runner.workInFlight`.
+    private static var jobs: [UUID: String] = [:]
+    static var workInFlight: Bool { !jobs.isEmpty }
+    /// "Setting up the local server", for the quit question.
+    static var workInFlightReason: String? { jobs.values.sorted().first }
+
     /// `lsb-server.sh` ships in the bundle; fall back to the repo copy under `swift run`.
     static func script() -> URL? {
         if let u = Bundle.main.url(forResource: "lsb-server", withExtension: "sh") { return u }
@@ -236,9 +245,11 @@ final class LocalServer: ObservableObject {
             guard !d.isEmpty, let s = String(data: d, encoding: .utf8) else { return }
             Task { @MainActor in log(s) }
         }
+        let job = UUID()
         p.terminationHandler = { pr in
             pipe.fileHandleForReading.readabilityHandler = nil
             Task { @MainActor [weak self] in
+                LocalServer.jobs[job] = nil
                 self?.busy = false
                 self?.activity = ""
                 let ok = pr.terminationStatus == 0
@@ -247,9 +258,11 @@ final class LocalServer: ObservableObject {
                 done(ok)
             }
         }
+        Self.jobs[job] = activity.prefix(1).uppercased() + activity.dropFirst() + " the local server"
         do {
             try p.run()
         } catch {
+            Self.jobs[job] = nil
             busy = false
             self.activity = ""
             log("!! could not run lsb-server.sh: \(error.localizedDescription)")

@@ -16,8 +16,8 @@ import Security
 ///   * `restartFailed` one short reason, when a Restart the user pressed did not go through.
 ///
 /// When: once at launch, every 6 h, and on activation only if the last check is over an hour
-/// old. Nothing is checked, downloaded or staged while a game client is live or a Runner job is
-/// in flight; it retries 10 minutes later. A release that fails verification is remembered and
+/// old. Nothing is checked, downloaded or staged while a game client is live or starting, or a
+/// Runner or local-server job is in flight; it retries 10 minutes later. A release that fails verification is remembered and
 /// never downloaded again until a different tag appears.
 ///
 /// Newer means (CFBundleShortVersionString, CFBundleVersion) as a tuple. The build rides in the
@@ -52,7 +52,7 @@ final class Updater: ObservableObject {
         var message: String {
             switch self {
             case .clientLive: return "Close the game, then restart to update"
-            case .workInFlight: return "Finish the running download, then restart to update"
+            case .workInFlight: return "Finish the running job, then restart to update"
             case .helperDidNotStart: return "Update didn't start. Try Restart again"
             case .notVerified: return "Update failed verification; fetching it again"
             case .lastAttempt: return "Last update didn't install. Try Restart again"
@@ -132,11 +132,30 @@ final class Updater: ObservableObject {
         }
     }
 
-    /// Defer while a game or install is running: no API call, no download, no hdiutil/codesign
-    /// competing with the client for an 8 GB Mac.
+    /// Defer while a game, an install or a local-server job is running: no API call, no
+    /// download, no hdiutil/codesign competing with the client for an 8 GB Mac.
     private func gameOrWorkBusy() async -> Bool {
-        if Runner.workInFlight { return true }
+        if Self.ownBlocker() != nil { return true }
         return await Task.detached(priority: .utility) { !LiveClients.snapshot().clients.isEmpty }.value
+    }
+
+    /// What this launcher knows without a scan stands in the way of quitting: a launch of its
+    /// own (from the moment it passes its checks, before any client exists), a Runner job, or a
+    /// local-server setup, start or stop (its build dies with the launcher).
+    private static func ownBlocker() -> RestartFailure? {
+        if Runner.anyPlaying { return .clientLive }
+        if Runner.workInFlight || LocalServer.workInFlight { return .workInFlight }
+        return nil
+    }
+
+    /// The same plus every game client on the Mac, another launcher's too. The scan runs off
+    /// the main actor, so what this launcher knows is read again after it.
+    private func restartBlocker() async -> RestartFailure? {
+        if let why = Self.ownBlocker() { return why }
+        let live = await Task.detached(priority: .userInitiated) {
+            !LiveClients.snapshot().clients.isEmpty
+        }.value
+        return live ? .clientLive : Self.ownBlocker()
     }
 
     private func retryLater() {
@@ -229,8 +248,9 @@ final class Updater: ObservableObject {
 
     // MARK: - Restart
 
-    /// Swap in the staged update and relaunch. Refused while a client is live or a Runner job is
-    /// in flight; a second press while one is under way does nothing.
+    /// Swap in the staged update and relaunch. Refused while a client is live or starting, or a
+    /// Runner or local-server job is running; a second press while one is under way does
+    /// nothing. While `.installing`, Play and a handed-over --play are refused (ContentView).
     func restartToUpdate() {
         let release: UpdateRelease
         switch state {
@@ -243,12 +263,8 @@ final class Updater: ObservableObject {
     }
 
     private func install(_ release: UpdateRelease) async {
-        if Runner.workInFlight { return state = .restartFailed(release, .workInFlight) }
+        if let why = await restartBlocker() { return state = .restartFailed(release, why) }
         guard UpdateWork.canSelfUpdate else { return state = .manual(release) }
-        let live = await Task.detached(priority: .userInitiated) {
-            !LiveClients.snapshot().clients.isEmpty
-        }.value
-        if live { return state = .restartFailed(release, .clientLive) }
         guard let staged = UpdateWork.stagedApp(for: release),
               await Task.detached(priority: .userInitiated, operation: {
                   (try? UpdateWork.verify(app: staged, release: release)) != nil
@@ -262,14 +278,21 @@ final class Updater: ObservableObject {
             }
             return
         }
-        // Re-checked after the awaits: an install could have started meanwhile.
-        if Runner.workInFlight { return state = .restartFailed(release, .workInFlight) }
+        // Re-checked after the awaits: a download, a server job or a launch already past Play
+        // (the local server starting first) could have begun meanwhile.
+        if let why = await restartBlocker() { return state = .restartFailed(release, why) }
         let current = Bundle.main.bundlePath
         let pid = ProcessInfo.processInfo.processIdentifier
         let helper = await Task.detached(priority: .userInitiated) {
             UpdateWork.startHelper(staged: staged, current: current, launcherPID: pid)
         }.value
         guard let helper else { return state = .restartFailed(release, .helperDidNotStart) }
+        // The helper took up to 10 s to start. A last look with nothing awaited between it and
+        // the quit; the helper is called off if anything began.
+        if let why = Self.ownBlocker() {
+            UpdateWork.cancelHelper(helper)
+            return state = .restartFailed(release, why)
+        }
         UpdateWork.note("restarting into \(release.tag) (helper pid \(helper))")
         NSApp.terminate(nil)
         // Still here: the quit was cancelled. Call the helper off so a later quit does not
