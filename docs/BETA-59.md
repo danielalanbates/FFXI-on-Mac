@@ -346,6 +346,9 @@ Deferred
   hand: also `defaults delete org.batesai.horizonxi-on-mac x87.suspectFor`.
 - **Stop's wineserver wait** bounded at 30 s (`Runner.finishes`); the launch lock is always
   released. On timeout: "Wine didn't shut down — if the game won't start, restart the Mac."
+  While that wait is still stuck (`WineserverStopWait`), Play with no client live is refused
+  ("Wine is still shutting down from the last Stop…") instead of running `wineserver -k`/`-w`
+  on the main thread in `launch`, which would hang the window on the same server.
 - **Boot profile** read-modify-writes serialized (`Credentials.profileLock`): the off-main window
   size write could restore the previous account under a second client's launch.
 - **Failed jobs say so**: Repair, HorizonXI update/download, retail install, installer, CatsEyeXI
@@ -452,6 +455,10 @@ the physical path, second run archived the first, `HXILauncherRevision` = HEAD, 
 and `codesign --verify --deep --strict` OK (scratch unregistered and removed). `swift build -c
 release` clean; all 15 `--selftest-*` pass; `--check` runs (BAD only for the missing Games drive
 and uninstalled worlds, as before). Nothing launched, nothing installed, nothing pushed.
+
+Follow-up: the installer now waits (up to 30 s) for step 3's wineserver to exit before
+`bundle.sh /Applications`. Wine keeps it up ~3 s after the last `regsvr32`, it matches
+`/SharedSupport/wine/`, and bundle.sh checks before it builds, so the install was refused.
 
 Needs Daniel's live test: run "Install FFXI on Mac.command" with the launcher quit (installs,
 old copy in `~/Downloads/FFXI-on-Mac-build/archive-apps`), and once with it open (refuses at
