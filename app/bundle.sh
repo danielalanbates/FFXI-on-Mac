@@ -37,10 +37,12 @@ if [[ ! "$APP_SHORT_VERSION" =~ '^[0-9]+(\.[0-9]+){1,2}$' || "$APP_BUILD" != <->
   exit 1
 fi
 
+# Physical path: symlinks and firmlinks (/System/Volumes/Data/Applications) resolve, so the
+# overlap and /Applications checks below see the folder the app really lands in.
 canonical_path() {
   local path="$1"
   /bin/mkdir -p "${path:h}"
-  (cd "${path:h}" && print -r -- "$PWD/${path:t}")
+  (cd -P "${path:h}" && print -r -- "$(pwd -P)/${path:t}")
 }
 
 APP_CANONICAL="$(canonical_path "$APP")"
@@ -49,15 +51,31 @@ if [[ "$APP_CANONICAL" == */*.app/Contents/* ]]; then
   exit 1
 fi
 
-# Never swap the bundle Daniel plays on while it, the game or any wine is running. Checked before
-# the build and again right before the swap.
-LIVE_PATTERN='FFXI-on-Mac.app/Contents/MacOS|horizon-loader|Ashita-cli|wineserver'
+# Never swap the bundle Daniel plays on while it, the game or this project's wine is running: the
+# launcher and the x87 sidecar it starts, a loader or Ashita, and anything run from the patched
+# wine (X87Sidecar.patchedWineCandidates, all .../wine-coop/wine) or a wrapper's wine
+# (.../SharedSupport/wine, the only layout Install accepts). Its wineserver shows up as
+# .../wine/lib/wine/../../bin/wineserver, so the whole folder is matched. Other Wine apps
+# (CrossOver, Whisky, XIV on Mac) keep their wine elsewhere and do not count. Checked before the
+# build and again right before the swap. "Install FFXI on Mac.command" uses the same pattern.
+LIVE_PATTERN='FFXI-on-Mac\.app/Contents/(MacOS|Resources/x87sidecar)|horizon-loader|Ashita-cli|/wine-coop/wine/|/SharedSupport/wine/'
+APPLICATIONS_ID="$(/usr/bin/stat -f %d:%i /Applications)"
+# Pid and executable of each match, never the arguments: a loader's carry the account password.
+# Fails when nothing matches.
+live_processes() {
+  local pids
+  pids="$(/usr/bin/pgrep -f "$LIVE_PATTERN" 2>/dev/null)" || return 1
+  /bin/ps -o pid=,comm= -p "${(j:,:)${(f)pids}}" 2>/dev/null
+  return 0
+}
 refuse_if_live() {
-  [[ "${APP_CANONICAL:h}" == /Applications ]] || return 0
-  if /usr/bin/pgrep -f "$LIVE_PATTERN" >/dev/null 2>&1; then
-    echo "refusing to replace $APP_CANONICAL: the launcher, a game client or wine is running." >&2
+  # By device and inode, so no other spelling of /Applications gets past it.
+  [[ "$(/usr/bin/stat -f %d:%i "${APP_CANONICAL:h}" 2>/dev/null)" == "$APPLICATIONS_ID" ]] || return 0
+  local live
+  if live="$(live_processes)"; then
+    echo "refusing to replace $APP_CANONICAL: the launcher, a game client or its wine is running." >&2
     echo "Quit them first (in game, /shutdown; never kill a logged-in client):" >&2
-    /usr/bin/pgrep -fl "$LIVE_PATTERN" >&2 || true
+    print -r -- "$live" >&2
     exit 1
   fi
 }
