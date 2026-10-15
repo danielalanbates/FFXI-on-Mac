@@ -41,8 +41,13 @@ STAGE="$WORK/image"
 "$REPO/app/bundle.sh" "$BUILDDIR" >/dev/null
 APP="$BUILDDIR/FFXI-on-Mac.app"
 VERSION="$(/usr/bin/plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")"
+BUILD="$(/usr/bin/plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")"
 [[ -n "$VERSION" ]] || { echo "app has no version" >&2; exit 1; }
-DMG="$OUT/FFXI-on-Mac-$VERSION.dmg"
+[[ "$BUILD" == <-> ]] || { echo "app has no numeric build (CFBundleVersion): $BUILD" >&2; exit 1; }
+# The build rides in the asset name: the updater compares (version, build) and checks the
+# staged app's CFBundleVersion against it (Updater.swift, UpdateRules.build(fromAssetName:)).
+NAME="FFXI-on-Mac-$VERSION-b$BUILD.dmg"
+DMG="$OUT/$NAME"
 [[ ! -e "$DMG" ]] || { echo "release artifact already exists: $DMG" >&2; exit 1; }
 mkdir -p "$OUT"
 
@@ -63,7 +68,7 @@ ln -s /Applications "$STAGE/Applications"
 cp "$REPO/README.md"     "$STAGE/README.md"
 cp "$REPO/docs/SETUP.md" "$STAGE/START HERE.md"
 
-CANDIDATE="$WORK/FFXI-on-Mac-$VERSION.dmg"
+CANDIDATE="$WORK/$NAME"
 hdiutil create -quiet -volname "FFXI on Mac" -srcfolder "$STAGE" -format UDZO "$CANDIDATE"
 echo "signing the disk image"
 codesign --force -s "$HXI_SIGN_ID" "$CANDIDATE"
@@ -77,7 +82,7 @@ codesign --verify "$CANDIDATE"
 spctl -a -t open --context context:primary-signature -v "$CANDIDATE"
 
 # Keep a failed or interrupted attempt from replacing the last known release image.
-FINAL_STAGE="$OUT/.FFXI-on-Mac-$VERSION.dmg.staging-$$"
+FINAL_STAGE="$OUT/.$NAME.staging-$$"
 ditto "$CANDIDATE" "$FINAL_STAGE"
 mv "$FINAL_STAGE" "$DMG"
 FINAL_STAGE=""

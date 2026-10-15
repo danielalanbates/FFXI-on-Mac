@@ -85,9 +85,33 @@ Use Finder's Google Drive **Available offline** action when the provider is
 working, then verify `.git/HEAD` can be read before running Git in that folder.
 
 The updater reads GitHub Releases, so branch commits and beta builds do not prompt public users
-to restart. Cut a new release only after the stability checks above pass. Confirm that the
-downloaded app has the expected bundle ID, release version, valid code signature, and signing
-team before the launcher offers Restart.
+to restart. Cut a new release only after the stability checks above pass.
+
+## Versioning and publishing (the updater depends on these)
+
+- **The next public version is 3.10.** Every v3.9 client updates with v3.9's own updater, which
+  compares the short version only (so a 3.9 build is never offered) and **ditto-merges** the new
+  app over the old one. Every file in v3.9's `FFXI-on-Mac.app` must therefore still exist in the
+  new app: a dropped file survives the merge outside the new signature's seal. Vanaguide files
+  come from the sibling checkout, so a renamed guide file breaks this.
+- Tag exactly `v<CFBundleShortVersionString>` (`v3.10`; never `v3.10.0`, `v3.10-rc1`). The asset
+  is the one `.dmg` that `scripts/package.sh` names `FFXI-on-Mac-<version>-b<build>.dmg`. The
+  updater compares (version, build) and accepts a staged app only if its version equals the tag
+  and its CFBundleVersion equals the build in the name, it meets the pinned requirement
+  (`anchor apple generic`, bundle id, team MG4YW8XX2Z) and Gatekeeper accepts it (notarized).
+  A release that fails is remembered and never downloaded again until a new tag appears.
+- Not a draft, not a prerelease: `/releases/latest` skips both.
+- Publish only with `scripts/publish-release.sh <dmg> --notes <file> [--legacy-dmg <v3.9 dmg>]`.
+  Without `--yes` it only checks and prints the `gh release create` it would run; with `--yes`
+  it publishes and confirms `/releases/latest` serves exactly that asset. It checks the name,
+  version and build, tag, newer-than-latest, signature, team, stapling and Gatekeeper on the
+  image and the app, that the new app's own updater stages the image, and the v3.9 file-list
+  superset (it downloads v3.9's image with `gh` when `--legacy-dmg` is not given; otherwise it
+  prints a by-hand reminder).
+- First line of the 3.10 notes: "Quit the game before pressing Restart." v3.9's Restart button
+  does not check for a running game.
+- Never create a repo named `HorizonXI-on-Mac`: v3.9 clients still ask that name and reach
+  `FFXI-on-Mac` only through GitHub's rename redirect.
 
 ## Why this note exists
 This project has repeatedly reached a good state mid-session and then lost it to the
