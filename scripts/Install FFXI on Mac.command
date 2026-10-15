@@ -101,6 +101,10 @@ say "\n4. Installing the launcher"
 command -v swift >/dev/null 2>&1 || die "No Swift toolchain. Install Xcode Command Line Tools:
       xcode-select --install"
 info "Building it (about a minute)…"
+# Step 3's wine keeps its wineserver up for a few seconds after its last command. That matches
+# LIVE_PATTERN (.../SharedSupport/wine/), and bundle.sh checks before it builds, so it would
+# refuse the install. Give it up to 30 s to exit; a real game still running is refused there.
+for _ in {1..60}; do /usr/bin/pgrep -qf "$LIVE_PATTERN" || break; /bin/sleep 0.5; done
 # bundle.sh builds beside the installed copy and swaps it in only once the new one is complete
 # (putting the old one back if that fails), and moves the old one to
 # ~/Downloads/FFXI-on-Mac-build/archive-apps instead of deleting it.
