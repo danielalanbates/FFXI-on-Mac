@@ -335,3 +335,36 @@ Deferred
 - `archive/` keeps ~50 MB of old binaries.
 - `CodeFolders` is duplicated in VanaguideCompanion; a shared library target would remove the
   copy but changes Package.swift for 12 lines.
+
+## Review fixes: Play path, x87 guard, Stop, preflight refresh, window text
+
+- **Stop ends the x87 check** (`Runner.stop`): a Stop near the one-minute mark killed the sidecar
+  before the loader and recorded a false "didn't attach" for the macOS build + sidecar.
+- **x87 guard, timing vs fingerprint**: the sidecar's own failure lines still record at once; "no
+  sidecar a minute in" (timing, e.g. heavy swap) records only in two sessions in a row with the
+  same fingerprint (`x87.suspectFor`, cleared when a session sees its sidecar alive). Reset by
+  hand: also `defaults delete org.batesai.horizonxi-on-mac x87.suspectFor`.
+- **Stop's wineserver wait** bounded at 30 s (`Runner.finishes`); the launch lock is always
+  released. On timeout: "Wine didn't shut down — if the game won't start, restart the Mac."
+- **Boot profile** read-modify-writes serialized (`Credentials.profileLock`): the off-main window
+  size write could restore the previous account under a second client's launch.
+- **Failed jobs say so**: Repair, HorizonXI update/download, retail install, installer, CatsEyeXI
+  launcher add one "… failed — Open log in Setup & Diagnostics" line on a non-zero exit, unless
+  stopped by the user or the job already printed its own "!!" reason.
+- **Preflight reruns** on volume mount/unmount and on activation (≤ once per 5 s, never while a
+  game is starting); a generation counter drops a slower, older result.
+- **Play-time lines** are their own list, set only for a launch that started; cleared on game exit,
+  world change, next Play, and when Low Power Mode / heat ends. World change clears `notice`; the
+  forwarded-Play busy line clears after 5 s. The local-server line clears on game exit or when the
+  local server is seen stopped.
+- **RetroAchievements**: automatic and Play-time refresh failures go to launcher.log only.
+- **--selftest-ui-text** removes its temp folder (the `defer` never ran before `exit`).
+
+How it was verified: `swift build -c release` clean (same 2 capture warnings); all 15
+`--selftest-*` pass (`--selftest-perf` 38 checks, 5 new: x87 suspect ×3, bounded wait,
+`PlayCheck.stillTrue`); `--selftest-ui-text` leaves no `ffxi-uitext-*` folder; `--check` runs
+(BAD only for the missing Games drive, as before). Nothing launched.
+
+Needs Daniel's live test: unplug/replug a game drive with the launcher open (footer clears, PLAY
+enables without ↻); Low Power Mode on → Play → line → turn it off → line goes; Stop the local
+world, then Play within a few seconds (Busy, then works).
