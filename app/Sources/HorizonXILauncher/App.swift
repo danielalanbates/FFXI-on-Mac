@@ -1795,9 +1795,13 @@ struct ContentView: View {
     }
 
     /// Setup repairs the selected wrapper when that is the one whose wine is missing, instead
-    /// of building a second, empty wrapper and switching to it (G11).
+    /// of building a second, empty wrapper and switching to it (G11). A wrapper whose drive is
+    /// gone is never the target: a new one is built where the sheet says.
     private func prepareWineSetup() {
-        if let i = selected, !FileManager.default.isExecutableFile(atPath: i.wine.path) {
+        let fm = FileManager.default
+        if let i = selected, !fm.isExecutableFile(atPath: i.wine.path),
+           Preflight.unavailableDrive(for: i.wrapper.path) == nil,
+           fm.fileExists(atPath: i.sharedSupport.path) {
             Bootstrap.target = i.wrapper
         } else {
             Bootstrap.target = nil
