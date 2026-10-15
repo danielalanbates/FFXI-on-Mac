@@ -187,6 +187,8 @@ struct PrimaryInputs {
     /// Setup's chain is running (it shows progress even between its jobs).
     var setupRunning = false
     var setupProgress: Double? = nil
+    /// The step Setup's chain is on, named on the button instead of "Setting up".
+    var setupStage: SetupStage? = nil
     var ownJob: String? = nil
     var ownProgress: Double? = nil
     var otherJob: String? = nil
@@ -320,8 +322,10 @@ enum Primary {
         let w = x.world
         switch a {
         case .working(let work, let p):
-            let pct = p.map { " \(Int((min(max($0, 0), 1) * 100).rounded(.down)))%" } ?? ""
-            return .init(action: a, label: work.label + pct, enabled: false, reason: work.reason, progress: p)
+            // Under 1% says no figure at all: "Setting up… 0%" read as stuck (Daniel, 2026-10-15).
+            let pct = p.flatMap { $0 >= 0.01 ? " \(Int((min($0, 1) * 100).rounded(.down)))%" : nil } ?? ""
+            let name = work == .settingUp ? x.setupStage.map { $0.rawValue + "…" } ?? work.label : work.label
+            return .init(action: a, label: name + pct, enabled: false, reason: work.reason, progress: p)
         case .setup(let need):
             switch need {
             case .install:

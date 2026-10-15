@@ -14,6 +14,8 @@ struct SetupSheet: View {
     /// Called once: true when wine is in place (the launcher rescans and Setup carries on),
     /// false when the sheet was cancelled.
     var onFinished: (Bool) -> Void
+    /// Each step as it starts, for the main button's "Downloading Wine… 4%" behind the sheet.
+    var onStep: (Bootstrap.Step) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
 
     @State private var running = false
@@ -137,7 +139,7 @@ struct SetupSheet: View {
             do {
                 try await Bootstrap.run(
                     log: { line in Task { @MainActor in lines.append(line) } },
-                    step: { s in Task { @MainActor in current = s } })
+                    step: { s in Task { @MainActor in current = s; onStep(s) } })
                 await MainActor.run {
                     running = false
                     done = true

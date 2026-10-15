@@ -208,8 +208,15 @@ extension Headless {
             .working(.runningElsewhere, progress: nil), .working(.closing, progress: nil),
         ]
         for a in allActions { seen.append(("action \(a.id):\(a.detail)", Primary.make(a, base))) }
+        // Setup's chain names its step instead of "Setting up" (SetupStage): those are progress too.
+        for s in SetupStage.allCases {
+            var y = base; y.setupRunning = true; y.setupStage = s; y.setupProgress = 0.37
+            seen.append(("Setup step \(s.rawValue)", Primary.decide(y)))
+        }
+        let names = ["Setting up", "Updating", "Repairing", "Checking", "Starting", "Stopping", "Moving", "Waiting",
+                     "Running", "Wine is closing"] + SetupStage.allCases.map(\.rawValue)
         let progress = try! NSRegularExpression(
-            pattern: #"^(Setting up|Updating|Repairing|Checking|Starting|Stopping|Moving|Waiting|Running|Wine is closing)…( \d{1,3}%)?$"#)
+            pattern: "^(" + names.map(NSRegularExpression.escapedPattern(for:)).joined(separator: "|") + ")…( \\d{1,3}%)?$")
         func isProgress(_ l: String) -> Bool {
             progress.firstMatch(in: l, range: NSRange(l.startIndex..., in: l)) != nil
         }

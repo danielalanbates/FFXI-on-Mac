@@ -134,6 +134,48 @@ need_space() {
   (( free >= bytes )) || die "$what needs about $(( (bytes + 999999999) / 1000000000 )) GB free; there are $(( free / 1000000000 )) GB. Free some space, then try again."
 }
 
+# Unzips $1 into the empty folder $2. ditto says nothing while it works, and the base zip unpacks
+# 15.5 GB (minutes, longer on a spinning drive), so every 2 s this says how much of the unpacked
+# size is there ("==> unpacking 42%"): the launcher's button reads it (Daniel, 2026-10-15: "it's
+# been stuck on setting up 0%"). The size is the zip's own listing (zipinfo), or about 1.65x the
+# zip when that can't be read.
+unpack() {
+  local zip="$1" dest="$2" total kb pct last=-1 pid rc=0
+  total=$(/usr/bin/zipinfo -t "$zip" 2>/dev/null | /usr/bin/awk '$5 == "uncompressed," { print $3 }')
+  [[ "$total" == <-> ]] && (( total > 0 )) || total=$(( $(stat -f %z "$zip") * 165 / 100 + 1 ))
+  ditto -x -k "$zip" "$dest" &
+  pid=$!
+  while kill -0 $pid 2>/dev/null; do
+    kb=$(/usr/bin/du -skA "$dest" 2>/dev/null | /usr/bin/awk '{ print $1 }')
+    pct=$(( ${kb:-0} * 1024 * 100 / total ))
+    (( pct > 99 )) && pct=99
+    (( pct > last )) && { say "unpacking $pct%"; last=$pct; }
+    sleep 2
+  done
+  wait $pid || rc=$?
+  (( rc == 0 )) && say "unpacking 100%"
+  return $rc
+}
+
+# Puts everything under $1 at the same place under $2, replacing what $2 already has file by file,
+# as unzipping over it would. A rename where both are on one drive: the whole client lands in
+# place at once, with no second copy (flattening their HorizonXI/ root by copying it used to need
+# another 15.5 GB beside the first). Through a link onto another drive (SquareEnix -> /Volumes/…)
+# it is a copy, file by file, as before.
+zmodload -F zsh/files b:zf_mv 2>/dev/null || true
+merge_into() {
+  local e t
+  for e in "$1"/*(DN); do
+    t="$2/${e:t}"
+    if [[ -d "$e" && ! -L "$e" && -d "$t" ]]; then
+      merge_into "$e" "$t" || return 1
+    else
+      if [[ -d "$t" && ! -L "$t" ]]; then rm -rf "$t" || return 1; fi
+      zf_mv -f "$e" "$t" 2>/dev/null || mv -f "$e" "$t" || return 1
+    fi
+  done
+}
+
 # What a complete base client has: without these, version.json alone means nothing.
 base_complete() {
   [[ -f "$ffxi/FFXiMain.dll" && -f "$game/SquareEnix/PlayOnlineViewer/viewer/com/polcore.dll" ]] \
@@ -141,7 +183,9 @@ base_complete() {
 }
 
 tmpd=$(mktemp -d "${TMPDIR:-/tmp}/ffxi-update.XXXXXX")
-trap 'rm -rf "$tmpd"' EXIT
+# A Stop during an unzip leaves its half-unpacked folder (up to 15 GB): ours, and never complete.
+tmpx=""
+trap 'rm -rf "$tmpd"; [[ -n "$tmpx" ]] && rm -rf "$tmpx"' EXIT
 
 case "${1:-}" in
   check)
@@ -181,27 +225,19 @@ case "${1:-}" in
         need_space "$dl" $(( xl - have + 16000000000 )) "HorizonXI"
       fi
       say "fetching $base ($mv) by torrent into $dl — this is ~9.4 GB"
-      "$ARIA2C" --dir="$dl" --seed-time=0 --bt-stop-timeout=1800 --summary-interval=60 \
+      "$ARIA2C" --dir="$dl" --seed-time=0 --bt-stop-timeout=1800 --summary-interval=2 \
              --console-log-level=warn --enable-dht=true --allow-overwrite=true "$magnet" \
         || die "The HorizonXI download stalled or failed — press Setup again to resume."
       [[ -f "$dl/$base" && ! -f "$dl/$base.aria2" ]] || die "aria2 finished but $base is not complete in $dl"
     fi
     say "extracting $base"
-    if [[ -L "$game/SquareEnix" ]]; then
-      # ditto will not write through a symlinked folder: unpack beside, then copy file by file.
-      tmpx="$dl/.base-extract"; rm -rf "$tmpx"; mkdir -p "$tmpx"
-      ditto -x -k "$dl/$base" "$tmpx" || { rm -rf "$tmpx"; die "Couldn't unpack $base."; }
-      src="$tmpx"; [[ -d "$tmpx/HorizonXI" ]] && src="$tmpx/HorizonXI"
-      ( cd "$src" && find . -type f -print0 ) | while IFS= read -r -d '' f; do
-        f="${f#./}"
-        mkdir -p "$game/${f:h}" && cp -f "$src/$f" "$game/$f" || { rm -rf "$tmpx"; die "could not write $f"; }
-      done
-      rm -rf "$tmpx"
-    else
-      ditto -x -k "$dl/$base" "$game" || die "Couldn't unpack $base."
-      # Their zip is rooted at HorizonXI/: flatten it, over whatever an earlier client left.
-      if [[ -d "$game/HorizonXI" ]]; then ditto "$game/HorizonXI" "$game" && rm -rf "$game/HorizonXI"; fi
-    fi
+    # Unpacked beside the game folder (the same drive: $dl is inside it), then moved into place.
+    # ditto will not write through a symlinked SquareEnix, and their zip is rooted at HorizonXI/.
+    tmpx="$dl/.base-extract"; rm -rf "$tmpx"; mkdir -p "$tmpx"
+    unpack "$dl/$base" "$tmpx" || { rm -rf "$tmpx"; die "Couldn't unpack $base."; }
+    src="$tmpx"; [[ -d "$tmpx/HorizonXI" ]] && src="$tmpx/HorizonXI"
+    merge_into "$src" "$game" || { rm -rf "$tmpx"; die "Couldn't put the unpacked files in $game."; }
+    rm -rf "$tmpx"
     # The base's own version, so every update after it is applied again (an older version.json
     # over freshly unpacked base files would skip them).
     printf '{\n  "version": "%s"\n}\n' "$mv" > "$game/version.json"
@@ -246,7 +282,7 @@ case "${1:-}" in
       # A Stop leaves the full-size file plus its .aria2 control file: that is a resume, not a
       # finished download.
       if [[ ! -f "$dl/$zip" || -f "$dl/$zip.aria2" ]]; then
-        "$ARIA2C" --dir="$dl" --seed-time=0 --bt-stop-timeout=600 --summary-interval=30 \
+        "$ARIA2C" --dir="$dl" --seed-time=0 --bt-stop-timeout=600 --summary-interval=2 \
                --console-log-level=warn --enable-dht=true --allow-overwrite=true "$magnet" \
           || die "The download of HorizonXI $mv stalled or failed (nobody may be sharing it right now) — try again later."
         [[ -f "$dl/$zip" && ! -f "$dl/$zip.aria2" ]] || die "aria2 finished but $zip is not complete in $dl"
@@ -257,17 +293,15 @@ case "${1:-}" in
         [[ -f "$ffxi/$f" ]] && cp "$ffxi/$f" "$tmpk/ffxi.$f"
       done
       say "extracting $zip"
-      # Unpack beside, then copy file by file: SquareEnix in the game dir is often a symlink to
-      # shared data, and ditto/cp/openrsync all refuse to write through a symlinked directory.
-      tmpx=$(mktemp -d)
-      ditto -x -k "$dl/$zip" "$tmpx" || { rm -rf "$tmpx"; die "unzip of $zip failed"; }
+      # Unpack beside the game folder (the same drive, not the Mac's own disk), then move into
+      # place file by file: SquareEnix in the game dir is often a symlink to shared data, and
+      # ditto/cp/openrsync all refuse to write through a symlinked directory.
+      tmpx="$dl/.update-extract"; rm -rf "$tmpx"; mkdir -p "$tmpx"
+      unpack "$dl/$zip" "$tmpx" || { rm -rf "$tmpx"; die "unzip of $zip failed"; }
       src="$tmpx"
       # Their zips are rooted at HorizonXI/ sometimes; flatten if so.
       [[ -d "$tmpx/HorizonXI" && -f "$tmpx/HorizonXI/version.json" ]] && src="$tmpx/HorizonXI"
-      ( cd "$src" && find . -type f -print0 ) | while IFS= read -r -d '' f; do
-        f="${f#./}"
-        mkdir -p "$game/${f:h}" && cp -f "$src/$f" "$game/$f" || { rm -rf "$tmpx"; die "could not write $f"; }
-      done
+      merge_into "$src" "$game" || { rm -rf "$tmpx"; die "could not write the files of $zip"; }
       rm -rf "$tmpx"
       if [[ -n "$dels" ]]; then
         for d in ${(s:|:)dels}; do rm -rf "$game/$d"; done

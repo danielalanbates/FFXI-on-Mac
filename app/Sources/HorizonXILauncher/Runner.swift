@@ -31,14 +31,14 @@ final class Runner: ObservableObject {
     @Published var updateLabel = ""
     /// 0...1 while Move… copies (InstallMove), for the main button's "Moving… 40%".
     @Published var moveProgress: Double?
-    private var updateStep = (n: 1, total: 1)
-    /// A fresh install's base download and unzip (9.4 GB, nearly all of the time) fills the
-    /// first 85% of the bar, its updates the rest; an update alone fills all of it. Setup's
-    /// button reads this, so it must not jump back to 0% when the updates start.
-    private var installingBase = false
-    private var phase = (start: 0.0, span: 1.0)
-    private func setProgress(_ inPhase: Double) {
-        updateProgress = phase.start + phase.span * min(max(inPhase, 0), 1)
+    /// What the running script is at ("Downloading HorizonXI", "Unpacking HorizonXI"), for Setup's
+    /// button. A fresh install's base download and unzip fill the first 85% of `updateProgress`,
+    /// its updates the rest; it never goes back (ScriptProgress).
+    @Published private(set) var stage: SetupStage?
+    private var scriptProgress = ScriptProgress(.horizonUpdate)
+    private func beginProgress(_ job: ScriptProgress.Job) {
+        scriptProgress = ScriptProgress(job)
+        updateProgress = 0; updateLabel = ""; stage = scriptProgress.stage
     }
     @Published var busy = false {
         didSet {
@@ -263,33 +263,13 @@ final class Runner: ObservableObject {
     func appendChunk(_ s: String) {
         var s = s
         if updatingHorizon {
-            // aria2's readout becomes the progress bar instead of hundreds of log lines.
-            for line in s.split(whereSeparator: \.isNewline) {
-                let l = String(line)
-                if installingBase, l.contains("==> base client in place") || l.contains("==> already has a client") {
-                    installingBase = false
-                    phase = (0.85, 0.15)
-                    updateStep = (1, 1)
-                    setProgress(0)
-                } else if let m = l.range(of: #"==> update (\S+) \((\d+)/(\d+)\)"#, options: .regularExpression) {
-                    let parts = l[m].dropFirst(11).split(separator: " ")
-                    let nums = parts.last?.trimmingCharacters(in: CharacterSet(charactersIn: "()")).split(separator: "/") ?? []
-                    if nums.count == 2, let n = Int(nums[0]), let t = Int(nums[1]) {
-                        updateStep = (n, max(t, 1))
-                        updateLabel = "\(parts.first ?? "") · \(n) of \(t)"
-                    }
-                    setProgress(Double(updateStep.n - 1) / Double(updateStep.total))
-                } else if let m = l.range(of: #"\((\d+)%\)"#, options: .regularExpression),
-                          let pct = Double(l[m].dropFirst().dropLast(2)) {
-                    setProgress((Double(updateStep.n - 1) + pct / 100 * 0.9) / Double(updateStep.total))
-                } else if l.contains("==> extracting") {
-                    setProgress((Double(updateStep.n - 1) + 0.9) / Double(updateStep.total))
-                }
-            }
-            s = s.split(separator: "\n", omittingEmptySubsequences: false)
-                .filter { l in let t = l.trimmingCharacters(in: .whitespaces)
-                          return !(t.hasPrefix("[#") || t.hasPrefix("***") || t.hasPrefix("====") || t.hasPrefix("FILE:") || t.hasPrefix("----")) }
-                .joined(separator: "\n")
+            // aria2's readout and the unzip's percentages become the button's progress instead
+            // of hundreds of log lines.
+            scriptProgress.read(s)
+            if scriptProgress.fraction != updateProgress { updateProgress = scriptProgress.fraction }
+            if scriptProgress.label != updateLabel { updateLabel = scriptProgress.label }
+            if scriptProgress.stage != stage { stage = scriptProgress.stage }
+            s = ScriptProgress.loggable(s)
             if s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return }
         }
         tee(s)
@@ -526,8 +506,7 @@ final class Runner: ObservableObject {
         }
         beginBusy("Updating")
         updatingHorizon = true
-        installingBase = false; phase = (0, 1)
-        updateProgress = 0; updateLabel = ""; updateStep = (1, 1)
+        beginProgress(.horizonUpdate)
         appendLine("==> updating HorizonXI game files in \(install.gameDir.path)")
         spawn(URL(fileURLWithPath: "/bin/zsh"),
               args: [script.path, "horizon", install.gameDir.path],
@@ -947,8 +926,7 @@ final class Runner: ObservableObject {
         beginBusy("Downloading")
         // The same progress readout as an update (and the same Stop).
         updatingHorizon = true
-        installingBase = true; phase = (0, 0.85)
-        updateProgress = 0; updateLabel = ""; updateStep = (1, 1)
+        beginProgress(.horizonInstall)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         appendLine("==> installing HorizonXI into \(dir.path) (9.4 GB torrent — leave this running)")
         spawn(URL(fileURLWithPath: "/bin/zsh"), args: [script.path, "install", dir.path],
@@ -980,8 +958,7 @@ final class Runner: ObservableObject {
         }
         beginBusy("Downloading the game's Wine")
         updatingHorizon = true
-        installingBase = false; phase = (0, 1)
-        updateProgress = 0; updateLabel = ""; updateStep = (1, 1)
+        beginProgress(.gameWine)
         appendLine("==> installing the game's Wine into \(folder.path)")
         // The pin is the script's own: its test-only overrides never come from this app.
         var env = Self.downloadEnvironment()

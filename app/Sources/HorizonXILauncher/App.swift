@@ -242,9 +242,13 @@ struct ContentView: View {
     /// A HorizonXI update failed or was stopped: Play this session anyway (its login server
     /// accepts a client one version behind).
     @State private var updateDeferred = false
-    /// Setup's chain (runSetup) is running, and how far, for the button.
+    /// Setup's chain (runSetup) is running, and how far, for the button: the whole chain as one
+    /// figure that only rises (SetupMeter), the step it is on, and the setup sheet's own step.
     @State private var setupRunning = false
-    @State private var setupProgress: Double?
+    final class MeterBox { var meter = SetupMeter() }
+    @State private var setupMeter = MeterBox()
+    @State private var setupAt: SetupMeter.Step?
+    @State private var bootstrapStep: Bootstrap.Step?
     /// The chain waits on the setup sheet through this.
     @State private var setupSheetWaiter = SheetWaiter()
     /// Worlds whose download page Setup opened this session: the next press runs the installer.
@@ -279,7 +283,10 @@ struct ContentView: View {
         x.rosettaMissing = probe.rosettaMissing
         x.restartingLauncher = updateInstalling
         x.setupRunning = setupRunning
-        x.setupProgress = runner.updatingHorizon ? runner.updateProgress : setupProgress
+        if setupRunning {
+            x.setupProgress = setupMeter.meter.overall(setupLive)
+            x.setupStage = setupStage
+        }
         if runner.busy { x.ownJob = runner.busyReason.isEmpty ? "Working" : runner.busyReason }
         else if x.isLocal, local.busy { x.ownJob = local.activity.isEmpty ? "setting up" : local.activity }
         else if moveChecking { x.ownJob = "Checking" }
@@ -537,9 +544,13 @@ struct ContentView: View {
         .sheet(isPresented: $showAddons) { addonsSheet }
         // Setup's chain waits on this sheet; closed any other way, the chain stops there.
         .sheet(isPresented: $showSetup, onDismiss: { setupSheetWaiter.finish(false) }) {
-            SetupSheet { ok in
+            SetupSheet(onFinished: { ok in
                 if !setupSheetWaiter.finish(ok), ok { refresh() }
-            }
+            }, onStep: { s in
+                guard setupRunning else { return }
+                bootstrapStep = s
+                if setupAt != .wine { setupStep(.wine) }
+            })
         }
     }
 
@@ -1687,6 +1698,44 @@ struct ContentView: View {
         }
     }
 
+    /// Setup's chain is on step `s`: the button names it, and its figure counts from there.
+    private func setupStep(_ s: SetupMeter.Step) {
+        setupMeter.meter.begin(s)
+        setupAt = s
+    }
+
+    /// How far the chain's current step is, 0...1, from whatever does the work: the setup sheet's
+    /// steps, the scripts' readouts (ScriptProgress), a copy's bytes.
+    private var setupLive: Double {
+        switch setupAt {
+        case .wine?:
+            switch bootstrapStep {
+            case .rosetta?, nil: return 0
+            case .download?: return 0.1
+            case .assemble?: return 0.55
+            case .prefix?: return 0.75
+            }
+        case .gameWine?, .game?: return runner.updatingHorizon ? runner.updateProgress : 0
+        case .files?: return runner.moveProgress ?? 0
+        default: return 0
+        }
+    }
+
+    /// What the button names while the chain works ("Downloading HorizonXI"); nil says
+    /// "Setting up" (choosing the folder, another world's installer).
+    private var setupStage: SetupStage? {
+        switch setupAt {
+        case .rosetta?: return .rosetta
+        case .wine?: return bootstrapStep.map(SetupStage.init)
+        case .files?: return runner.busy ? .copyingFiles : .movingFiles
+        case .gameWine?: return .gameWine
+        case .game?: return runner.updatingHorizon ? runner.stage : nil
+        case .configure?: return .finishing
+        case .localServer?: return .buildingServer
+        case nil: return nil
+        }
+    }
+
     /// The decision as it would be with no chain running: what Setup still has to do.
     private var nextNeed: PrimaryAction {
         var x = primaryInputs
@@ -1717,12 +1766,18 @@ struct ContentView: View {
         guard !setupRunning else { return }
         let world = store.selectedID
         setupRunning = true
-        setupProgress = nil
+        // The whole chain as one figure, planned from where it starts (SetupMeter).
+        var start = primaryInputs
+        start.setupRunning = false
+        setupMeter.meter = SetupMeter(planned: SetupMeter.plan(start))
+        setupAt = nil
+        bootstrapStep = nil
         notice = ""
         let r = runner
         defer {
             setupRunning = false
-            setupProgress = nil
+            setupAt = nil
+            bootstrapStep = nil
             recheck()
         }
         // Each step at most once per press: a step that did not fix its need says why in its
@@ -1734,14 +1789,28 @@ struct ContentView: View {
             guard checks.contains(where: { Primary.configuredAfterDownload.contains($0.id) && $0.state == .bad })
             else { return true }
             configured = true
+            setupStep(.configure)
             return await setupConfigureStep(r)
         }
+        // HorizonXI's update, when the install Setup found or finished is behind: once per press,
+        // after the steps it needed (a fresh download applies every update itself).
+        var updated = false
         for _ in 0..<10 {
             await recheckSettled()
             guard store.selectedID == world else { return }   // the user switched worlds
             let need: PrimaryAction.SetupNeed
             switch nextNeed {
             case .setup(let n): need = n
+            case .update(let w, _) where w == "HorizonXI" && !updated && !done.isEmpty:
+                updated = true
+                setupStep(.game)
+                guard let i = active, let s = store.selected else { return }
+                let ok = await withCheckedContinuation { c in
+                    PrimaryFixer.perform(.update(world: w, to: ""), install: i, server: s, runner: r) { c.resume(returning: $0) }
+                }
+                // Stopped or failed: Play this session anyway, as the Update button does.
+                if !ok { updateDeferred = true; return }
+                continue
             case .repair(.wine):
                 // Step 5 on its own (Wine's library links), when it is all that is left.
                 guard !configured, await configureIfNeeded() else { return }
@@ -1752,6 +1821,7 @@ struct ContentView: View {
             done.append(need)
             switch need {
             case .rosetta:
+                setupStep(.rosetta)
                 guard await setupRosettaStep(r) else { return }
             case .install, .wrapperDrive, .wine:
                 guard await setupLocationStep(need) else { return }
@@ -1759,13 +1829,16 @@ struct ContentView: View {
             case .dataDrive, .chooseFolder:
                 guard await setupLocationStep(need) else { return }
             case .game:
+                setupStep(.game)
                 guard await setupGameStep(r) else { return }
                 // Step 5 right away: a fresh prefix has no registry, COM or library links yet.
                 await recheckSettled()
                 guard await configureIfNeeded() else { return }
             case .gameWine:
+                setupStep(.gameWine)
                 guard await setupGameWineStep(r) else { return }
             case .localServer:
+                setupStep(.localServer)
                 guard await setupLocalServerStep(r) else { return }
             }
         }

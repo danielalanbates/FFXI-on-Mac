@@ -115,3 +115,39 @@ extension Headless {
         exit(finished == true ? 0 : 1)
     }
 }
+
+/// `--progress-trace <horizon-install|horizon-update|game-wine> <file>`: a setup script's output
+/// read the way the main button reads it (ScriptProgress), one line each time what the button
+/// would say changes: "<percent> <stage>". scripts/tests/setup-scripts-test.sh feeds it the real
+/// scripts' output, so the figure is checked against what they actually print. Reads only the file.
+extension Headless {
+    static func runProgressTrace() -> Never {
+        let a = CommandLine.arguments
+        guard let k = a.firstIndex(of: "--progress-trace"), k + 2 < a.count,
+              let text = try? String(contentsOfFile: a[k + 2], encoding: .utf8) else {
+            FileHandle.standardError.write(Data("usage: --progress-trace <horizon-install|horizon-update|game-wine> <file>\n".utf8))
+            exit(2)
+        }
+        let job: ScriptProgress.Job
+        switch a[k + 1] {
+        case "horizon-install": job = .horizonInstall
+        case "horizon-update": job = .horizonUpdate
+        case "game-wine": job = .gameWine
+        default: FileHandle.standardError.write(Data("unknown job \(a[k + 1])\n".utf8)); exit(2)
+        }
+        var p = ScriptProgress(job)
+        var last = ""
+        // In pieces, as a pipe delivers it: lines split across reads must read the same.
+        var rest = Substring(text)
+        while !rest.isEmpty {
+            p.read(String(rest.prefix(37)))
+            rest = rest.dropFirst(37)
+            let now = "\(Int((p.fraction * 100).rounded(.down))) \(p.stage.rawValue)"
+            if now != last { print(now); last = now }
+        }
+        p.read("\n")
+        let end = "\(Int((p.fraction * 100).rounded(.down))) \(p.stage.rawValue)"
+        if end != last { print(end) }
+        exit(0)
+    }
+}

@@ -71,17 +71,43 @@ case "$url" in
   *) exit 6 ;;
 esac
 EOF
-# aria2c: "downloads" the zip a magnet names (dn=) from the fixture's seed folder.
+# aria2c: "downloads" the zip a magnet names (dn=) from the fixture's seed folder, printing aria2's
+# own summary block once per --summary-interval (a tenth of the time, to keep the test quick) as the
+# real one does when its output is not a terminal: the launcher's button reads its "(N%)".
 cat > "$stubs/aria2c" <<'EOF'
 #!/bin/zsh
 print -r -- "aria2c $*" >> "$STUB_LOG"
 [[ -n "${STUB_ARIA2_FAIL:-}" ]] && exit 7
-dir="" magnet=""
+dir="" magnet="" every=60
 for a in "$@"; do
-  case "$a" in --dir=*) dir="${a#--dir=}" ;; magnet:*) magnet="$a" ;; esac
+  case "$a" in --dir=*) dir="${a#--dir=}" ;; magnet:*) magnet="$a" ;; --summary-interval=*) every="${a#--summary-interval=}" ;; esac
 done
 name="${${magnet#*dn=}%%&*}"
+for pct in 0 25 50 75; do
+  print -r -- ""
+  print -r -- " *** Download Progress Summary as of Thu Oct 15 10:00:00 2026 ***"
+  print -r -- "==============================================================================="
+  print -r -- "[#2089b0 ${pct}MiB/100MiB(${pct}%) CN:44 SD:12 DL:5.1MiB ETA:1m]"
+  print -r -- "FILE: $dir/$name"
+  print -r -- "-------------------------------------------------------------------------------"
+  sleep $(( every / 10.0 ))
+done
 cp "$STUB_SEED/$name" "$dir/$name" && rm -f "$dir/$name.aria2"
+EOF
+# ditto: the real one, except that with STUB_SLOW_UNZIP an unzip first writes half its unpacked
+# size as a placeholder and takes a few seconds, so the unzip's own progress has something to show.
+cat > "$stubs/ditto" <<'EOF'
+#!/bin/zsh
+if [[ -n "${STUB_SLOW_UNZIP:-}" && "${1:-}" == -x && "${2:-}" == -k ]]; then
+  total=$(/usr/bin/zipinfo -t "$3" | /usr/bin/awk '$5 == "uncompressed," { print $3 }')
+  /usr/bin/head -c $(( total / 2 )) /dev/zero > "$4/.stub-half"
+  sleep 2.5
+  /bin/rm -f "$4/.stub-half"
+  /usr/bin/ditto "$@" || exit $?
+  sleep 0.5
+  exit 0
+fi
+exec /usr/bin/ditto "$@"
 EOF
 # python3 must never be needed (a stock Mac has only a stub that pops an installer).
 cat > "$stubs/python3" <<'EOF'
@@ -95,7 +121,7 @@ export STUB_LOG="$LOG" STUB_API="$F/api" STUB_SEED="$F/seed"
 SAFE_PATH="$stubs:/usr/bin:/bin:/usr/sbin:/sbin"
 run() { env -i HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" PATH="${RUN_PATH:-$SAFE_PATH}" STUB_LOG="$STUB_LOG" STUB_API="$STUB_API" \
           STUB_SEED="$STUB_SEED" STUB_REGSVR32_FAIL="${STUB_REGSVR32_FAIL:-}" STUB_OFFLINE="${STUB_OFFLINE:-}" \
-          STUB_ARIA2_FAIL="${STUB_ARIA2_FAIL:-}" HXI_WINE="${HXI_WINE:-}" HXI_ARIA2C="${HXI_ARIA2C:-}" \
+          STUB_ARIA2_FAIL="${STUB_ARIA2_FAIL:-}" STUB_SLOW_UNZIP="${STUB_SLOW_UNZIP:-}" HXI_WINE="${HXI_WINE:-}" HXI_ARIA2C="${HXI_ARIA2C:-}" \
           HXI_TOOLS="${HXI_TOOLS:-$F/tools}" HXI_ARIA2_URL="${HXI_ARIA2_URL:-}" HXI_GAME_WINE_URL="${HXI_GAME_WINE_URL:-}" \
           HXI_GAME_WINE_BYTES="${HXI_GAME_WINE_BYTES:-}" HXI_GAME_WINE_SHA256="${HXI_GAME_WINE_SHA256:-}" "$@"; }
 
@@ -112,6 +138,8 @@ make_client() {   # <dir> <version>
 }
 seed="$F/seed"; mkdir -p "$seed" "$F/api"
 ( b="$F/build/base/HorizonXI"; mkdir -p "$b"; make_client "$b" 2.0.2
+  # 400 KB that will not compress, so the unzip's figure has something to measure.
+  mkdir -p "$b/SquareEnix/FINAL FANTASY XI/ROM/0"; /usr/bin/head -c 400000 /dev/urandom > "$b/SquareEnix/FINAL FANTASY XI/ROM/0/1.DAT"
   cd "$F/build/base" && /usr/bin/zip -qr "$seed/HorizonXI.zip" HorizonXI )
 ( u="$F/build/u3/HorizonXI"; mkdir -p "$u/addons/new"; print v3 > "$u/addons/new/new.lua"; printf '{\n  "version": "2.0.3"\n}\n' > "$u/version.json"
   print stale > "$u/stale-from-2.0.3.txt"
@@ -234,6 +262,11 @@ check "the 9 GB base zip is removed once unpacked" "[[ ! -e '$GAME/updates/Horiz
 check "the old 1.1.1 update was not applied" "! grep -q 'HorizonXI-1_1_1' '$LOG'"
 check "progress lines the launcher reads" "[[ \"\$out\" == *'==> base client in place'* && \"\$out\" == *'==> update 2.0.3 (1/2)'* && \"\$out\" == *'==> update 2.0.4 (2/2)'* ]]"
 check "python3 never ran" "! grep -q '^python3' '$LOG'"
+check "aria2 asked for its readout every 2 s, every time (it was every 60 s: 'stuck on setting up 0%')" "(( \$(grep -c '^aria2c' '$LOG') == 3 && \$(grep -c -- '--summary-interval=2 ' '$LOG') == 3 ))"
+check "its readout reaches the launcher" "[[ \"\$out\" == *'MiB(25%)'* && \"\$out\" == *'MiB(75%)'* ]]"
+check "the unzip says how far it is, after 'extracting' and before the updates" "[[ \"\$out\" == *'==> extracting HorizonXI.zip'*'==> unpacking 100%'*'==> base client in place'* ]]"
+check "no half-unpacked folder or second copy left beside the game" "[[ ! -e '$GAME/updates/.base-extract' && ! -e '$GAME/updates/.update-extract' ]]"
+print -r -- "$out" > "$F/install-output.txt"
 
 print "11. version.json there but Ashita gone (G10): the base comes back, then the updates again"
 : > "$LOG"; rm "$GAME/Ashita-cli.exe"
@@ -284,6 +317,28 @@ sed -i '' 's/xl=4096/xl=999999999999999/' "$F/api/install-game.json"
 out=$(run /bin/zsh "$UPDATE" install "$GAME" 2>&1); rc=$?
 sed -i '' 's/xl=999999999999999/xl=4096/' "$F/api/install-game.json"
 check "exit 1, says how much is needed, nothing fetched" "(( rc == 1 )) && [[ \"\$out\" == *'GB free; there are'* ]] && ! grep -q '^aria2c' '$LOG'"
+
+print "30. the button never looks stuck: the unzip's figure, a client behind a link, the launcher's reading"
+make_wrapper; : > "$LOG"
+out=$(STUB_SLOW_UNZIP=1 run /bin/zsh "$UPDATE" install "$GAME" 2>&1); rc=$?
+mid=$(print -r -- "$out" | grep -oE '==> unpacking [0-9]+%' | grep -vE ' (0|100)%$' | head -1)
+check "exit 0, a figure part way through a slow unzip (${mid:-none})" "(( rc == 0 )) && [[ '$mid' == *\\ [3-6][0-9]% ]]"
+check "the base unzip's figures only rise" "print -r -- \"\$out\" | sed -n '/extracting HorizonXI.zip/,/base client in place/p' | grep -oE 'unpacking [0-9]+%' | grep -oE '[0-9]+' | awk 'NR > 1 && \$1 < last { bad = 1 } { last = \$1 } END { exit bad }'"
+# SquareEnix a link to another folder (as on a second drive): unpacked through it, the link kept.
+make_wrapper; : > "$LOG"; rm -rf "$F/Elsewhere2"; mkdir -p "$F/Elsewhere2/SquareEnix"
+ln -s "$F/Elsewhere2/SquareEnix" "$GAME/SquareEnix"
+out=$(run /bin/zsh "$UPDATE" install "$GAME" 2>&1); rc=$?
+check "a linked SquareEnix: exit 0, its files written through the link, the link kept" "(( rc == 0 )) && [[ -L '$GAME/SquareEnix' && -f '$F/Elsewhere2/SquareEnix/FINAL FANTASY XI/FFXiMain.dll' && -f '$GAME/Ashita-cli.exe' ]]"
+check "... nothing left beside it" "[[ ! -e '$GAME/updates/.base-extract' && ! -e '$GAME/HorizonXI' ]]"
+if [[ -x "${HXI_LAUNCHER_BIN:-}" ]]; then
+  trace=$("$HXI_LAUNCHER_BIN" --progress-trace horizon-install "$F/install-output.txt" 2>&1); rc=$?
+  print -r -- "$trace" | sed 's/^/       /'
+  check "the launcher reads test 10's output as rising figures" "(( rc == 0 )) && print -r -- \"\$trace\" | awk 'NR > 1 && \$1 < last { bad = 1 } { last = \$1 } END { exit bad }'"
+  check "... naming the download, the unzip, then the updates, ending at 100" "print -r -- \"\$trace\" | awk '{ \$1 = \"\"; print }' | uniq | tr '\n' '|' | grep -q 'Downloading HorizonXI| Unpacking HorizonXI| Updating HorizonXI|' && [[ \"\$(print -r -- \"\$trace\" | tail -1)\" == '100 Updating HorizonXI' ]]"
+  check "... moving during the download (the torrent's 25% is on the button)" "print -r -- \"\$trace\" | grep -q '^14 Downloading HorizonXI'"
+else
+  print "  skip the launcher's reading (set HXI_LAUNCHER_BIN)"
+fi
 
 unset HXI_ARIA2C
 print "19. no aria2c anywhere: the pinned build is fetched once (checksum checked)"
