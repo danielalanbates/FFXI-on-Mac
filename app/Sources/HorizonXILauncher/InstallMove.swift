@@ -358,6 +358,12 @@ enum InstallMove {
             let final = folder.appendingPathComponent(part.rel)
             return final.deletingLastPathComponent().appendingPathComponent(".\(final.lastPathComponent).moving-\(stamp)")
         }
+        // A copy cut short by Quit (or a crash) left its hidden folder: ours, by name, never
+        // complete. To the Trash (never rm) before this one starts, rather than left hidden.
+        for (n, part) in p.parts.enumerated() {
+            let final = folder.appendingPathComponent(part.rel)
+            discardStale(beside: staged[n], prefix: ".\(final.lastPathComponent).moving-", log: log)
+        }
         let freeAtStart = freeBytes(folder)
         var shown = 0.0
         func tick() {
@@ -455,6 +461,7 @@ enum InstallMove {
         let expected = tally(src)
         try fm.createDirectory(at: parent, withIntermediateDirectories: true)
         let staged = parent.appendingPathComponent(".\(dest.lastPathComponent).copying-\(Int(Date().timeIntervalSince1970))")
+        discardStale(beside: staged, prefix: ".\(dest.lastPathComponent).copying-", log: log)
         let freeAtStart = freeBytes(parent)
         var shown = 0.0
         func tick() {
@@ -485,6 +492,16 @@ enum InstallMove {
                 log("partial copy moved to the Trash: \(staged.path)")
             }
             throw error
+        }
+    }
+
+    /// Earlier hidden copies named `prefix…` beside `u` (never `u` itself), to `discard`.
+    private static func discardStale(beside u: URL, prefix: String, log: (String) -> Void) {
+        let dir = u.deletingLastPathComponent()
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        where name.hasPrefix(prefix) && name != u.lastPathComponent {
+            let old = dir.appendingPathComponent(name)
+            if (try? discard(old)) != nil { log("an unfinished earlier copy moved to the Trash: \(old.path)") }
         }
     }
 

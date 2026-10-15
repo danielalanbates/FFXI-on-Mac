@@ -247,7 +247,17 @@ extension Headless {
                     && InstallMove.destinationProblem(F.appendingPathComponent("Other Drive/FFXI/SquareEnix/FINAL FANTASY XI"), plan: plan) != nil
                     && InstallMove.destinationProblem(dest, plan: plan) == nil)
             var shown: [Double] = []
+            // An earlier Move cut short by Quit left its hidden copy; a folder that only looks
+            // like one (game-wine.sh's unpack folder) is not Move's.
+            let stale = destFolder.appendingPathComponent(".\(InstallLocation.wrapperName).moving-1")
+            let notOurs = destFolder.appendingPathComponent(".wine-coop-unpack.AbC123")
+            try? fm.createDirectory(at: stale, withIntermediateDirectories: true)
+            try? fm.createDirectory(at: notOurs, withIntermediateDirectories: true)
             let moved = try InstallMove.copy(plan, into: destFolder, progress: { shown.append($0) })
+            check("an unfinished earlier Move's hidden copy is discarded first, nothing else",
+                  !fm.fileExists(atPath: stale.path) && fm.fileExists(atPath: notOurs.path)
+                    && ((try? fm.contentsOfDirectory(atPath: discarded.path)) ?? []).contains { $0.hasPrefix(stale.lastPathComponent) })
+            try? fm.removeItem(at: notOurs)
             let nw = destFolder.appendingPathComponent(InstallLocation.wrapperName)
             check("the copy is <dest>/FFXI on Mac/FFXI on Mac Wine.app, prefix10",
                   moved.wrapper.path == nw.path && moved.prefixName == "prefix10")
