@@ -67,7 +67,7 @@ struct NewsRow: View {
                 Spacer(minLength: 4)
                 Text(News.shortDate(item.date, fallback: item.printDate, now: now))
                     .font(.system(size: 11)).foregroundStyle(Vana.muted)
-                    .help(item.printDate)
+                    .help(News.longDate(item.date, fallback: item.printDate))
             }
             Text(item.title)
                 .font(.system(size: 13, weight: .medium)).foregroundStyle(Vana.text)
@@ -127,7 +127,8 @@ struct NewsSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 NewsChip(item: item)
-                Text([item.printDate, item.author].filter { !$0.isEmpty }.joined(separator: " · "))
+                Text([News.longDate(item.date, fallback: item.printDate), item.author]
+                        .filter { !$0.isEmpty }.joined(separator: " · "))
                     .font(.system(size: 12)).foregroundStyle(Vana.muted)
                 Spacer()
             }

@@ -69,6 +69,15 @@ extension Headless {
                            && News.shortDate(day("2026-09-25"), fallback: "", now: now, calendar: utc) == "Sep 25"
                            && News.shortDate(day("2025-12-31"), fallback: "", now: now, calendar: utc) == "Dec 31, 2025"
                            && News.shortDate(nil, fallback: "October 9, 2026", now: now, calendar: utc) == "October 9, 2026"))
+        var pacific = Calendar(identifier: .gregorian)
+        pacific.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        let lateEvening = item("2026-09-27_server-notices")   // 2026-09-27T05:00:48Z, printDate September 27
+        checks.append(("the sheet's date is on this Mac's calendar, like the row's; the feed's text without a date",
+                       lateEvening?.printDate == "September 27, 2026"
+                           && News.longDate(lateEvening?.date, fallback: "", calendar: pacific) == "September 26, 2026"
+                           && News.shortDate(lateEvening?.date, fallback: "", now: now, calendar: pacific) == "Sep 26"
+                           && News.longDate(lateEvening?.date, fallback: "", calendar: utc) == "September 27, 2026"
+                           && News.longDate(nil, fallback: "October 9, 2026") == "October 9, 2026"))
         checks.append(("a post's page is horizonxi.com/news/<slug>; a slug that is not one path segment gets none",
                        News.pageURL(template: "https://horizonxi.com/news/{slug}", slug: patch?.slug ?? "")?.absoluteString
                            == "https://horizonxi.com/news/2026-10-09_patch-notes_1558118587439521824"

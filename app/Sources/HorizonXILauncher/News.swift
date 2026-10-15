@@ -8,7 +8,7 @@ struct NewsItem: Identifiable, Equatable {
     let slug: String
     let title: String
     let date: Date?
-    /// The feed's own long date ("October 9, 2026"), shown in the detail sheet.
+    /// The feed's own long date ("October 9, 2026", UTC): what is shown when `date` is unreadable.
     let printDate: String
     let author: String
     /// The feed's category id (`patch-notes`, `server-notices`, `known-issues`, `announcements`).
@@ -167,6 +167,19 @@ enum News {
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = calendar.component(.year, from: d) == calendar.component(.year, from: now)
             ? "MMM d" : "MMM d, yyyy"
+        return f.string(from: d)
+    }
+
+    /// The sheet's date, on this Mac's calendar like the row's ("September 26, 2026"): the
+    /// feed's `printDate` is in UTC, and a post from late evening here would read a day later
+    /// in the sheet than in the row. The feed's text when the date could not be read.
+    static func longDate(_ d: Date?, fallback: String, calendar: Calendar = .current) -> String {
+        guard let d else { return fallback }
+        let f = DateFormatter()
+        f.calendar = calendar
+        f.timeZone = calendar.timeZone
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "MMMM d, yyyy"
         return f.string(from: d)
     }
 
