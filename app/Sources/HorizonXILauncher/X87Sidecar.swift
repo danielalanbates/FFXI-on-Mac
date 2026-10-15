@@ -38,10 +38,12 @@ enum X87Sidecar {
     /// running under any of them as this launcher's.
     ///
     /// First the "FFXI on Mac" folder the user chose, where Setup installs it since b60
-    /// (scripts/game-wine.sh; read from defaults only, no volume is touched to list it), then the
-    /// places it was installed by hand before that, so those installs keep the copy they have.
+    /// (scripts/game-wine.sh; read from defaults only, no volume is touched to list it), and the
+    /// ones chosen before it, then the places it was installed by hand before that, so those
+    /// installs keep the copy they have.
     static var patchedWineCandidates: [String] {
-        (InstallLocation.remembered.map { [InstallLocation.gameWine(in: $0).path] } ?? []) + fixedWineCandidates
+        ((InstallLocation.remembered.map { [$0] } ?? []) + InstallLocation.earlier).map { InstallLocation.gameWine(in: $0).path }
+            + fixedWineCandidates
     }
 
     static let fixedWineCandidates = [

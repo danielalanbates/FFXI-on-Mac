@@ -1895,23 +1895,133 @@ struct ContentView: View {
     /// The folder chooser, then Wine and its Windows drive built in "<chosen>/FFXI on Mac/", which
     /// becomes the install in use. False when either was cancelled (nothing written by the
     /// chooser; the sheet writes only after "Set it up").
+    ///
+    /// What is already in the chosen folder is used, never built or downloaded a second time
+    /// (ExistingInstall; Daniel, 2026-10-15: "is it going to auto recognize that and continue
+    /// setup based on the files there? or will it duplicate everything"):
+    /// - a wrapper that holds HorizonXI (siku.app, an "FFXI on Mac" folder, the old
+    ///   ~/Applications "FFXI on Mac Wine.app") becomes the install in use; the sheet runs only
+    ///   when its Wine or Windows drive is missing, and the chain does only what else is missing;
+    /// - a HorizonXI or SquareEnix folder on its own is moved into the install (same drive) or
+    ///   copied, keeping the original (another drive), on "Use Them";
+    /// - files behind a drive that is gone are never touched: "Download Fresh" puts a new copy in
+    ///   the chosen folder.
     private func setupNewLocation(adoptAlways: Bool = true) async -> Bool {
-        guard let folder = LocationPanel.choose(
+        let latest = feeds.horizonLatest
+        let gameWineFound = X87Sidecar.patchedWine() != nil
+        let need: (ExistingInstall.Found?) -> Int64 = { ExistingInstall.need($0, gameWineElsewhere: gameWineFound, latest: latest) }
+        guard let choice = LocationPanel.chooseForSetup(
             title: "Where should FFXI on Mac go?",
-            message: "Everything goes in one folder, “FFXI on Mac”, inside the folder you choose: Wine, its Windows drive and the game. Any Mac-formatted drive works, external included.",
-            prompt: "Set Up Here", need: InstallLocation.Need.fresh) else { return false }
-        Bootstrap.target = InstallLocation.wrapper(in: folder)
-        guard await runSetupSheet() else { return false }
-        let built = InstallLocation.install(in: folder)
-        InstallLocation.remember(folder)
+            message: "Everything goes in one folder, “FFXI on Mac”, inside the folder you choose: Wine, its Windows drive and the game. A folder that already holds HorizonXI is used as it is. Any Mac-formatted drive works, external included.",
+            prompt: "Set Up Here", need: need) else { return false }
+        var found = choice.found
+        // Files behind a drive that is gone: never touched. A fresh copy here, on a yes.
+        if let f = found, let d = f.unreachableDrive {
+            guard ask("HorizonXI here is on the '\(d)' drive, which isn't connected.",
+                      "Setup can download a fresh copy into “\(f.home.path)” instead. Nothing on the '\(d)' drive is changed.",
+                      yes: "Download Fresh", no: "Cancel") else { return false }
+            found = ExistingInstall.fresh(f)
+        }
+        // A HorizonXI (or SquareEnix) folder on its own: moved or copied in, on a yes.
+        var bring: ExistingInstall.Client?
+        if let f = found, let c = f.client, !f.clientInWrapper {
+            let what = c.squareEnixOnly ? "FINAL FANTASY XI files" : "HorizonXI files"
+            if ask("Use the \(what) already here?",
+                   (c.sameVolume ? "They'll be moved into FFXI on Mac, not copied:"
+                                 : "They're on another drive, so they'll be copied into FFXI on Mac; the originals stay where they are:")
+                   + "\n\n\(c.url.path)", yes: "Use Them", no: "Download Fresh") {
+                bring = c
+            } else {
+                found = ExistingInstall.fresh(f)
+            }
+        }
+        let home = found?.home ?? choice.folder
+        if bring == nil, let f = found, !f.clientInWrapper {
+            // Download Fresh needs the full room: said now, before anything is written.
+            let at = FileManager.default.fileExists(atPath: home.path) ? home : home.deletingLastPathComponent()
+            let v = InstallLocation.verdict(InstallLocation.facts(for: at), need: need(found))
+            if !v.isOK { notice = v.line; return false }
+        }
+        if let f = found {
+            runner.logFileOnly("==> Setup found in \(home.path): \(f.line)")
+            if f.wrapper != nil { setupMeter.meter.drop(.wine) }
+            if f.gameWine != nil { setupMeter.meter.drop(.gameWine) }
+            if let c = f.client, c.complete, !c.squareEnixOnly, f.clientInWrapper || bring != nil,
+               let v = c.version, let l = latest, !Primary.isNewer(l, than: v) {
+                setupMeter.meter.drop(.game)
+            }
+            if bring != nil { setupMeter.meter.plan(.files) }
+        }
+        // Wine and its Windows drive: the found wrapper's when it has them, else built here.
+        let install = found?.wrapper ?? InstallLocation.install(in: home)
+        if !Bootstrap.isBuilt(install.wrapper) || !FileManager.default.fileExists(atPath: install.systemReg.path) {
+            Bootstrap.target = install.wrapper
+            guard await runSetupSheet() else { return false }
+        }
+        InstallLocation.remember(home)
+        if let c = bring {
+            setupStep(.files)
+            guard await bringIn(c, to: install) else { return false }
+        }
         // Install dependencies… beside an install that already has the game keeps that one in
         // use (G11); the new one is in the picker.
         if adoptAlways || selected?.hasGame != true {
-            built.remember()
-            installs = [built] + installs.filter { $0.id != built.id }
-            selected = built
+            install.remember()
+            installs = Install.dedupe([install] + installs.filter { $0.id != install.id }, keep: install.id)
+            selected = install
+            forgetUnreachableData()
         }
         return true
+    }
+
+    /// One question, two answers; true for `yes`.
+    private func ask(_ message: String, _ info: String, yes: String, no: String) -> Bool {
+        let a = NSAlert()
+        a.messageText = message
+        a.informativeText = info
+        a.addButton(withTitle: yes)
+        a.addButton(withTitle: no)
+        return a.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Setup's step: a client found on its own goes into `install` -- one rename on the same drive
+    /// (ExistingInstall.moveIn), or a verified copy from another drive that keeps the original
+    /// (Runner.copyIn) -- and any world's folder setting that named it follows it.
+    private func bringIn(_ c: ExistingInstall.Client, to i: Install) async -> Bool {
+        let dest = ExistingInstall.destination(for: c, in: i)
+        if c.sameVolume {
+            do {
+                try ExistingInstall.moveIn(c, to: i, log: { runner.logFileOnly("==> " + $0) })
+            } catch {
+                let line = (error as? InstallMove.Refusal)?.line ?? error.localizedDescription
+                runner.appendLine("!! " + line)
+                notice = line
+                return false
+            }
+        } else {
+            let ok = await withCheckedContinuation { cont in runner.copyIn(c.url, to: dest) { cont.resume(returning: $0) } }
+            guard ok else { return false }
+        }
+        let classic = i.driveC.appendingPathComponent("HorizonXI")
+        for srv in store.servers {
+            if let p = ExistingInstall.rewritten(srv.dataPath, from: c.url, to: dest,
+                                                 classic: srv.local || srv.name == "HorizonXI" ? classic : nil) {
+                var s = srv; s.dataPath = p; store.update(s)
+            }
+        }
+        return true
+    }
+
+    /// The worlds that play the wrapper's own client (HorizonXI, the local server), pointed back at
+    /// it when their folder setting names files behind a drive that is gone or no longer there:
+    /// Setup set up the wrapper's own, and the old setting would keep the button on Setup.
+    private func forgetUnreachableData() {
+        let fm = FileManager.default
+        for srv in store.servers where (srv.local || srv.name == "HorizonXI") && !srv.dataPath.isEmpty {
+            guard Preflight.unavailableDrive(for: srv.dataPath) != nil || !fm.fileExists(atPath: srv.dataPath) else { continue }
+            runner.logFileOnly("==> \(srv.name)'s game folder \(srv.dataPath) isn't there; it plays the install's own now")
+            var s = srv; s.dataPath = ""; store.update(s)
+        }
     }
 
     private func runSetupSheet() async -> Bool {
@@ -2440,7 +2550,9 @@ struct ContentView: View {
         }
 
         scanning = true
-        let found = await Task.detached(priority: .userInitiated) { Install.discover() }.value
+        // One entry per set of game files (Install.dedupe), the one in use kept.
+        let keep = selected?.id
+        let found = await Task.detached(priority: .userInitiated) { Install.dedupe(Install.discover(), keep: keep) }.value
         scanning = false
         // Nothing found: the checks still run, so the button can name a remembered install's
         // missing drive instead of offering a setup from scratch (G6).
@@ -2450,7 +2562,7 @@ struct ContentView: View {
             // The selected install still holds the game but was not found (its wine is broken,
             // or it is outside the scanned folders): keep it rather than switching to an empty
             // wrapper and asking for a 9 GB download again (G11).
-            installs = [cur] + found
+            installs = Install.dedupe([cur] + found, keep: cur.id)
         } else if selected == nil || !found.contains(where: { $0.id == selected?.id }) {
             selected = found.first
         }

@@ -62,7 +62,23 @@ enum InstallLocation {
         return URL(fileURLWithPath: p, isDirectory: true)
     }
 
-    static func remember(_ folder: URL) { defaults.set(folder.standardizedFileURL.path, forKey: key) }
+    static func remember(_ folder: URL) {
+        let now = folder.standardizedFileURL.path
+        if let was = defaults.string(forKey: key), !was.isEmpty, was != now {
+            let list = [was] + (defaults.stringArray(forKey: earlierKey) ?? []).filter { $0 != was && $0 != now }
+            defaults.set(Array(list.prefix(3)), forKey: earlierKey)
+        }
+        defaults.set(now, forKey: key)
+    }
+
+    private static let earlierKey = "install.location.earlier"
+
+    /// The folders chosen before the last one, newest first (three at most). The game's Wine Setup
+    /// put in one of them is still found (X87Sidecar.patchedWineCandidates), so choosing a new
+    /// place, or using an older install, never downloads it a second time.
+    static var earlier: [URL] {
+        (defaults.stringArray(forKey: earlierKey) ?? []).map { URL(fileURLWithPath: $0, isDirectory: true) }
+    }
 
     // MARK: - Space
 
@@ -76,6 +92,8 @@ enum InstallLocation {
         static let gameZip: Int64 = 9_426_920_806
         static let gameUnpacked: Int64 = 15_500_000_000
         static let fresh: Int64 = wine + gameWine + gameZip + gameUnpacked
+        /// Roughly what an update takes, zip and unzip, for a client found a version or more behind.
+        static let update: Int64 = 1_000_000_000
     }
 
     /// What stays free on the Mac's own disk, for macOS (and swap on an 8 GB Mac).
@@ -127,6 +145,8 @@ enum InstallLocation {
         }
         if f.isReadOnly { return .refused("This drive is read-only. Choose another.") }
         if !f.isWritable { return .refused("This folder can't be written to. Choose another.") }
+        // Nothing left to write (everything Setup needs was found here): no space to keep.
+        if need <= 0 { return .ok(free: f.freeBytes, need: 0) }
         let total = need + (f.isBootVolume ? bootFloor : 0)
         if f.freeBytes < total {
             return .refused("Not enough space here: \(gb(f.freeBytes)) free, about \(gbUp(total)) needed.")
@@ -145,7 +165,8 @@ enum InstallLocation {
 
     /// "120.4 GB free here · about 27 GB needed".
     static func spaceLine(free: Int64, need: Int64) -> String {
-        "\(gb(free)) free here · about \(gbUp(need)) needed"
+        need <= 0 ? "\(gb(free)) free here · nothing more to download"
+                  : "\(gb(free)) free here · about \(gbUp(need)) needed"
     }
 
     static func gb(_ bytes: Int64) -> String { String(format: "%.1f GB", Double(bytes) / 1e9) }
@@ -205,24 +226,55 @@ enum InstallLocation {
     }
 }
 
-/// The folder chooser for Setup and Move: an open panel for folders, with one line under it that
+/// The folder chooser for Setup and Move: an open panel for folders, with a line under it that
 /// says how much room the selected drive has against what is needed, or why it can't be used.
 /// Choosing a folder that can't be used is refused in the panel, which stays open; Cancel
 /// returns nil and nothing has been written.
+///
+/// Setup's chooser also looks for an install already in the selected folder (ExistingInstall),
+/// off the main thread while the user browses: a second line says what it found ("Found
+/// HorizonXI 2.0.4 here — Setup will use it."), and the space line then counts only what is
+/// still missing. Inside Desktop, Documents and Downloads it looks only once a folder there has
+/// been chosen (macOS asks the user before anything there is read).
 @MainActor final class LocationPanel: NSObject, NSOpenSavePanelDelegate {
-    private let need: Int64
-    private let extra: (URL) -> String?
-    private let label = NSTextField(labelWithString: "")
+    /// What the user chose: the "FFXI on Mac" folder Setup works in (or the folder an older
+    /// install found there is in), and what was found.
+    struct Choice {
+        let folder: URL
+        let found: ExistingInstall.Found?
+    }
 
-    private init(need: Int64, extra: @escaping (URL) -> String?) {
-        self.need = need; self.extra = extra
+    private let need: (ExistingInstall.Found?) -> Int64
+    private let detect: Bool
+    private let extra: (URL) -> String?
+    private let foundLabel = NSTextField(labelWithString: "")
+    private let label = NSTextField(labelWithString: "")
+    /// What `ExistingInstall.find` said for each folder looked at (nil inside: nothing there).
+    private var found: [String: ExistingInstall.Found?] = [:]
+    private var looking: Set<String> = []
+    private var shown: URL?
+
+    private init(need: @escaping (ExistingInstall.Found?) -> Int64, detect: Bool, extra: @escaping (URL) -> String?) {
+        self.need = need; self.detect = detect; self.extra = extra
     }
 
     /// The "FFXI on Mac" folder for the chosen place, or nil when cancelled. `extra` adds
     /// refusals of its own (Move: not inside the install being moved).
     static func choose(title: String, message: String, prompt: String, need: Int64,
                        extra: @escaping (URL) -> String? = { _ in nil }) -> URL? {
-        let d = LocationPanel(need: need, extra: extra)
+        run(title: title, message: message, prompt: prompt, need: { _ in need }, detect: false, extra: extra)?.folder
+    }
+
+    /// Setup's chooser: what is already in the chosen folder is found, and `need` is asked what
+    /// is still missing given it.
+    static func chooseForSetup(title: String, message: String, prompt: String,
+                               need: @escaping (ExistingInstall.Found?) -> Int64) -> Choice? {
+        run(title: title, message: message, prompt: prompt, need: need, detect: true, extra: { _ in nil })
+    }
+
+    private static func run(title: String, message: String, prompt: String, need: @escaping (ExistingInstall.Found?) -> Int64,
+                            detect: Bool, extra: @escaping (URL) -> String?) -> Choice? {
+        let d = LocationPanel(need: need, detect: detect, extra: extra)
         let panel = NSOpenPanel()
         panel.title = title
         panel.message = message
@@ -232,13 +284,15 @@ enum InstallLocation {
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
         panel.treatsFilePackagesAsDirectories = false
-        panel.directoryURL = InstallLocation.defaultDirectory(need: need)
-        d.label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        d.label.lineBreakMode = .byTruncatingTail
-        d.label.frame = NSRect(x: 0, y: 0, width: 460, height: 22)
-        let box = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 30))
-        d.label.frame.origin = NSPoint(x: 10, y: 4)
-        box.addSubview(d.label)
+        panel.directoryURL = InstallLocation.defaultDirectory(need: need(nil))
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: detect ? 48 : 30))
+        for (k, l) in [d.label, d.foundLabel].enumerated() {
+            l.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            l.lineBreakMode = .byTruncatingTail
+            l.frame = NSRect(x: 10, y: 4 + CGFloat(k) * 20, width: 460, height: 20)
+            if k == 0 || detect { box.addSubview(l) }
+        }
+        d.foundLabel.textColor = .labelColor
         panel.accessoryView = box
         panel.isAccessoryViewDisclosed = true
         panel.delegate = d
@@ -247,18 +301,54 @@ enum InstallLocation {
         panel.delegate = nil
         guard ok, let url = panel.url else { return nil }
         // The panel validated it; a drive that went away since is refused here.
-        guard d.verdict(url).isOK else { return nil }
-        return InstallLocation.folder(for: url)
+        let f = d.foundNow(url)
+        guard d.verdict(url, f).isOK else { return nil }
+        return Choice(folder: f?.home ?? InstallLocation.folder(for: url), found: f)
     }
 
-    private func verdict(_ url: URL) -> InstallLocation.Verdict {
-        if let why = extra(url) { return .refused(why) }
-        return InstallLocation.verdict(InstallLocation.facts(for: url), need: need)
+    /// What is in `url`, looked for now if the browsing look has not finished (the user pressed
+    /// the button: a short wait on a bounded look, which is also the one look inside Downloads).
+    private func foundNow(_ url: URL) -> ExistingInstall.Found? {
+        guard detect else { return nil }
+        if let f = found[url.path] { return f }
+        let f = ExistingInstall.find(in: url)
+        found[url.path] = .some(f)
+        return f
+    }
+
+    private func verdict(_ url: URL, _ f: ExistingInstall.Found?) -> InstallLocation.Verdict {
+        if let why = extra(url) ?? ExistingInstall.refusal(f) { return .refused(why) }
+        // Asked of where Setup will write: the folder an install found here is in, or the chosen
+        // folder (its "FFXI on Mac" folder may not exist yet).
+        var at = (f?.home ?? url).standardizedFileURL
+        while !FileManager.default.fileExists(atPath: at.path), at.path != "/" { at = at.deletingLastPathComponent() }
+        return InstallLocation.verdict(InstallLocation.facts(for: at), need: need(f))
     }
 
     private func show(_ url: URL?) {
-        guard let url else { label.stringValue = ""; return }
-        let v = verdict(url)
+        shown = url
+        guard let url else { label.stringValue = ""; foundLabel.stringValue = ""; return }
+        if detect, found[url.path] == nil, !ExistingInstall.isGated(url) {
+            foundLabel.stringValue = "Looking for an earlier install here…"
+            foundLabel.textColor = .secondaryLabelColor
+            label.stringValue = ""
+            if looking.insert(url.path).inserted {
+                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                    let f = ExistingInstall.find(in: url)
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        self.looking.remove(url.path)
+                        self.found[url.path] = .some(f)
+                        if self.shown == url { self.show(url) }
+                    }
+                }
+            }
+            return
+        }
+        let f = found[url.path] ?? nil
+        foundLabel.stringValue = f?.line ?? ""
+        foundLabel.textColor = f?.unreachableDrive == nil ? .labelColor : .systemOrange
+        let v = verdict(url, f)
         label.stringValue = v.line
         label.textColor = v.isOK ? .secondaryLabelColor : .systemRed
     }
@@ -273,7 +363,7 @@ enum InstallLocation {
     }
 
     func panel(_ sender: Any, validate url: URL) throws {
-        if case .refused(let why) = verdict(url) {
+        if case .refused(let why) = verdict(url, foundNow(url)) {
             throw NSError(domain: "FFXIOnMac.location", code: 1, userInfo: [NSLocalizedDescriptionKey: why])
         }
     }

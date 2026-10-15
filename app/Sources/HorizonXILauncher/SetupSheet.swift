@@ -39,6 +39,7 @@ struct SetupSheet: View {
                     .font(.callout).foregroundStyle(Vana.muted)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(location == nil ? "Press Setup on the main window to choose where it goes."
+                     : repairing && Bootstrap.isBuilt(location!) ? "Wine is already in \(location!.path); only its Windows drive is made."
                      : repairing ? "Wine is replaced in \(location!.path); its Windows drive and game stay as they are."
                      : "Everything goes in \(location!.deletingLastPathComponent().path): Wine and its Windows drive now, the game's Wine and the game next.")
                     .font(.system(size: 12)).foregroundStyle(Vana.text)

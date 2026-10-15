@@ -487,6 +487,35 @@ final class Runner: ObservableObject {
         }
     }
 
+    /// Setup's copy of a HorizonXI client found on another drive into the install
+    /// (ExistingInstall, InstallMove.copyTree), as one job under the maintenance lock, with its
+    /// progress on the button. The original is never changed.
+    func copyIn(_ source: URL, to dest: URL, done: @escaping (Bool) -> Void) {
+        if refuseWhileBusy("the copy") { done(false); return }
+        guard claimForMaintenance("Copy") else { done(false); return }
+        beginBusy("Copying")
+        moveProgress = 0
+        appendLine("==> copying \(source.path) to \(dest.path) (the original stays)")
+        let note: @Sendable (String) -> Void = { [weak self] line in Task { @MainActor in self?.logFileOnly(line) } }
+        let report: @Sendable (Double) -> Void = { [weak self] f in Task { @MainActor in self?.moveProgress = f } }
+        Task.detached(priority: .userInitiated) { [self] in
+            let result = Result { try InstallMove.copyTree(source, to: dest, log: note, progress: report) }
+            await MainActor.run {
+                self.endMaintenance()
+                self.busy = false
+                self.moveProgress = nil
+                switch result {
+                case .success:
+                    self.appendLine("==> copied and verified: \(dest.path)")
+                    done(true)
+                case .failure(let e):
+                    self.appendLine("!! " + ((e as? InstallMove.Refusal)?.line ?? "The copy didn't finish: \(e.localizedDescription)"))
+                    done(false)
+                }
+            }
+        }
+    }
+
     /// `scripts/update-client.sh` ships next to install.sh in the bundle.
     static func updateScript() -> URL? {
         if let u = Bundle.main.url(forResource: "update-client", withExtension: "sh") { return u }

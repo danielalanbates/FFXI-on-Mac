@@ -371,6 +371,33 @@ struct Install: Identifiable, Hashable {
         }
     }
 
+    /// One entry per set of game files: never two installs of the same world in the picker
+    /// (Daniel, 2026-10-15). Entries whose game files are one folder on disk -- the same wrapper
+    /// reached through a link, a second prefix or wrapper whose HorizonXI links to the first's,
+    /// the link Setup leaves where it moved a client from (ExistingInstall.moveIn) -- are one
+    /// install: `keep` (the one in use) stays, otherwise the first. Only the list changes, never
+    /// anything on disk. Entries without game files are told apart by their prefix.
+    static func dedupe(_ list: [Install], keep: String? = nil) -> [Install] {
+        let fm = FileManager.default
+        func key(_ i: Install) -> String {
+            let ffxi = i.squareEnix.appendingPathComponent("FINAL FANTASY XI").path
+            if fm.fileExists(atPath: ffxi), let r = InstallMove.canonical(ffxi) { return "game:" + r }
+            return "prefix:" + (InstallMove.canonical(i.prefix.path) ?? i.prefix.standardizedFileURL.path)
+        }
+        var at: [String: Int] = [:]
+        var out: [Install] = []
+        for i in list {
+            let k = key(i)
+            if let n = at[k] {
+                if i.id == keep { out[n] = i }
+                continue
+            }
+            at[k] = out.count
+            out.append(i)
+        }
+        return out
+    }
+
     /// Where `discover()` looks, in order. The folder Setup was told to use comes first: it
     /// can be anywhere the user chose, deeper than the shallow scan below reaches.
     static func discoveryRoots(location: URL? = InstallLocation.remembered) -> [URL] {

@@ -416,6 +416,63 @@ enum InstallMove {
         }
     }
 
+    /// One folder copied as it is into `dest`, the way a Move copies (ExistingInstall: a HorizonXI
+    /// client found on another drive than the install it joins): under a hidden name, counted
+    /// against the source, and only then renamed into place. The source is never changed; its
+    /// links stay links. What was at `dest` -- an empty folder, or the launcher's own unfinished
+    /// download -- goes to the Trash (`discard`) only once the copy is verified, and a failed
+    /// copy's partial folder goes there too.
+    static func copyTree(_ source: URL, to dest: URL, log: (String) -> Void = { _ in },
+                         progress: (Double) -> Void = { _ in }) throws {
+        let fm = FileManager.default
+        if let d = Preflight.unavailableDrive(for: source.path) {
+            throw Refusal("The '\(d)' drive isn't connected, so its files can't be copied.")
+        }
+        let src = canonical(source.path) ?? source.standardizedFileURL.path
+        let dest = dest.standardizedFileURL
+        let parent = dest.deletingLastPathComponent()
+        if let d = Preflight.unavailableDrive(for: parent.path) {
+            throw Refusal("The '\(d)' drive isn't connected. Choose another place.")
+        }
+        guard dest.path != src, !dest.path.hasPrefix(src + "/") else {
+            throw Refusal("The game files can't be copied into themselves.")
+        }
+        let expected = tally(src)
+        try fm.createDirectory(at: parent, withIntermediateDirectories: true)
+        let staged = parent.appendingPathComponent(".\(dest.lastPathComponent).copying-\(Int(Date().timeIntervalSince1970))")
+        let freeAtStart = freeBytes(parent)
+        var shown = 0.0
+        func tick() {
+            let done = Double(max(0, freeAtStart - freeBytes(parent)))
+            let f = min(0.99, expected.bytes > 0 ? done / Double(expected.bytes) : 0)
+            if f > shown { shown = f; progress(f) }
+        }
+        do {
+            try ditto(src, staged.path, tick: tick)
+            let got = tally(staged.path)
+            guard got == expected else {
+                log("copy: \(got); source: \(expected)")
+                throw Refusal("The copy came out different from the original, so it wasn't used.")
+            }
+            var st = stat()
+            if lstat(dest.path, &st) == 0 {
+                if st.st_mode & S_IFMT == S_IFDIR, ((try? fm.contentsOfDirectory(atPath: dest.path)) ?? ["?"]).isEmpty {
+                    try fm.removeItem(at: dest)
+                } else {
+                    try discard(dest)
+                    log("moved to the Trash to make way for the copy: \(dest.path)")
+                }
+            }
+            try fm.moveItem(at: staged, to: dest)
+            progress(1)
+        } catch {
+            if fm.fileExists(atPath: staged.path), (try? discard(staged)) != nil {
+                log("partial copy moved to the Trash: \(staged.path)")
+            }
+            throw error
+        }
+    }
+
     /// The wrapper, without its other prefixes: ditto per entry of Contents and SharedSupport.
     private static func copyWrapper(_ w: URL, to dest: URL, excluded: Set<String>, tick: () -> Void) throws {
         let fm = FileManager.default
