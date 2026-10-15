@@ -8,6 +8,7 @@
 #                          — the DXVK + d3d8to9 DLLs ride inside it, so the Metal
 #                            renderer needs no separate download
 #   START HERE.md          the non-technical setup guide
+#   LICENSE.txt, Third-Party Notices.txt
 #
 # What does NOT ship, and why:
 #   * The game client (15-30 GB, per world) — it is Square Enix's data and may not be
@@ -16,7 +17,7 @@
 #     it properly means carrying the LGPL's source/relink obligations, so the launcher fetches
 #     it from Sikarugir's own releases and assembles it on the user's Mac (*Install wine...*).
 #
-# So the 5 MB image is the launcher, and the launcher gets the other two itself. Nothing here
+# So the ~9 MB image is the launcher, and the launcher gets the other two itself. Nothing here
 # leaves the user at a Terminal prompt.
 set -euo pipefail
 
@@ -67,6 +68,19 @@ ditto "$APP" "$STAGE/FFXI-on-Mac.app"
 ln -s /Applications "$STAGE/Applications"
 cp "$REPO/README.md"     "$STAGE/README.md"
 cp "$REPO/docs/SETUP.md" "$STAGE/START HERE.md"
+# Licences: ours, and every third-party text the app carries in one file (the same texts as
+# Contents/Resources/ThirdPartyNotices, its README.txt index first).
+cp "$REPO/LICENSE" "$STAGE/LICENSE.txt"
+NOTICES="$APP/Contents/Resources/ThirdPartyNotices"
+[[ -f "$NOTICES/README.txt" ]] || { echo "app carries no third-party notices: $NOTICES" >&2; exit 1; }
+{
+  cat "$NOTICES/README.txt"
+  for notice in "$NOTICES"/*.txt(N); do
+    [[ "${notice:t}" == README.txt ]] && continue
+    print -r -- ""; print -r -- "==== ${notice:t:r} ===="; print -r -- ""
+    cat "$notice"
+  done
+} > "$STAGE/Third-Party Notices.txt"
 
 CANDIDATE="$WORK/$NAME"
 hdiutil create -quiet -volname "FFXI on Mac" -srcfolder "$STAGE" -format UDZO "$CANDIDATE"

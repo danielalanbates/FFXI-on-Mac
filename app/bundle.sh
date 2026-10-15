@@ -88,7 +88,10 @@ for required in \
   "$REPO/scripts/install.sh" "$REPO/scripts/fix-wine-rpath.sh" \
   "$REPO/scripts/lsb-server.sh" "$REPO/scripts/update-client.sh" \
   "$REPO/scripts/catseye-launcher.sh" "$REPO/scripts/retail-client.sh" \
-  "$REPO/vendor/dxvk.conf"; do
+  "$REPO/vendor/dxvk.conf" "$REPO/LICENSE" \
+  "$REPO/vendor/licenses/README.txt" "$REPO/vendor/licenses/d3d8to9-BSD-3-Clause.txt" \
+  "$REPO/vendor/licenses/DXVK-zlib.txt" "$REPO/vendor/licenses/MoltenVK-Apache-2.0.txt" \
+  "$REPO/vendor/licenses/cereal-BSD-3-Clause.txt" "$REPO/vendor/licenses/x87sidecar-MIT.txt"; do
   [[ -f "$required" ]] || { echo "required bundle input missing: $required" >&2; exit 1; }
 done
 
@@ -122,10 +125,15 @@ for dll in d3d8to9.dll dxvk-1.10.3-x32-d3d9-horizonxi.dll libMoltenVK-1.4.2.dyli
 done
 # DXVK's settings file. Play copies it into the prefix and sets DXVK_CONFIG_FILE (Renderer.swift).
 cp "$REPO/vendor/dxvk.conf" "$APP/Contents/Resources/dxvk.conf"
+# The licence texts travel with the binaries (BSD-3, zlib, Apache-2.0 and MIT all require it), and
+# this project's own LICENSE beside them. Index and provenance: vendor/NOTICE.md.
+mkdir -p "$APP/Contents/Resources/ThirdPartyNotices"
+cp "$REPO/vendor/licenses/"*.txt "$APP/Contents/Resources/ThirdPartyNotices/"
+cp "$REPO/LICENSE" "$APP/Contents/Resources/LICENSE"
 
 # x87sidecar: the fix for FFXI's x87 floating-point math running ~100x slow under Rosetta (see
-# docs/X87-WALL.md). Signed individually below with its own entitlements -- the app's deep-sign
-# strips them otherwise, and without get-task-allow/cs.debugger it cannot attach to the game.
+# docs/X87-WALL.md). Signed individually below, before the app -- x87sidecar_entitled needs its
+# own cs.debugger entitlement to attach to the game. Order and reasons: vendor/NOTICE.md.
 if [[ -f "$REPO/vendor/x87sidecar-coop" ]]; then
   # Cooperative-mode sidecar (no entitlements, notarizable); preferred on macOS >= 26.5.2.
   cp "$REPO/vendor/x87sidecar-coop" "$APP/Contents/Resources/x87sidecar-coop"
@@ -195,8 +203,8 @@ fi
 # that can be notarised. Use the certificate *hash*, not its name -- there are two identical
 # "Developer ID Application: Daniel Bates" certs in the login keychain and codesign rejects
 # the name as ambiguous. Do NOT pass --timestamp here: it hangs on this network.
-# Order matters, and the obvious order is wrong. x87sidecar_entitled needs its own entitlements
-# (get-task-allow, cs.debugger) or it cannot attach to the game at all. Signing it *after* the
+# Order matters, and the obvious order is wrong. x87sidecar_entitled needs its own entitlement
+# (cs.debugger; get-task-allow is left out because the notary rejects it) or it cannot attach. Signing it *after* the
 # app breaks the app's seal -- `codesign -v` then reports "a sealed resource is missing or
 # invalid" and Gatekeeper rejects the bundle. So sign the nested binary FIRST, then sign the app
 # WITHOUT --deep, which leaves nested signatures alone and seals them as they are.
