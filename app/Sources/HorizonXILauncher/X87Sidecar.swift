@@ -25,7 +25,8 @@ enum X87Sidecar {
     /// nothing left to hook. Belongs on the *game's* environment, set before it launches.
     static let requiredEnvironment = ["ROSETTA_DISABLE_AOT": "1"]
 
-    /// The patched CrossOver wine from athei/wine-build, installed per machine at this path.
+    /// The patched CrossOver wine from athei/wine-build (`wine-cx-26.3.0-1`, "wine-coop"), per
+    /// machine, never in the app bundle.
     ///
     /// It arrived here for x87 cooperative mode, but it matters on its own: **the wrapper's own
     /// wine kills the client one second after login.** Measured 2026-08-21, same prefix, same
@@ -35,7 +36,15 @@ enum X87Sidecar {
     /// the launch wine whenever it is present, sidecar or no sidecar. See docs/WINE-BUILD.md.
     /// Where the patched wine is looked for, in order. `OwnWine` counts a Windows program
     /// running under any of them as this launcher's.
-    static let patchedWineCandidates = [
+    ///
+    /// First the "FFXI on Mac" folder the user chose, where Setup installs it since b60
+    /// (scripts/game-wine.sh; read from defaults only, no volume is touched to list it), then the
+    /// places it was installed by hand before that, so those installs keep the copy they have.
+    static var patchedWineCandidates: [String] {
+        (InstallLocation.remembered.map { [InstallLocation.gameWine(in: $0).path] } ?? []) + fixedWineCandidates
+    }
+
+    static let fixedWineCandidates = [
         "/Volumes/Games/FFXI/wine-coop/wine/bin/wine",
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/BatesAI/ffxi-runtime/wine-coop/wine/bin/wine").path,

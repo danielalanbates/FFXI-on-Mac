@@ -319,22 +319,21 @@ struct OwnWine: Equatable {
         return String(cString: r)
     }
 
-    private static let patchedRoots: [String] = X87Sidecar.patchedWineCandidates.map {
-        URL(fileURLWithPath: $0).deletingLastPathComponent().deletingLastPathComponent().path
-    }
     /// Scans run on and off the main actor.
     private static let cacheLock = NSLock()
-    private static var cache: (wrapper: String?, own: OwnWine)?
+    private static var cache: (wrapper: String?, patched: [String], own: OwnWine)?
 
-    /// This launcher's builds, from the remembered install (read from defaults only, so no
-    /// volume is touched to find it). Cached until the remembered wrapper changes.
+    /// This launcher's builds, from the remembered install and folder (read from defaults only,
+    /// so no volume is touched to find them). Cached until either changes.
     static func current() -> OwnWine {
         let wrapper = Install.rememberedWrapper()?.path
+        let patched = X87Sidecar.patchedWineCandidates
         cacheLock.lock()
         defer { cacheLock.unlock() }
-        if let c = cache, c.wrapper == wrapper { return c.own }
-        let own = OwnWine(roots: patchedRoots + (wrapper.map { [$0 + "/Contents/SharedSupport/wine"] } ?? []))
-        cache = (wrapper, own)
+        if let c = cache, c.wrapper == wrapper, c.patched == patched { return c.own }
+        let roots = patched.map { URL(fileURLWithPath: $0).deletingLastPathComponent().deletingLastPathComponent().path }
+        let own = OwnWine(roots: roots + (wrapper.map { [$0 + "/Contents/SharedSupport/wine"] } ?? []))
+        cache = (wrapper, patched, own)
         return own
     }
 }

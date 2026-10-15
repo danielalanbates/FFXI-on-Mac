@@ -74,6 +74,9 @@ enum PrimaryAction: Equatable {
     enum SetupNeed: Equatable {
         /// No wrapper anywhere: Wine and the Windows drive come first.
         case install
+        /// Rosetta 2 is not installed: no Wine here (all x86_64) can run. macOS's own
+        /// administrator prompt installs it (Bootstrap.ensureRosetta).
+        case rosetta
         /// The remembered wrapper sits on this drive, which is not there (ghost or unplugged).
         case wrapperDrive(String)
         /// The game files sit on (or link into) this drive, which is not there.
@@ -84,7 +87,8 @@ enum PrimaryAction: Equatable {
         case game(partial: Bool)
         /// The world has no download route, or its folder is not chosen / ambiguous.
         case chooseFolder
-        /// The patched game Wine (wine-coop) is not on this Mac. See docs/WINE-BUILD.md.
+        /// The patched game Wine (wine-coop) is not on this Mac: Setup downloads it
+        /// (scripts/game-wine.sh). See docs/WINE-BUILD.md.
         case gameWine
         /// The local world's server is not built yet. `lowSpace`: the disk is below its floor
         /// and "Set up anyway" is not ticked, so the click asks first.
@@ -125,6 +129,7 @@ enum PrimaryAction: Equatable {
         case .setup(let n):
             switch n {
             case .install: return "install"
+            case .rosetta: return "rosetta"
             case .wrapperDrive: return "wrapper-drive"
             case .dataDrive: return "data-drive"
             case .wine: return "wine"
@@ -176,6 +181,7 @@ struct PrimaryInputs {
     var driveStates: [String: Preflight.DriveState] = [:]
     var hasGame = true
     var patchedWineMissing = false
+    var rosettaMissing = false
 
     var restartingLauncher = false
     /// Setup's chain is running (it shows progress even between its jobs).
@@ -216,10 +222,6 @@ enum Primary {
     /// `Work.label`, with " 42%" when the job reports how far it is.
     static let verbs: Set<String> = ["Setup", "Update", "Repair", "Play", "Stop", "Play Another"]
 
-    /// The one line Setup ends with when the patched game Wine is missing: no download for it is
-    /// pinned in this project yet (docs/BETA-60.md, "Game Wine").
-    static let gameWineUnavailable = "The game's Wine can't be installed from here yet."
-
     static func decide(_ x: PrimaryInputs) -> PrimaryDecision {
         if x.restartingLauncher { return make(.working(.updating, progress: nil), x) }
         if x.setupRunning { return make(.working(.settingUp, progress: x.setupProgress), x) }
@@ -245,7 +247,10 @@ enum Primary {
             return make(driveAction(d, x.driveStates[d], wrapper: c.id == "volume"), x)
         }
         if bad.contains(where: { $0.id == "fda" }) { return make(.repair(.access), x) }
+        // Setup's order from here: Rosetta, Wine, the game's Wine, the game, its configuration.
+        if x.rosettaMissing { return make(.setup(.rosetta), x) }
         if bad.contains(where: { $0.id == "wine" }) { return make(.setup(.wine), x) }
+        if x.patchedWineMissing { return make(.setup(.gameWine), x) }
         if !x.hasGame || bad.contains(where: { gameFiles.contains($0.id) }) {
             // Partial: Ashita or the base data is there, so this is a repair of the download, not
             // a first one.
@@ -253,7 +258,6 @@ enum Primary {
             return make(x.canDownload ? .setup(.game(partial: partial)) : .setup(.chooseFolder), x)
         }
         if bad.contains(where: { $0.id == "worldclient" }) { return make(.setup(.chooseFolder), x) }
-        if x.patchedWineMissing { return make(.setup(.gameWine), x) }
         if bad.contains(where: { fixedByRepair.contains($0.id) }) { return make(.repair(.wine), x) }
         if let other = bad.first(where: { !fixedByPlay.contains($0.id) }) {
             return make(.repair(.check(id: other.id, line: other.footer)), x)
@@ -322,6 +326,8 @@ enum Primary {
             switch need {
             case .install:
                 return .init(action: a, label: "Setup", enabled: true, reason: "\(w) isn't installed yet.")
+            case .rosetta:
+                return .init(action: a, label: "Setup", enabled: true, reason: "Apple's Rosetta isn't installed yet.")
             case .wrapperDrive(let d), .dataDrive(let d):
                 return .init(action: a, label: "Setup", enabled: true, reason: Preflight.driveLine(d, .absent))
             case .wine:
@@ -374,6 +380,7 @@ enum Primary {
         var horizonInstalled: String?
         var clientInstalled: String?
         var patchedWineMissing = false
+        var rosettaMissing = false
         var profileHasAccount = false
         /// The game's files are on (or link to) another drive than Wine: the Setup line offers Move.
         var dataElsewhere = false
@@ -394,6 +401,7 @@ enum Primary {
             p.profileHasAccount = profileHasAccount(i, profile: profile)
         }
         p.patchedWineMissing = X87Sidecar.patchedWine() == nil
+        p.rosettaMissing = Bootstrap.rosettaMissing()
         p.dataElsewhere = InstallMove.dataElsewhere(i)
         return p
     }

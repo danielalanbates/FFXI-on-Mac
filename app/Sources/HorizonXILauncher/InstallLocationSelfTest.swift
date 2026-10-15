@@ -35,7 +35,7 @@ extension Headless {
         func refused(_ f: InstallLocation.Facts) -> Bool { !InstallLocation.verdict(f, need: need).isOK }
         check("a local APFS folder with room is accepted: \(line(good))",
               InstallLocation.verdict(good, need: need) == .ok(free: 200_000_000_000, need: need)
-                && line(good) == "200.0 GB free here · about 27 GB needed")
+                && line(good) == "200.0 GB free here · about 28 GB needed")
         var f = good; f.fsType = "hfs"
         check("Mac OS Extended is accepted", !refused(f))
         var lines: [String] = []
@@ -58,10 +58,10 @@ extension Headless {
         f = good; f.freeBytes = need - 1
         lines.append(line(f))
         check("not enough space is refused with both numbers: \(line(f))",
-              refused(f) && line(f).contains("free") && line(f).contains("about 27 GB needed"))
+              refused(f) && line(f).contains("free") && line(f).contains("about 28 GB needed"))
         f = good; f.isBootVolume = true; f.freeBytes = need + 1_000_000_000
         lines.append(line(f))
-        check("the Mac's own disk keeps 8 GB free: \(line(f))", refused(f) && line(f).contains("about 35 GB needed"))
+        check("the Mac's own disk keeps 8 GB free: \(line(f))", refused(f) && line(f).contains("about 36 GB needed"))
         f.freeBytes = need + InstallLocation.bootFloor + 1
         check("... and is accepted with room for it", !refused(f))
         f = good; f.isCloud = true
@@ -75,8 +75,9 @@ extension Headless {
         check("a drive that is gone is refused, naming it: \(line(f))", refused(f) && line(f).contains("'Games'"))
         check("every refusal is one short plain line, never 'restart'",
               lines.allSatisfy { !$0.contains("\n") && $0.count <= 80 && !$0.lowercased().contains("restart") })
-        check("a fresh install needs about 27 GB (Wine 1.4 + zip 9.4 + game 15.5)",
-              InstallLocation.gbUp(need) == "27 GB" && need > 26_000_000_000 && need < 27_000_000_000)
+        check("a fresh install needs about 28 GB (Wine 1.4 + the game's Wine 1.3 + zip 9.4 + game 15.5)",
+              InstallLocation.gbUp(need) == "28 GB" && need > 27_000_000_000 && need < 28_000_000_000)
+        check("the game's Wine alone needs about 2 GB (tarball + unpacked)", InstallLocation.gbUp(InstallLocation.Need.gameWine) == "2 GB")
 
         // MARK: Facts from real folders (read-only)
         let base: URL
@@ -206,6 +207,20 @@ extension Headless {
         let destFolder = InstallLocation.folder(for: dest)
         InstallLocation.remember(destFolder)
         check("the choice is remembered", InstallLocation.remembered?.path == destFolder.path)
+        // The game's Wine: Setup puts it in the chosen folder, and that is where it is looked for
+        // first; the places it was put by hand before b60 still follow.
+        check("the game's Wine is looked for in the chosen folder first, then the old places",
+              X87Sidecar.patchedWineCandidates == [destFolder.path + "/wine-coop/wine/bin/wine"] + X87Sidecar.fixedWineCandidates)
+        let wineHere = InstallLocation.folder(for: F.appendingPathComponent("Wine Here"))
+        mk("Wine Here/FFXI on Mac/wine-coop/wine/bin/wine", exec: true)
+        InstallLocation.remember(wineHere)
+        let savedWine = ProcessInfo.processInfo.environment["FFXI_ON_MAC_WINE"]
+        unsetenv("FFXI_ON_MAC_WINE")
+        check("a game Wine Setup installed in the chosen folder is the one Play runs",
+              X87Sidecar.patchedWine()?.path == InstallLocation.gameWine(in: wineHere).path
+                && OwnWine.current().owns(executable: wineHere.path + "/wine-coop/wine/lib/wine/x86_64-unix/wine"))
+        if let w = savedWine { setenv("FFXI_ON_MAC_WINE", w, 1) }
+        InstallLocation.remember(destFolder)
         check("discovery looks in the remembered folder first (once it exists)",
               Install.discoveryRoots(location: F.appendingPathComponent("Old Place")).first?.path == F.appendingPathComponent("Old Place").path
                 && !Install.discoveryRoots(location: destFolder).contains { $0.path == destFolder.path })

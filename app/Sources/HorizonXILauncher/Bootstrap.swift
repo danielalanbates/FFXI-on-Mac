@@ -139,16 +139,42 @@ enum Bootstrap {
 
     // MARK: - Step 1: Rosetta
 
-    private static func ensureRosetta(log: @escaping @Sendable (String) -> Void) async throws {
-        // The honest test is whether an x86_64 binary actually runs, not whether some file exists.
+    /// An x86_64 program runs on this Mac (Rosetta 2 is installed, or the Mac is Intel). The
+    /// honest test is whether one actually runs, not whether some file exists.
+    static func rosettaRuns() -> Bool {
         let probe = Process()
         probe.executableURL = URL(fileURLWithPath: "/usr/bin/arch")
         probe.arguments = ["-x86_64", "/usr/bin/true"]
         probe.standardOutput = FileHandle.nullDevice
         probe.standardError = FileHandle.nullDevice
-        try? probe.run()
+        guard (try? probe.run()) != nil else { return false }
         probe.waitUntilExit()
-        if probe.terminationStatus == 0 {
+        return probe.terminationStatus == 0
+    }
+
+    /// Once it runs it stays installed; only a "no" is asked again.
+    private static let rosettaSeen = NSLock()
+    private static var rosettaKnownGood = false
+
+    /// What the main button reads: Rosetta 2 is missing, so every Wine here (all x86_64) cannot
+    /// run and Setup installs it first. `FFXI_ON_MAC_ROSETTA=missing|present` stands in for the
+    /// answer in tests; it never makes Setup run softwareupdate (`ensureRosetta` asks the Mac).
+    static func rosettaMissing() -> Bool {
+        switch ProcessInfo.processInfo.environment["FFXI_ON_MAC_ROSETTA"] {
+        case "missing": return true
+        case "present": return false
+        default: break
+        }
+        rosettaSeen.lock(); defer { rosettaSeen.unlock() }
+        if rosettaKnownGood { return false }
+        rosettaKnownGood = rosettaRuns()
+        return !rosettaKnownGood
+    }
+
+    /// Installs Rosetta 2 through macOS's own administrator prompt (never Terminal), unless an
+    /// x86_64 program already runs. Setup's first step, in the sheet and on the main button.
+    static func ensureRosetta(log: @escaping @Sendable (String) -> Void) async throws {
+        if rosettaRuns() {
             log("Rosetta 2 is already installed.")
             return
         }

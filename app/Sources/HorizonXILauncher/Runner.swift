@@ -23,7 +23,8 @@ final class Runner: ObservableObject {
         }
     }
     @Published var starting = false
-    /// True while update-client.sh is applying HorizonXI updates; lets the UI offer Stop.
+    /// True while update-client.sh is applying HorizonXI updates, or game-wine.sh is fetching the
+    /// game's Wine: its progress feeds the button and the UI offers Stop.
     @Published var updatingHorizon = false
     /// 0...1 across every pending update zip, and a short label ("2.0.4 · 1 of 2").
     @Published var updateProgress: Double = 0
@@ -956,6 +957,41 @@ final class Runner: ObservableObject {
             self?.updatingHorizon = false
             self?.appendLine("==> install exited \(code)")
             self?.reportFailure(code, "HorizonXI download didn't finish — press Setup again to resume")
+            done(code == 0)
+        }
+    }
+
+    /// `scripts/game-wine.sh` ships next to install.sh in the bundle.
+    static func gameWineScript() -> URL? {
+        if let u = Bundle.main.url(forResource: "game-wine", withExtension: "sh") { return u }
+        return devScript("game-wine.sh")
+    }
+
+    /// Setup's game-Wine step: athei's pinned wine-coop into `<folder>/wine-coop` (game-wine.sh
+    /// install), its download's progress on the button and the same Stop as a HorizonXI
+    /// download. A Stop or a dropped connection resumes on the next press.
+    func installGameWine(into folder: URL, done: @escaping (Bool) -> Void) {
+        if refuseWhileBusy("the game's Wine") { done(false); return }
+        if let d = Preflight.unavailableDrive(for: folder.path) {
+            appendLine("!! " + Preflight.driveLine(d, Preflight.driveState(d))); done(false); return
+        }
+        guard let script = Self.gameWineScript() else {
+            appendLine("!! game-wine.sh not found in the bundle"); done(false); return
+        }
+        beginBusy("Downloading the game's Wine")
+        updatingHorizon = true
+        installingBase = false; phase = (0, 1)
+        updateProgress = 0; updateLabel = ""; updateStep = (1, 1)
+        appendLine("==> installing the game's Wine into \(folder.path)")
+        // The pin is the script's own: its test-only overrides never come from this app.
+        var env = Self.downloadEnvironment()
+        for k in ["HXI_GAME_WINE_URL", "HXI_GAME_WINE_BYTES", "HXI_GAME_WINE_SHA256"] { env[k] = "" }
+        spawn(URL(fileURLWithPath: "/bin/zsh"), args: [script.path, "install", folder.path],
+              env: env, cwd: Self.scratchDir) { [weak self] code in
+            self?.busy = false
+            self?.updatingHorizon = false
+            self?.appendLine("==> game wine exited \(code)")
+            self?.reportFailure(code, "The game's Wine didn't install — press Setup again")
             done(code == 0)
         }
     }

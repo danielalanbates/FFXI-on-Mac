@@ -54,6 +54,7 @@ extension Headless {
         x.driveStates = p.driveStates
         x.hasGame = p.hasGame
         x.patchedWineMissing = p.patchedWineMissing
+        x.rosettaMissing = p.rosettaMissing
         x.horizonInstalled = p.horizonInstalled
         x.clientInstalled = p.clientInstalled
         x.clientRequired = server.requiredClient

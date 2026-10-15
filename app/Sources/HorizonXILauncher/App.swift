@@ -276,6 +276,7 @@ struct ContentView: View {
         x.driveStates.merge(probe.driveStates) { $1 }
         x.hasGame = probe.hasGame
         x.patchedWineMissing = probe.patchedWineMissing
+        x.rosettaMissing = probe.rosettaMissing
         x.restartingLauncher = updateInstalling
         x.setupRunning = setupRunning
         x.setupProgress = runner.updatingHorizon ? runner.updateProgress : setupProgress
@@ -1699,8 +1700,10 @@ struct ContentView: View {
     ///
     ///   1. location -- the folder chooser, before anything is written: everything goes in
     ///      "<chosen>/FFXI on Mac/" (`setupLocationStep`, InstallLocation);
-    ///   2. Wine and the Windows drive in that folder (Bootstrap, in the setup sheet);
-    ///   3. the patched game Wine -- no pinned download yet, so it is said at the end;
+    ///   2. Wine and the Windows drive in that folder (Bootstrap, in the setup sheet), Rosetta 2
+    ///      first (macOS's administrator prompt; on its own when only Rosetta is missing);
+    ///   3. the game's Wine, athei's pinned wine-coop, into the same folder (scripts/game-wine.sh,
+    ///      `setupGameWineStep`), with its download's progress on the button;
     ///   4. the game: HorizonXI's base, Ashita and every update (update-client.sh install),
     ///      or the world's own installer;
     ///   5. registry, COM and Wine's library links (Repair, install.sh);
@@ -1717,11 +1720,9 @@ struct ContentView: View {
         setupProgress = nil
         notice = ""
         let r = runner
-        var gameWineMissing = false
         defer {
             setupRunning = false
             setupProgress = nil
-            if gameWineMissing, nextNeed == .setup(.gameWine) { notice = Primary.gameWineUnavailable }
             recheck()
         }
         // Each step at most once per press: a step that did not fix its need says why in its
@@ -1750,6 +1751,8 @@ struct ContentView: View {
             if done.contains(need) { return }
             done.append(need)
             switch need {
+            case .rosetta:
+                guard await setupRosettaStep(r) else { return }
             case .install, .wrapperDrive, .wine:
                 guard await setupLocationStep(need) else { return }
                 await refreshAsync()
@@ -1761,14 +1764,7 @@ struct ContentView: View {
                 await recheckSettled()
                 guard await configureIfNeeded() else { return }
             case .gameWine:
-                // No pinned download for it yet (see Primary.gameWineUnavailable). Everything
-                // after it still gets done, and the line at the end says what is left.
-                gameWineMissing = true
-                guard await configureIfNeeded() else { return }
-                if store.selected?.local == true, local.status?.ready == false {
-                    guard await setupLocalServerStep(r) else { return }
-                }
-                return
+                guard await setupGameWineStep(r) else { return }
             case .localServer:
                 guard await setupLocalServerStep(r) else { return }
             }
@@ -1887,6 +1883,48 @@ struct ContentView: View {
         store.update(c)
         recheck()
         return true
+    }
+
+    /// Setup's Rosetta 2 on its own (an install whose Wine is there, on a Mac without Rosetta: a
+    /// new Mac set up from a backup). macOS's own administrator prompt; never Terminal.
+    private func setupRosettaStep(_ r: Runner) async -> Bool {
+        r.appendLine("==> installing Rosetta 2")
+        let failure = await Task.detached(priority: .userInitiated) { () -> String? in
+            do {
+                try await Bootstrap.ensureRosetta(log: { line in Task { @MainActor in r.logFileOnly(line) } })
+                return nil
+            } catch {
+                return error.localizedDescription
+            }
+        }.value
+        if let why = failure { r.appendLine("!! " + why); return false }
+        return true
+    }
+
+    /// Setup step 3: the game's Wine (scripts/game-wine.sh) into the "FFXI on Mac" folder the
+    /// user chose. An install made before b60 has no chosen folder (or its drive is gone, or it
+    /// has no room): the chooser asks where, and that becomes the folder, which is where
+    /// `X87Sidecar.patchedWine` looks first. False when cancelled or when the download failed
+    /// (its own "!!" line says why; the next press resumes it).
+    private func setupGameWineStep(_ r: Runner) async -> Bool {
+        let fm = FileManager.default
+        var folder = InstallLocation.remembered
+        if let f = folder, !fm.fileExists(atPath: f.path)
+            || !InstallLocation.verdict(InstallLocation.facts(for: f), need: InstallLocation.Need.gameWine).isOK {
+            folder = nil
+        }
+        if folder == nil {
+            guard let chosen = LocationPanel.choose(
+                title: "Where should the game's Wine go?",
+                message: "It goes in “FFXI on Mac/wine-coop” inside the folder you choose. Any Mac-formatted drive works, external included.",
+                prompt: "Put It Here", need: InstallLocation.Need.gameWine) else { return false }
+            folder = chosen
+        }
+        guard let folder else { return false }
+        InstallLocation.remember(folder)
+        return await withCheckedContinuation { c in
+            r.installGameWine(into: folder) { ok in c.resume(returning: ok) }
+        }
     }
 
     /// Setup step 4: the game files. HorizonXI's (and the local world's, which plays HorizonXI's

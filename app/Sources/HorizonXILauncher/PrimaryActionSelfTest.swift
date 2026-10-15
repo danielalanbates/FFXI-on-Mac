@@ -75,12 +75,29 @@ extension Headless {
         x = base; x.checks = [bad("worldclient")]
         expect("no folder chosen / ambiguous -> Setup (choose the folder)", x, .setup(.chooseFolder))
 
-        // The game Wine, Repair, and what Play fixes itself.
+        // Rosetta and the game Wine: enabled Setups that install them (b60 part 3), in Setup's
+        // order -- Rosetta, Wine, the game's Wine, the game -- so one press does them all.
+        x = base; x.rosettaMissing = true
+        expect("Rosetta missing -> Setup (macOS's own password prompt)", x, .setup(.rosetta), enabled: true,
+               reason: "Apple's Rosetta isn't installed yet.")
+        x.checks = [bad("wine"), bad("client")]; x.patchedWineMissing = true
+        expect("Rosetta, Wine and the game's Wine all missing -> Rosetta first", x, .setup(.rosetta))
+        x = base; x.rosettaMissing = true; x.checks = [bad("squareenix", drive: "Games")]; x.driveStates = ["Games": .ghost]
+        expect("a missing drive outranks Rosetta", x, .setup(.dataDrive("Games")))
+        x = base; x.hasInstall = false; x.rosettaMissing = true
+        expect("nothing installed, Rosetta missing -> plain Setup (the sheet installs Rosetta first)", x, .setup(.install),
+               reason: "HorizonXI isn't installed yet.")
         x = base; x.patchedWineMissing = true
-        expect("patched game Wine missing -> Setup", x, .setup(.gameWine), enabled: true,
+        expect("patched game Wine missing -> Setup, enabled (it downloads it)", x, .setup(.gameWine), enabled: true,
                reason: "The game's Wine isn't installed yet.")
         x.checks = [bad("rpath")]
         expect("game Wine and Wine's links both missing -> Setup first (its chain repairs too)", x, .setup(.gameWine))
+        x = base; x.patchedWineMissing = true; x.hasGame = false; x.checks = [bad("client"), bad("squareenix"), bad("ashita")]
+        expect("game Wine and the game both missing -> the game's Wine first (before the 9.4 GB download)", x, .setup(.gameWine))
+        x = base; x.patchedWineMissing = true; x.checks = [bad("wine")]
+        expect("Wine and the game's Wine both missing -> Wine first", x, .setup(.wine))
+
+        // Repair, and what Play fixes itself.
         x = base; x.checks = [bad("rpath"), bad("reg32")]
         expect("Wine's library links -> Repair", x, .repair(.wine), enabled: true, reason: "Wine needs a quick repair.")
         x = base; x.checks = [bad("reg32"), bad("reglayout"), bad("com"), bad("sandbox")]
@@ -178,7 +195,7 @@ extension Headless {
         // Wording, over every state above and every action: the label is one of Daniel's verbs
         // or a running job's progress; one short plain line; no "restart" anywhere.
         let allActions: [PrimaryAction] = [
-            .setup(.install), .setup(.wrapperDrive("x10")), .setup(.dataDrive("Games")), .setup(.wine),
+            .setup(.install), .setup(.rosetta), .setup(.wrapperDrive("x10")), .setup(.dataDrive("Games")), .setup(.wine),
             .setup(.game(partial: false)), .setup(.game(partial: true)), .setup(.chooseFolder), .setup(.gameWine),
             .setup(.localServer(lowSpace: false)), .setup(.localServer(lowSpace: true)),
             .update(world: "HorizonXI", to: "2.0.5"), .update(world: "CatsEyeXI", to: "30251204_1"),
@@ -212,8 +229,8 @@ extension Headless {
         results.append(("no 'restart' in any label or reason (Daniel, 2026-10-15)"
                         + (restarts.isEmpty ? "" : " -- " + restarts.joined(separator: "; ")), restarts.isEmpty))
         let lines = [Preflight.driveMessage("Games"), Preflight.driveLine("Games", .ghost), Preflight.driveLine("Games", .absent),
-                     Preflight.driveLine("Games", .unmounted(device: "disk9s1")), Primary.gameWineUnavailable]
-        results.append(("drive lines and Setup's last line never say restart",
+                     Preflight.driveLine("Games", .unmounted(device: "disk9s1"))]
+        results.append(("drive lines never say restart",
                         !lines.contains { $0.lowercased().contains("restart") }))
         // Never a greyed-out PLAY (Daniel, 2026-10-15). Every state above and every action:
         // Play / Play Another are always pressable; anything that does not start the game is an
@@ -270,7 +287,22 @@ extension Headless {
                             && !PrimaryFixer.isHeadlessFixable(.repair(.host)) && !PrimaryFixer.isHeadlessFixable(.enterAccount)
                             && !PrimaryFixer.isHeadlessFixable(.setup(.install)) && !PrimaryFixer.isHeadlessFixable(.setup(.dataDrive("a")))
                             && !PrimaryFixer.isHeadlessFixable(.play) && !PrimaryFixer.isHeadlessFixable(.repair(.access))
-                            && !PrimaryFixer.isHeadlessFixable(.stop)))
+                            && !PrimaryFixer.isHeadlessFixable(.stop)
+                            // They need a person: a password prompt, a place to put it.
+                            && !PrimaryFixer.isHeadlessFixable(.setup(.rosetta)) && !PrimaryFixer.isHeadlessFixable(.setup(.gameWine))))
+
+        // Rosetta's answer, injected (FFXI_ON_MAC_ROSETTA), and this Mac's own (read-only: arch -x86_64 true).
+        let savedFlag = ProcessInfo.processInfo.environment["FFXI_ON_MAC_ROSETTA"]
+        setenv("FFXI_ON_MAC_ROSETTA", "missing", 1)
+        let saysMissing = Bootstrap.rosettaMissing()
+        let probed = Primary.probe(fake, profile: "horizonxi.ini", horizon: true, requiredClient: "").rosettaMissing
+        setenv("FFXI_ON_MAC_ROSETTA", "present", 1)
+        let saysPresent = !Bootstrap.rosettaMissing()
+        unsetenv("FFXI_ON_MAC_ROSETTA")
+        let runs = Bootstrap.rosettaRuns()
+        results.append(("Rosetta: the injected flag is read (missing, and by the probe; present)", saysMissing && probed && saysPresent))
+        results.append(("Rosetta on this Mac: \(runs ? "x86_64 runs" : "missing"); rosettaMissing agrees", Bootstrap.rosettaMissing() == !runs))
+        if let f = savedFlag { setenv("FFXI_ON_MAC_ROSETTA", f, 1) }
         try? fm.removeItem(at: tmp)
 
         var failed = 0

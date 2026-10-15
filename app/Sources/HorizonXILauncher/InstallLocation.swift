@@ -13,6 +13,7 @@ import Foundation
 ///     <chosen>/FFXI on Mac/
 ///         FFXI on Mac Wine.app/                    Wine and its Windows drive (prefix10)
 ///             Contents/SharedSupport/prefix10/drive_c/HorizonXI/   HorizonXI, SquareEnix included
+///         wine-coop/wine/bin/wine                  the game's Wine (scripts/game-wine.sh)
 ///         Games/<world>/                           any other world's game files
 ///
 /// Setup asks for the folder before it writes anything (`LocationPanel`), and refuses one it
@@ -22,6 +23,7 @@ enum InstallLocation {
     static let folderName = "FFXI on Mac"
     static let wrapperName = "FFXI on Mac Wine.app"
     static let worldsFolder = "Games"
+    static let gameWineFolder = "wine-coop"
 
     // MARK: - Layout
 
@@ -33,6 +35,11 @@ enum InstallLocation {
     }
 
     static func wrapper(in folder: URL) -> URL { folder.appendingPathComponent(wrapperName, isDirectory: true) }
+
+    /// The game's Wine Setup installs here (scripts/game-wine.sh), as `X87Sidecar.patchedWine` finds it.
+    static func gameWine(in folder: URL) -> URL {
+        folder.appendingPathComponent(gameWineFolder, isDirectory: true).appendingPathComponent("wine/bin/wine")
+    }
 
     /// A world other than HorizonXI keeps its own client here (HorizonXI's is inside the
     /// wrapper's Windows drive, where its installer and the registry expect it).
@@ -61,12 +68,14 @@ enum InstallLocation {
 
     /// What a fresh HorizonXI install takes at its peak, measured (docs/BETA-60.md): Wine and its
     /// Windows drive about 1.4 GB; HorizonXI's base zip 9,426,920,806 bytes (manifest 2.0.2),
-    /// unpacked about 15.5 GB beside it until update-client.sh deletes the zip.
+    /// unpacked about 15.5 GB beside it until update-client.sh deletes the zip. The game's Wine:
+    /// its 203,696,924-byte tarball and the 1.13 GB it unpacks to (game-wine.sh).
     enum Need {
         static let wine: Int64 = 1_400_000_000
+        static let gameWine: Int64 = 203_696_924 + 1_130_000_000
         static let gameZip: Int64 = 9_426_920_806
         static let gameUnpacked: Int64 = 15_500_000_000
-        static let fresh: Int64 = wine + gameZip + gameUnpacked
+        static let fresh: Int64 = wine + gameWine + gameZip + gameUnpacked
     }
 
     /// What stays free on the Mac's own disk, for macOS (and swap on an 8 GB Mac).

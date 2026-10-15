@@ -9,7 +9,7 @@ import AppKit
 /// Since b60 it is step 2 of the main button's Setup (ContentView.runSetup), after the user chose
 /// the folder (`LocationPanel`): it says where Wine and its Windows drive will go and builds
 /// nothing until "Set it up" is pressed. On success it closes itself and the main button carries
-/// on with the game, into the same folder.
+/// on with the game's Wine and the game, into the same folder.
 struct SetupSheet: View {
     /// Called once: true when wine is in place (the launcher rescans and Setup carries on),
     /// false when the sheet was cancelled.
@@ -38,7 +38,7 @@ struct SetupSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
                 Text(location == nil ? "Press Setup on the main window to choose where it goes."
                      : repairing ? "Wine is replaced in \(location!.path); its Windows drive and game stay as they are."
-                     : "Everything goes in \(location!.deletingLastPathComponent().path): Wine and its Windows drive now, the game next.")
+                     : "Everything goes in \(location!.deletingLastPathComponent().path): Wine and its Windows drive now, the game's Wine and the game next.")
                     .font(.system(size: 12)).foregroundStyle(Vana.text)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
