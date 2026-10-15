@@ -1327,6 +1327,9 @@ final class Runner: ObservableObject {
     /// Ends this session's client only. The wineserver is shared by every world in the prefix,
     /// so it is stopped only once no client at all is left.
     func stop(_ install: Install) {
+        // No x87 verdict on a session being ended: Stop takes the sidecar down at once while the
+        // loader can outlive SIGTERM by seconds, which the minute check would read as a failure.
+        x87Settled = true
         proc?.terminate()
         let generation = launchGeneration
         Task { [weak self] in
