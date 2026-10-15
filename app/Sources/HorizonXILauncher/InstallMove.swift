@@ -192,7 +192,7 @@ enum InstallMove {
                 if let d = Preflight.unavailableDrive(for: physAbs) { throw Refusal(unreachable(d)) }
                 // A folder that holds this link, or one already being copied on the way here,
                 // would copy forever: left a link, like a dangling one or a whole drive.
-                guard let real = realPath(physAbs), resolvable(real, install: insides),
+                guard let real = canonical(physAbs), resolvable(real, install: insides),
                       !phys.hasPrefix(real + "/"),
                       !chain.contains(where: { $0 == real || $0.hasPrefix(real + "/") }) else {
                     p.expected.links += 1
@@ -223,6 +223,10 @@ enum InstallMove {
         defer { free(r) }
         return String(cString: r)
     }
+
+    /// The real path, spelled the way `standardizedFileURL` spells the install's own paths
+    /// (`/var/…` rather than `/private/var/…`), so the two can be compared.
+    static func canonical(_ path: String) -> String? { realPath(path).map(normalize) }
 
     /// The game's files are on (or link to) another drive than the wrapper, whether or not that
     /// drive is there. Read-only: lstat/readlink, statfs.

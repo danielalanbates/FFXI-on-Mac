@@ -35,6 +35,7 @@ enum Headless {
             || a.contains("--selftest-perf")
             || a.contains("--selftest-ui-text")
             || a.contains("--selftest-primary-action")
+            || a.contains("--selftest-install-location")
             || a.contains("--next-action")
             || a.contains("--fix")
             || a.contains("--selftest-single-instance")
@@ -87,6 +88,9 @@ enum Headless {
         }
         if args.contains("--selftest-primary-action") {
             runPrimaryActionSelfTest()
+        }
+        if args.contains("--selftest-install-location") {
+            runInstallLocationSelfTest()
         }
         if let at = args.firstIndex(of: "--selftest-single-instance-probe") {
             runSingleInstanceProbe(Array(args[(at + 1)...]))
