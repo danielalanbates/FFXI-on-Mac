@@ -129,6 +129,15 @@ extension Headless {
         checks.append(("Stop's wineserver wait: done at once when quick, gives up at its limit",
                        Runner.finishes(within: 2) {}
                            && !Runner.finishes(within: 0.1) { Thread.sleep(forTimeInterval: 1) }))
+        // Past its limit a wait counts as stuck (Play refuses rather than hang the window on the
+        // same wineserver) until it returns; one that returned in time never counts.
+        let late = WineserverStopWait()
+        let lateStuck = late.markStuck(), whileStuck = WineserverStopWait.anyStuck
+        late.finish()
+        let quick = WineserverStopWait()
+        quick.finish()
+        checks.append(("Stop's wineserver wait: Play is refused only while one is stuck past its limit",
+                       lateStuck && whileStuck && !quick.markStuck() && !WineserverStopWait.anyStuck))
 
         // Play-time checks: nothing when fine, one short line when real.
         checks.append(("Low Power Mode: one line when on, nothing when off",

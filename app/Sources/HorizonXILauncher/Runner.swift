@@ -962,6 +962,14 @@ final class Runner: ObservableObject {
             logFileOnly("!! " + why)
             return why
         }
+        // A Stop's wineserver wait is still stuck past its limit (a flush on a dropped drive).
+        // With no client live this launch stops that same wineserver on the main thread (the
+        // renderer step, then `wineserver -w`) and the window would hang on it: refuse instead.
+        if !g.clientsLive, WineserverStopWait.anyStuck {
+            let why = "Wine is still shutting down from the last Stop. If this stays, restart the Mac."
+            logFileOnly("!! " + why)
+            return why
+        }
         // The startup check can still be between its stale read and maintenance lock when
         // someone clicks Play. Check again while holding the launch lock: never hand a stale
         // prefix to Wine, whose own update opens a foreground progress window.
@@ -1429,11 +1437,14 @@ final class Runner: ObservableObject {
                     lockHandedOff = true
                     let owner = self
                     Task.detached(priority: .userInitiated) {
+                        let wait = WineserverStopWait()
                         let done = Runner.finishes(within: Runner.wineserverStopLimit) {
                             _ = RendererSetup.stopWineserver(install)
+                            wait.finish()
                         }
                         if let lock { LaunchLock.release(lock) }
-                        guard !done else { return }
+                        // Still stuck: Play refuses until it returns (see launch).
+                        guard !done, wait.markStuck() else { return }
                         await MainActor.run {
                             owner?.logFileOnly("wineserver -k/-w still running after "
                                                + "\(Int(Runner.wineserverStopLimit)) s; launch lock released")
@@ -1662,6 +1673,38 @@ final class TailStop: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard gone, !ended else { return false }
         ended = true
+        return true
+    }
+}
+
+/// One Stop's wineserver wait. Once it outlives `Runner.wineserverStopLimit` it counts as stuck
+/// until it returns, however late. While any is stuck, `launch` refuses rather than stop the same
+/// wineserver again on the main thread, where it would hang the window.
+final class WineserverStopWait: @unchecked Sendable {
+    private static let lock = NSLock()
+    private static var stuckCount = 0
+    private var finished = false
+    private var counted = false
+
+    static var anyStuck: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return stuckCount > 0
+    }
+
+    /// The wait returned: no longer stuck.
+    func finish() {
+        Self.lock.lock(); defer { Self.lock.unlock() }
+        finished = true
+        if counted { counted = false; Self.stuckCount -= 1 }
+    }
+
+    /// The limit passed. True when it is now counted as stuck (it had not returned meanwhile).
+    @discardableResult
+    func markStuck() -> Bool {
+        Self.lock.lock(); defer { Self.lock.unlock() }
+        guard !finished, !counted else { return false }
+        counted = true
+        Self.stuckCount += 1
         return true
     }
 }
