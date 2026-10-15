@@ -728,14 +728,24 @@ final class Runner: ObservableObject {
         var env = ProcessInfo.processInfo.environment
         env["WINEPREFIX"] = ip.prefix.path; env["WINEDEBUG"] = "-all"
         env.removeValue(forKey: "DYLD_FALLBACK_LIBRARY_PATH"); env.removeValue(forKey: "DYLD_LIBRARY_PATH")
+        // Stopped while the prefix was being made: nothing else starts.
+        let proceed: @MainActor (Install) -> Void = { [weak self] ip in
+            if let self, self.stopRequested { self.busy = false; return }
+            then(ip)
+        }
         Task.detached {
             let p = Process()
             p.executableURL = ip.wine; p.arguments = ["wineboot", "-u"]; p.environment = env
             p.standardOutput = Pipe(); p.standardError = Pipe()
-            try? p.run(); p.waitUntilExit()
+            if (try? p.run()) != nil {
+                // Quit ends it and its session (JobKill).
+                JobKill.track(p.processIdentifier, wine: .init(server: ip.wineserver, prefix: ip.prefix))
+                p.waitUntilExit()
+                JobKill.untrack(p.processIdentifier)
+            }
             let k = Process(); k.executableURL = ip.wineserver; k.arguments = ["-k"]; k.environment = ["WINEPREFIX": ip.prefix.path]
             try? k.run(); k.waitUntilExit()
-            await MainActor.run { then(ip) }
+            await MainActor.run { proceed(ip) }
         }
     }
 
@@ -768,6 +778,8 @@ final class Runner: ObservableObject {
                      "-A", "FFXI-on-Mac", "-o", file.path, url.absoluteString],
               env: [:], cwd: dl) { [weak self] code in
             guard let self else { return }
+            // Stopped: the part downloaded stays for the next press; no error, no web page.
+            if self.stopRequested { self.busy = false; return }
             // curl 33 = server refused the range because the file is already complete.
             guard code == 0 || (code == 33 && FileManager.default.fileExists(atPath: file.path)) else {
                 self.appendLine("!! download failed (curl \(code)). If \(nm) has moved its installer, get it from their site and use Run installer….")
@@ -799,6 +811,7 @@ final class Runner: ObservableObject {
                      "-A", "FFXI-on-Mac", "-o", file.path, url.absoluteString],
               env: [:], cwd: dl) { [weak self] code in
             guard let self else { return }
+            if self.stopRequested { self.busy = false; return }
             guard code == 0 || (code == 33 && FileManager.default.fileExists(atPath: file.path)) else {
                 self.appendLine("!! download failed (curl \(code)).")
                 self.busy = false
@@ -837,16 +850,21 @@ final class Runner: ObservableObject {
             appendLine("==> unpacking \(file.lastPathComponent)")
             // Off the main actor: a client-sized zip (Eden's is 5.8 GB) is minutes of ditto, and
             // the window froze for all of it.
+            // The job's process while it runs, so Stop (and Quit) end it like any other.
+            let d = Process(); d.executableURL = URL(fileURLWithPath: "/usr/bin/ditto"); d.arguments = ["-x", "-k", file.path, out.path]
+            d.standardOutput = FileHandle.nullDevice; d.standardError = FileHandle.nullDevice
+            proc = d
             Task { [weak self] in
                 let found = await Task.detached(priority: .userInitiated) { () -> URL? in
                     try? FileManager.default.removeItem(at: out)
-                    let d = Process(); d.executableURL = URL(fileURLWithPath: "/usr/bin/ditto"); d.arguments = ["-x", "-k", file.path, out.path]
-                    d.standardOutput = FileHandle.nullDevice; d.standardError = FileHandle.nullDevice
                     guard (try? d.run()) != nil else { return nil }
+                    JobKill.track(d.processIdentifier, wine: nil)
                     d.waitUntilExit()
+                    JobKill.untrack(d.processIdentifier)
                     return d.terminationStatus == 0 ? Runner.firstExe(under: out) : nil
                 }.value
                 guard let self else { return }
+                if self.stopRequested { self.busy = false; return }
                 guard let found else {
                     self.appendLine("!! could not unpack \(file.lastPathComponent) or no .exe inside it"); self.busy = false; return
                 }
