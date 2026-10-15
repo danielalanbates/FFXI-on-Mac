@@ -1,9 +1,9 @@
 # Bundling — the blocker is smaller than it looked
 
-Written 2026-08-11. `HANDOFF.md` §5 recorded bundling as blocked because "the wrapper in use
-(`siku.app`) is CrossOver-derived (`moltenvkcx/`, `wine.cx32bak/`, `prefixcx24/`)". Those three
-directories are real, but they are **leftovers, not the engine in use**. The wine that actually
-runs the game is not CrossOver's.
+Written 2026-08-11. The then-current `HANDOFF.md` §5 (now `archive/docs-2026-08/`) recorded bundling
+as blocked because "the wrapper in use (`siku.app`) is CrossOver-derived (`moltenvkcx/`,
+`wine.cx32bak/`, `prefixcx24/`)". Those three directories are real, but they are **leftovers, not
+the engine in use**. The wine that actually runs the game is not CrossOver's.
 
 ## What is actually running
 

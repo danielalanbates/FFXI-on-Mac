@@ -124,14 +124,14 @@ the whole phenomenon is worth under 2% of a frame, and keeping the attachment bo
 load/store work that made the measured frame rate slightly *worse* (11.6 vs 12.9 fps). It is off
 by default. A red herring, found and priced out.
 
-**The Ashita overlay addons were never running.** `HANDOFF.md` §4 called disabling them "the
-most promising thing left". They cannot be disabled because they never load: Ashita.dll in this
-install reports interface version **4.16** while every bundled plugin — `Addons`, `Nameplate`,
-`PacketFlow`, `Screenshot`, `Sequencer`, `Thirdparty` — is built against **4.15**, so
-`PluginManager::Load` rejects all of them, and with the `Addons` host rejected no Lua addon
-loads either. Every performance number this project has ever taken was already addon-free.
-(This is also a real bug in Daniel's install worth fixing for gameplay reasons: none of his 22
-addons work.)
+**The Ashita overlay addons were never running.** The August `HANDOFF.md` §4 (now
+`archive/docs-2026-08/`) called disabling them "the most promising thing left". They cannot be
+disabled because they never load: Ashita.dll in this install reports interface version **4.16**
+while every bundled plugin — `Addons`, `Nameplate`, `PacketFlow`, `Screenshot`, `Sequencer`,
+`Thirdparty` — is built against **4.15**, so `PluginManager::Load` rejects all of them, and with the
+`Addons` host rejected no Lua addon loads either. Every performance number this project has ever
+taken was already addon-free. (This is also a real bug in Daniel's install worth fixing for gameplay
+reasons: none of his 22 addons work.)
 
 **Rosetta really is structural, and nothing in the wrapper escapes it.** `libd3dshared.dylib`,
 `D3DMetal.framework`, `winemetal.so`, `libMoltenVK.dylib` and `wine` itself are all x86_64-only

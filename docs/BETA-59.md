@@ -72,7 +72,8 @@ Needs Daniel's live test
   whether App Management (TCC) lets the detached helper rename a bundle in /Applications. If it
   does not, the helper logs the error, restores and reopens the old launcher, which then shows
   "Last update didn't install" (reason in the tooltip, details in `apply-update.log`).
-- CFBundleVersion is still 58 in `app/bundle.sh`; the b59 bump is not part of this change.
+- CFBundleVersion: bumped to 59 later in this beta, through the new `app/VERSION` (see Licence,
+  notices, build safety).
 
 ## Performance and play-time checks
 
@@ -155,8 +156,8 @@ Low Power Mode first; `FFXI_ON_MAC_FPSLOG=1`, compare rows with >800 draws, same
   NX_COMPAT, so low expectation), and whether the Keep-awake toggle (`LSAppNapIsDisabled` env) does
   anything (Activity Monitor App Nap column with the game occluded); it stays as is.
 - Known gaps: the sidecar's macOS 27 build (`vendor/x87sidecar-coop`, 3c7c2f6, 09-24) has no
-  source or patch in the repo, so it cannot be rebuilt after the next macOS update; vendor/NOTICE.md
-  has no row for it. Under `swift run` the sidecar dev fallback looks in `app/vendor/`, which does
+  source or patch in the repo, so it cannot be rebuilt after the next macOS update (vendor/NOTICE.md
+  now has its row, SHA-256 and this gap). Under `swift run` the sidecar dev fallback looks in `app/vendor/`, which does
   not exist (bundled app unaffected).
 
 ## Window text, Play-disabled reason, responsiveness
@@ -250,3 +251,87 @@ Deferred, and why
   again when it finishes"): touches the Play path; the footer now says "Updating Wine…" and PLAY
   re-enables when done.
 - `ServerFeeds.bannerItems`/`items` are now unused (kept, no warning); delete when convenient.
+
+## Licence, notices, build safety, privacy, docs
+
+What changed
+- **Licence, one story:** PolyForm Noncommercial 1.0.0 + 10% commercial rider everywhere
+  (README said GPL-3.0, LICENSING.md said MIT). LICENSE line 1 is "FFXI on Mac (formerly
+  HorizonXI-on-Mac)". LICENSING.md: history (GPL-3.0 08-08, Apache-2.0 and MIT 08-11, PolyForm
+  from 08-22; earlier copies keep theirs), third-party table by what actually ships, in-repo not
+  bundled: `addons/FFXIFriendList` GPL-3.0, `addons/gmtools` MIT, the LSB patch GPL-3.0. Wine
+  corrected: CodeWeavers' wine source is LGPL, athei's wine-cx is built from it, we ship no wine.
+  README footer carries the copyright line. Swift headers: 9 of ~50 files had one, so no mass
+  edit; the one new Swift file carries it like its target's siblings.
+- **Contributor licence** (CONTRIBUTING): contributors grant Bates LLC a perpetual, irrevocable,
+  sublicensable licence, commercial licensing included. Needed before any rdbell PR merges.
+- **Third-party notices:** `vendor/licenses/` = canonical upstream texts (d3d8to9 v1.15.1 BSD-3,
+  DXVK v1.10.3 zlib, MoltenVK v1.4.2 Apache-2.0 (upstream has no NOTICE), cereal a56bad8 BSD-3
+  (statically linked in MoltenVK), x87sidecar MIT moved from `vendor/x87sidecar-LICENSE`) + a
+  README.txt index marking the modified binaries. `bundle.sh` copies them to
+  `Contents/Resources/ThirdPartyNotices/` and LICENSE to `Contents/Resources/LICENSE`; `package.sh`
+  adds `LICENSE.txt` and a combined `Third-Party Notices.txt` to the DMG. `vendor/NOTICE.md`
+  rewritten to the tree: real dll name and patch (fencewait), coop row (3c7c2f6, 09-24), SHA-256 of
+  every binary, entitlements (`cs.debugger` only), bundle.sh's real signing order; nofog gone.
+- **bundle.sh safety:** output folder required (usage, exit 2). `/Applications` refused while
+  `pgrep -f 'FFXI-on-Mac.app/Contents/MacOS|horizon-loader|Ashita-cli|wineserver'` matches,
+  checked before the build and again before the swap. The replaced bundle is moved to
+  `~/Downloads/FFXI-on-Mac-build/archive-apps/FFXI-on-Mac-<ver>-b<build>-<timestamp>.app`, not
+  deleted (`HXI_ARCHIVE_DIR` overrides). Version from `app/VERSION` (`SHORT=3.9`, `BUILD=59`).
+  Info.plist `HXIAddonRevisions` = Vanaguide/VanaVoice commits (`-dirty` if uncommitted).
+- **package.sh:** refuses non-git or dirty vanaguide/vanavoice checkouts and a built plist without
+  clean revisions; prints both for the release notes.
+- **Install FFXI on Mac.command** called `bundle.sh` with no argument, then deleted the app it had
+  just installed; now builds into `app/build`, refuses while the game runs, no Keychain claim.
+- **Privacy:** VanaguideCompanion uses `CodeFolders` (no `GoogleDrive-<email>` path); login name
+  out of Credentials.swift and two docs; `archive/catseye-account-2026-08-19` removed from the
+  repo (identical copy in `~/Downloads/hxi-work/_private-archive/`); `addons/lsb2.ini` →
+  `lsb2.ini.example` with `--pass CHANGE_ME` (nothing reads the repo copy: twoclient.py passes
+  `lsb2.ini` to Ashita-cli, which reads the game's `config/boot/`); `.gitignore` adds `.env*`,
+  `*api-key*`, `AuthKey_*.p8`, `*.p8`, `*.p12`, `*.pem`, `*.keychain-db`, `**/config/boot/*.ini|xml`,
+  `addons/*.ini`, `last-spawn*.txt`, `**/cmdpipe/cmd.txt|chat.txt`, `imgui.ini`.
+- **CONTRIBUTING** no longer claims the Keychain: passwords are in `accounts.json` (0600) and the
+  boot `.ini`; Keychain migration listed as a pathway.
+- **Docs:** `docs/HANDOFF.md` and `docs/NEXT.md` rewritten as a short current handoff (state,
+  rules, release gates, PR triage, A/B list, dead ends, pathways); the August ones moved to
+  `archive/docs-2026-08/`. README: 8.6 MB download, tested-on stack (macOS 27.0.1, athei wine-cx,
+  DXVK 1.10.3 + MoltenVK 1.4.2), build commands; RELEASE-WHEN-STABLE install paragraph.
+
+How it was verified
+- `zsh -n` and `bash -n` on bundle.sh, package.sh and the Install .command.
+- `bundle.sh` with no argument: usage, exit 2. The guard run on its own: target `/Applications`
+  refused and listed the running launcher (pid 11511); a scratch target proceeds.
+- Full `bundle.sh` twice into a scratch folder (`HXI_BINARY` = the release binary, `HXI_ADHOC=1`,
+  scratch `HXI_ARCHIVE_DIR`): Info.plist 3.9 / 59, `plutil -lint` OK, `HXIAddonRevisions`
+  e2c1609… / 29a8ec9…, ThirdPartyNotices (6 files) + LICENSE present, `codesign --verify --deep
+  --strict` OK; the second run archived the first as `FFXI-on-Mac-3.9-b59-<timestamp>.app`. Both
+  scratch bundles unregistered from Launch Services and deleted.
+- package.sh's addon check on its own: clean siblings pass; untracked file → refused; non-git
+  folder → refused. Revision check: 40-hex passes, `-dirty` refused. Notices concatenation on
+  scratch copies: index + 5 texts. `package.sh` as a whole not run (signing + notarization).
+- Upstream texts: d3d8to9 main == v1.15.1, cereal master == a56bad8, x87sidecar master == our
+  copy; MoltenVK v1.4.2 NOTICE is 404; `nm` shows cereal, SPIRV-Cross and SPIRV-Tools symbols in
+  the dylib.
+- `git check-ignore` on a sample path per new pattern; `lsb2.ini.example` not ignored.
+- `swift build -c release`: clean, same 2 pre-existing capture warnings.
+- `VanaguideCompanion --selftest-parser`: finds the Drive vanaguide checkout through CodeFolders
+  (the same folder the old hard-coded path named); 1 failure, "every real guide step has a zone,
+  level, or tag": that checkout's guide content, same check and path as before. Not investigated.
+
+Needs Daniel
+- Nothing here touches Play. First real install: `./app/bundle.sh /Applications` with the launcher,
+  game and wine quit; expect "archived the previous app to …/archive-apps/FFXI-on-Mac-3.9-b58-…"
+  and exactly one app in /Applications.
+- Decisions: character name "Murn" (README, ANNOUNCEMENT, FINDINGS, PATHWAYS, `docs/img/murn-*.png`);
+  `/Users/daniel` paths in 37 tracked files; volume names in `X87Sidecar.swift`/`Install.swift`
+  (live wine candidate paths, left alone); the login name inside the archived 2.7 app binary; the
+  removed CatsEye scripts and earlier mentions still in git history. Rewriting history is
+  `git filter-repo` + force push: irreversible, his call.
+- Posting the contributor-licence request on rdbell's PRs (a GitHub write).
+
+Deferred
+- Game passwords into the Keychain (pathway in CONTRIBUTING/HANDOFF).
+- Local `origin` still uses the old repo name (works through the redirect); not changed here.
+- `archive/` keeps ~50 MB of old binaries.
+- `CodeFolders` is duplicated in VanaguideCompanion; a shared library target would remove the
+  copy but changes Package.swift for 12 lines.
