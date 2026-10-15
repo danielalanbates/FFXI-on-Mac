@@ -625,7 +625,10 @@ final class RAProgress: ObservableObject {
                 } else if let e = outcome.error {
                     let msg = RetroAchievements.redact(e.message, key: key)
                     self.lastError = msg + (existing != nil ? "; kept the last good snapshot" : "")
-                    log("!! retroachievements: \(self.lastError ?? msg)")
+                    // Only a refresh the user asked for reaches the window; an automatic or
+                    // Play-time one failing (offline, RA down) changes nothing about play, and
+                    // the RetroAchievements section shows the error either way.
+                    log((trigger == .manual ? "!! " : "i  ") + "retroachievements: \(self.lastError ?? msg)")
                 }
             }
         }
