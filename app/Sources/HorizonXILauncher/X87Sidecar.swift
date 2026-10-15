@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// x87sidecar: patches Rosetta's x87 floating-point emulation with a native ARM64 JIT. FFXI's
 /// 32-bit client runs its math through x87, which Rosetta emulates at roughly 1% of native
@@ -143,6 +144,113 @@ enum X87Sidecar {
         } catch {
             await log("!! x87sidecar failed to launch: \(error.localizedDescription)")
             return nil
+        }
+    }
+}
+
+/// x87 acceleration is on by default on every macOS version; this remembers where it did not
+/// attach, so Play falls back to stock Rosetta instead of paying for a JIT that is not there.
+///
+/// Why a guard and not a version gate: every best max-settings figure this project has
+/// (37.9-51 fps median in-world, 2026-09-25..27) was taken on macOS 27.0 with the sidecar on,
+/// and stock Rosetta measured ~11 fps in-world. The real risk is narrower: the sidecar sets
+/// `ROSETTA_DISABLE_AOT=1` for its target before exec, so a target whose hook never installs
+/// runs Rosetta's slow JIT path with no x87 JIT behind it (the 19x loss in docs/X87-SIDECAR.md).
+/// When that is seen once, the pairing of this macOS build and this sidecar binary is recorded
+/// and later launches leave `ROSETTA_X87_PATH` off until either changes. The running client is
+/// never touched.
+enum X87Guard {
+    static let defaultsKey = "x87.brokenFor"
+
+    /// Lines the sidecar prints when it cannot hook the process it was started for (all from
+    /// rosetta_loader/src/main.cpp; each is followed by `return 1`, so the sidecar exits). Every
+    /// one of these is decided by the Rosetta runtime and the sidecar binary, not by timing,
+    /// which is exactly what the fingerprint records. A normal session prints none of them
+    /// (launcher.log, 2026-10-02, x87 on: zero `[rosettax87]` lines).
+    static let failureMarkers = [
+        "[rosettax87] bootstrap_register2(",
+        "[rosettax87] cooperative reply failed",
+        "Failed to attach",
+        "Failed to find Rosetta runtime by signature",
+        "Failed to locate translate_insn by signature scan",
+        "Failed to arm thread-level breakpoint catcher",
+        "M2: failed", "M2: sidecar::installPortInParent failed",
+        "M2: stub_asm::buildDecodeHook refused",
+    ]
+    /// The one failure that depends on timing: no handshake inside the sidecar's 30 s window.
+    /// Any i386 wine process that dies before its handshake prints it, so on its own it says
+    /// nothing about the client. The client's own case is caught by its sidecar being gone
+    /// (`Runner`'s check a minute after the loader appears), which this only notes in the log.
+    static let timeoutMarker = "[rosettax87] cooperative handshake receive failed"
+
+    /// The first failure line in `text`, if any.
+    static func failure(in text: String) -> String? {
+        guard text.contains("[rosettax87]") || text.contains("Failed to") || text.contains("M2: ") else { return nil }
+        for m in failureMarkers {
+            if let r = text.range(of: m) {
+                let line = text[r.lowerBound...].split(whereSeparator: \.isNewline).first.map(String.init) ?? m
+                return line.trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return nil
+    }
+
+    /// macOS build, e.g. "26A434" (`sysctl kern.osversion`); the marketing version is not enough,
+    /// a point update can change libRosettaRuntime.
+    static func osBuild() -> String {
+        var size = 0
+        guard sysctlbyname("kern.osversion", nil, &size, nil, 0) == 0, size > 0 else {
+            return ProcessInfo.processInfo.operatingSystemVersionString
+        }
+        var buf = [CChar](repeating: 0, count: size)
+        guard sysctlbyname("kern.osversion", &buf, &size, nil, 0) == 0 else {
+            return ProcessInfo.processInfo.operatingSystemVersionString
+        }
+        return String(cString: buf)
+    }
+
+    private static let hashLock = NSLock()
+    private static var hashCache: [String: String] = [:]
+
+    /// SHA-256 of the sidecar binary, cached per path, size and mtime (470 KB, read once).
+    static func sha256(of url: URL) -> String? {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let stamp = "\(url.path)|\((attrs?[.size] as? NSNumber)?.intValue ?? -1)|"
+            + "\((attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)"
+        hashLock.lock()
+        if let h = hashCache[stamp] { hashLock.unlock(); return h }
+        hashLock.unlock()
+        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
+        let h = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        hashLock.lock(); hashCache[stamp] = h; hashLock.unlock()
+        return h
+    }
+
+    /// "<macOS build>|<sidecar sha256>", or nil when the sidecar cannot be read.
+    static func fingerprint(sidecar: URL) -> String? {
+        sha256(of: sidecar).map { osBuild() + "|" + $0 }
+    }
+
+    /// Did the sidecar fail to attach on this exact macOS build with this exact binary?
+    static func isBroken(sidecar: URL, defaults: UserDefaults = .standard) -> Bool {
+        guard let stored = defaults.string(forKey: defaultsKey), !stored.isEmpty else { return false }
+        return stored == fingerprint(sidecar: sidecar)
+    }
+
+    static func markBroken(sidecar: URL, defaults: UserDefaults = .standard) {
+        guard let f = fingerprint(sidecar: sidecar) else { return }
+        defaults.set(f, forKey: defaultsKey)
+    }
+
+    /// Whether this launch uses the sidecar. `override` is `FFXI_ON_MAC_X87` from the launcher's
+    /// environment: "0" forces it off, "1" forces it on past a recorded failure (for an A/B).
+    /// A world whose client cannot take the sidecar (`Server.x87` false) never gets it.
+    static func enabled(worldAllows: Bool, override: String?, brokenHere: Bool) -> Bool {
+        guard worldAllows else { return false }
+        switch override {
+        case "0": return false
+        case "1": return true
+        default: return !brokenHere
         }
     }
 }

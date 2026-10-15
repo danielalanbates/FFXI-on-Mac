@@ -32,6 +32,7 @@ enum Headless {
             || a.contains("--selftest-multiworld")
             || a.contains("--selftest-retroachievements")
             || a.contains("--selftest-updater")
+            || a.contains("--selftest-perf")
             || a.contains("--selftest-single-instance")
             || a.contains("--selftest-single-instance-probe")
     }
@@ -73,6 +74,9 @@ enum Headless {
         }
         if args.contains("--selftest-updater") {
             runUpdaterSelfTest()
+        }
+        if args.contains("--selftest-perf") {
+            runPerfSelfTest()
         }
         if let at = args.firstIndex(of: "--selftest-single-instance-probe") {
             runSingleInstanceProbe(Array(args[(at + 1)...]))

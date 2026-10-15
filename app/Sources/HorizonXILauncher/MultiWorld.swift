@@ -51,6 +51,10 @@ enum LiveClients {
         var wine: Set<pid_t> = []
         /// Every wineserver, whatever prefix it serves. See `runningSyncMode`.
         var wineservers: [pid_t] = []
+        /// Every x87 sidecar process (the command itself is `x87sidecar…`). A cooperative
+        /// sidecar lives exactly as long as the process it hooked, so a client launched with
+        /// `ROSETTA_X87_PATH` and no sidecar left in its session was never accelerated.
+        var sidecars: Set<pid_t> = []
 
         var byHost: [String: [pid_t]] { LiveClients.byHost(clients) }
 
@@ -112,6 +116,7 @@ enum LiveClients {
                 continue
             }
             let tokens = tokenize(command)
+            if isSidecarCommand(tokens) { snap.sidecars.insert(pid) }
             guard let (at, program) = windowsProgram(in: tokens) else {
                 if tokens.contains(where: isLauncherOfLoader) { snap.wine.insert(pid) }
                 continue
@@ -212,6 +217,14 @@ enum LiveClients {
 
     private static func isInjector(_ t: String) -> Bool {
         injectorNames.contains(basename(t))
+    }
+
+    /// The command is the sidecar itself: its first word, or (an install path with spaces) a
+    /// path split over the first words, none of them an option.
+    private static func isSidecarCommand(_ tokens: [String]) -> Bool {
+        guard let i = tokens.firstIndex(where: { basename($0).hasPrefix("x87sidecar") }) else { return false }
+        return i == 0 || (tokens[0].hasPrefix("/") && tokens[i].contains("/")
+                          && !tokens[1...i].contains { $0.hasPrefix("-") })
     }
 
     private static func isLauncherOfLoader(_ t: String) -> Bool {

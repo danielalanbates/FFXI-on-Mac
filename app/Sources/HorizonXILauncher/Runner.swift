@@ -196,6 +196,12 @@ final class Runner: ObservableObject {
         h.seekToEndOfFile(); h.write(d)
     }
 
+    /// A line for launcher.log (and stderr on a headless run) that the window never shows:
+    /// state worth having when reading a log, not worth a line in front of the player.
+    func logFileOnly(_ s: String) {
+        tee(s.hasSuffix("\n") ? s : s + "\n")
+    }
+
     /// The boot loader's verdict when a login is refused ("Failed to login. Invalid username or
     /// password." / "…Account already logged in." / "…xiloader version mismatch…"). Every xiloader
     /// fork prints one of these and then sits at an interactive menu that no window ever shows,
@@ -233,6 +239,7 @@ final class Runner: ObservableObject {
             if s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return }
         }
         tee(s)
+        if !x87Settled { checkX87Output(s) }
         // Every xiloader fork prints one of these and drops to an interactive menu no window shows.
         let failMarkers = ["Failed to login", "Bad json reply from remote", "Error from remote",
                            "version mismatch", "xi_connect", "Account already logged in"]
@@ -921,18 +928,23 @@ final class Runner: ObservableObject {
         // wrapper is one bundle for every world, so with several playing it names them all.
         let playingWorlds = Set(Runner.playing.values.map(\.world)).sorted().joined(separator: " + ")
         DockIcon.apply(to: install, world: playingWorlds) { [weak self] in self?.appendLine($0) }
-        // Cooperative x87 has not been shown to install its JIT hook on macOS 27. On 26.5.2
-        // this exact failure cost 19x in the measured rules scene (docs/X87-WALL.md). Keep the
-        // last playable fallback, stock Rosetta, until a local-world A/B proves the new helper.
-        let x87Enabled = useX87 && (ProcessInfo.processInfo.operatingSystemVersion.majorVersion < 27
-                                    || ProcessInfo.processInfo.environment["FFXI_ON_MAC_X87"] == "1")
+        // x87 acceleration on every macOS version: the best in-world numbers on record were
+        // taken on macOS 27.0 with it on, and stock Rosetta is ~11 fps in-world. What is guarded
+        // instead is the one bad case, a hook that does not attach (X87Guard): seen once, this
+        // macOS build + sidecar pairing runs stock Rosetta from the next launch on.
+        // FFXI_ON_MAC_X87=0 forces it off; =1 forces it on past a recorded failure.
+        let x87Override = ProcessInfo.processInfo.environment["FFXI_ON_MAC_X87"]
+        let x87Broken = useX87 && x87Override == nil
+            && X87Sidecar.coopBinary().map { X87Guard.isBroken(sidecar: $0) } == true
+        let x87Enabled = X87Guard.enabled(worldAllows: useX87, override: x87Override, brokenHere: x87Broken)
         var env = perf.environment(for: install, x87: x87Enabled, world: worldName)
         if !x87Enabled {
             env.removeValue(forKey: "ROSETTA_X87_PATH")
             env.removeValue(forKey: "ROSETTA_DISABLE_AOT")
         }
-        if useX87 && !x87Enabled {
-            appendLine("i  macOS 27: x87 sidecar off until its in-world speed is verified")
+        if x87Broken {
+            logFileOnly("i  x87: standard Rosetta; the sidecar did not attach on macOS \(X87Guard.osBuild()) "
+                        + "with this sidecar (FFXI_ON_MAC_X87=1 retries it)")
         }
         if g.sync != wantSync {
             env["WINEMSYNC"] = g.sync == .msync ? "1" : "0"
@@ -946,10 +958,8 @@ final class Runner: ObservableObject {
                                                           log: { [weak self] in self?.appendLine($0) }) {
             env["CX_ROOT"] = cx.path
         }
-        // The patched wine can re-exec i386 children through the cooperative sidecar via
-        // ROSETTA_X87_PATH. A live sidecar only proves that it launched, not that the client's
-        // x87 hook engaged; the failed-hook measurements in docs/X87-WALL.md are severe.
-        // Keep macOS 27 on stock Rosetta until a local-world A/B validates acceleration.
+        // The patched wine re-execs i386 children through the cooperative sidecar via
+        // ROSETTA_X87_PATH; see docs/X87-SIDECAR.md.
         if !useX87 {
             appendLine("i  x87 acceleration is off for this world — its client exits at boot with it on.")
         } else if x87Enabled && X87Sidecar.coopBinary() == nil {
@@ -989,6 +999,14 @@ final class Runner: ObservableObject {
         if !clientsLive, RendererSetup.stopWineserver(install) {
             appendLine("==> wineserver stopped; the game starts its own")
         }
+        // Watched only where the sidecar can be reached: ROSETTA_X87_PATH means nothing to the
+        // wrapper's own wine, and a check there would always "fail".
+        x87Sidecar = X87Sidecar.patchedWine() == nil ? nil
+            : env["ROSETTA_X87_PATH"].map { URL(fileURLWithPath: $0) }
+        x87Forced = x87Override == "1"
+        x87Settled = x87Sidecar == nil
+        x87Carry = ""
+        loaderSeenAt = nil
         let spawned = spawnViaShell(exe,
               args: args,
               env: env,
@@ -1042,6 +1060,51 @@ final class Runner: ObservableObject {
                                       preexisting: preexistingPIDs, otherGroups: others, in: snap)
     }
 
+    // MARK: - x87 attach check
+
+    /// The sidecar this launch handed to wine through ROSETTA_X87_PATH, or nil when it is off.
+    private var x87Sidecar: URL?
+    private var x87Forced = false
+    /// One verdict per launch: set once the sidecar was seen live in the session, or failed.
+    private var x87Settled = true
+    /// The tail of the previous output chunk, so a marker split across two reads still matches.
+    private var x87Carry = ""
+    /// When the watch loop first saw this session's loader.
+    private var loaderSeenAt: Date?
+
+    private func checkX87Output(_ s: String) {
+        let text = x87Carry + s
+        x87Carry = String(text.suffix(200))
+        if let line = X87Guard.failure(in: text) { x87Failed(line) }
+    }
+
+    /// A minute after the loader appeared, its sidecar must still be alive in this session: a
+    /// cooperative sidecar exits only when its process does, or when it could not hook it.
+    private func checkX87Alive(snap: LiveClients.Snapshot, pids: [pid_t]) {
+        let mine = Set(pids)
+        guard snap.clients.contains(where: { $0.knownLoader && mine.contains($0.pid) }) else { return }
+        guard let seen = loaderSeenAt else { loaderSeenAt = Date(); return }
+        guard Date().timeIntervalSince(seen) >= 60 else { return }
+        let group = sessionGroup
+        if snap.sidecars.contains(where: { mine.contains($0) || (group != nil && snap.groups[$0] == group) }) {
+            x87Settled = true
+            logFileOnly("x87: sidecar live beside the client a minute after it appeared")
+        } else {
+            x87Failed("no x87 sidecar alive in this session a minute after the loader appeared")
+        }
+    }
+
+    /// Records the failure for this macOS build + sidecar and says so once. Never touches the
+    /// running client: it plays on at stock speed, and the next launch leaves the sidecar off.
+    private func x87Failed(_ why: String) {
+        guard !x87Settled, let sidecar = x87Sidecar else { return }
+        x87Settled = true
+        X87Guard.markBroken(sidecar: sidecar)
+        logFileOnly("x87: did not attach (\(why)); recorded for macOS \(X87Guard.osBuild())")
+        appendLine(x87Forced ? "!! x87 acceleration didn't attach (FFXI_ON_MAC_X87=1 keeps trying it)."
+                             : "!! x87 acceleration didn't attach — next launch uses standard Rosetta.")
+    }
+
     /// Poll for the client itself. Ashita-cli.exe exits seconds after a successful injection
     /// while the game carries on in horizon-loader.exe, so the injector's exit is not the game's.
     private func watchGameProcess() {
@@ -1052,8 +1115,10 @@ final class Runner: ObservableObject {
             let scale = self?.currentInstall.map(WindowMemory.scale(for:)) ?? 1
             for _ in 0..<300 {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
-                let pids = self?.sessionPIDs() ?? []
+                let snap = LiveClients.snapshot()
+                let pids = self?.sessionPIDs(in: snap) ?? []
                 if pids.isEmpty { break }
+                if self?.x87Settled == false { self?.checkX87Alive(snap: snap, pids: pids) }
                 if let s = await MainActor.run(body: { WindowMemory.currentSize(pids: pids, scale: scale) }) {
                     if self?.firstWindowSize == nil { self?.firstWindowSize = s }
                     self?.lastWindowSize = s
