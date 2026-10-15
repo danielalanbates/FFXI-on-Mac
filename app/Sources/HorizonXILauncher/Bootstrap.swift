@@ -99,6 +99,12 @@ enum Bootstrap {
         guard let wrapperURL = target else {
             throw Err("Choose where FFXI on Mac goes first: press Setup.")
         }
+        // One at a time. Cancel lets a build finish in the background, and a second Setup started
+        // meanwhile would unpack into the same folder and swap its Wine out from under it.
+        guard claimRun() else {
+            throw Err("Wine is still being set up from before. Wait a minute, then press Set it up again.")
+        }
+        defer { endRun() }
 
         step(.rosetta)
         try await ensureRosetta(log: log)
@@ -296,7 +302,9 @@ enum Bootstrap {
         p.standardOutput = out
         p.standardError = out
         try p.run()
+        JobKill.track(p.processIdentifier, wine: nil)
         p.waitUntilExit()
+        JobKill.untrack(p.processIdentifier)
         let text = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         for line in text.split(separator: "\n") { log(String(line)) }
         guard p.terminationStatus == 0 else {
@@ -311,7 +319,10 @@ enum Bootstrap {
         let err = Pipe()
         p.standardError = err
         try p.run()
+        // Quit ends it (JobKill) rather than leaving it unpacking with nobody to use it.
+        JobKill.track(p.processIdentifier, wine: nil)
         p.waitUntilExit()
+        JobKill.untrack(p.processIdentifier)
         guard p.terminationStatus == 0 else {
             let text = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             throw Err("Could not unpack \(archive.lastPathComponent): \(text)")
@@ -337,20 +348,58 @@ enum Bootstrap {
         env["WINEDLLOVERRIDES"] = "mscoree,mshtml="
         env["WINEBOOT_HIDE_DIALOG"] = "1"
         env.removeValue(forKey: "DYLD_FALLBACK_LIBRARY_PATH"); env.removeValue(forKey: "DYLD_LIBRARY_PATH")
-        // wine writes its first-run chatter to stderr; it is noise unless it fails.
+        // wine writes its first-run chatter to stderr; it is noise unless it fails. To a file, not
+        // a pipe: the programs wineboot starts keep a pipe open after it exits, and reading it to
+        // the end then waited on them.
         p.environment = env
-        let out = Pipe()
+        let outFile = FileManager.default.temporaryDirectory.appendingPathComponent("ffxi-on-mac-wineboot-\(UUID().uuidString).log")
+        FileManager.default.createFile(atPath: outFile.path, contents: nil)
+        defer { try? FileManager.default.removeItem(at: outFile) }
+        let out = try FileHandle(forWritingTo: outFile)
         p.standardOutput = out
         p.standardError = out
         try p.run()
-        p.waitUntilExit()
-        let text = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        try? out.close()
+        // Bounded: a first boot takes about a minute; one still going after five has hung, and its
+        // session is ended so nothing is left running (Quit ends it too: JobKill).
+        let session = JobKill.Wine(server: i.wineserver, prefix: i.prefix)
+        JobKill.track(p.processIdentifier, wine: session)
+        defer { JobKill.untrack(p.processIdentifier) }
+        let deadline = Date().addingTimeInterval(300)
+        while p.isRunning, Date() < deadline { try? await Task.sleep(nanoseconds: 250_000_000) }
+        if p.isRunning {
+            JobKill.end(p.processIdentifier, wine: session)
+            throw Err("Wine didn't finish creating its Windows drive. Press Set it up again.")
+        }
+        // The registry is written when the session ends: wait for it (bounded) before looking.
+        let w = Process()
+        w.executableURL = i.wineserver
+        w.arguments = ["-w"]
+        w.environment = ["WINEPREFIX": i.prefix.path]
+        w.standardOutput = FileHandle.nullDevice
+        w.standardError = FileHandle.nullDevice
+        if (try? w.run()) != nil {
+            let end = Date().addingTimeInterval(60)
+            while w.isRunning, Date() < end { try? await Task.sleep(nanoseconds: 250_000_000) }
+            if w.isRunning { w.terminate(); JobKill.endSession(session) }
+        }
+        let text = (try? String(contentsOf: outFile, encoding: .utf8)) ?? ""
         guard FileManager.default.fileExists(atPath: i.systemReg.path) else {
             throw Err("Wine could not create its Windows drive:\n"
                       + text.suffix(400).trimmingCharacters(in: .whitespacesAndNewlines))
         }
         log("the Windows drive is ready")
     }
+
+    private static let runLock = NSLock()
+    private static var runInFlight = false
+    private static func claimRun() -> Bool {
+        runLock.lock(); defer { runLock.unlock() }
+        if runInFlight { return false }
+        runInFlight = true
+        return true
+    }
+    private static func endRun() { runLock.lock(); runInFlight = false; runLock.unlock() }
 
     struct Err: LocalizedError {
         let message: String
