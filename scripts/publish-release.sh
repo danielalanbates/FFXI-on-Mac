@@ -13,7 +13,7 @@
 #   * the name is FFXI-on-Mac-<version>-b<build>.dmg and the app inside says exactly that
 #     version and build (the updater compares both, and checks the staged app against the name);
 #   * the tag is v<version>, already pushed (gh --verify-tag), in the v1.2[.3] form the updater
-#     accepts;
+#     accepts, with no release yet (a build-only release of the same version cannot have one);
 #   * (version, build) is newer than the current latest release under the updater's own rule;
 #   * the app satisfies the pinned requirement (Apple anchor, bundle id, team MG4YW8XX2Z) and
 #     its TeamIdentifier is MG4YW8XX2Z; the app and the disk image are stapled and pass
@@ -151,6 +151,10 @@ else
   fi
   need "tag $TAG exists on GitHub (push it first; the release never invents one)" \
     "gh api 'repos/$REPO_SLUG/git/ref/tags/$TAG'"
+  # The tag is always v<version>, so a second build of one version would pass every check
+  # above and only fail at `gh release create`, against a tag on the earlier build's commit.
+  need "no release exists yet for $TAG (each release needs a new short version)" \
+    "! gh release view '$TAG' --repo '$REPO_SLUG'"
 fi
 
 # --- v3.9 clients' merge updater -------------------------------------------------------------
