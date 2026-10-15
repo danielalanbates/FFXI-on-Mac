@@ -11,7 +11,6 @@ extension Headless {
         var checks: [(String, Bool)] = []
         let tmp = fm.temporaryDirectory.appendingPathComponent("ffxi-uitext-\(UUID().uuidString)", isDirectory: true)
         try? fm.createDirectory(at: tmp, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: tmp) }
         let gone = "NoSuchDrive-\(UUID().uuidString.prefix(8))"
 
         // Drive detection.
@@ -108,6 +107,8 @@ extension Headless {
                   + (Preflight.unavailableDrive(for: data).map(Preflight.driveMessage) ?? "no missing drive"))
         }
         print(failures == 0 ? "all checks passed" : "\(failures) FAILED")
+        // Here, not in a defer: exit() does not unwind, so a defer never ran.
+        try? fm.removeItem(at: tmp)
         exit(failures == 0 ? 0 : 1)
     }
 }
