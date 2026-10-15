@@ -166,6 +166,11 @@ extension Headless {
         mk("Third Drive/POL/viewer/com/polcore.dll", 400)
         mk("\(W)/Contents/SharedSupport/prefix-installers/system.reg")
         mk("\(W)/Contents/SharedSupport/prefix-old/drive_c/big.bin", 9000)
+        // The game's Wine beside the wrapper, as Setup (and Daniel's own install) has it.
+        mk("Old Place/wine-coop/wine/bin/wine", exec: true)
+        mk("Old Place/wine-coop/wine/bin/winegcc", 64, exec: true)
+        ln("Old Place/wine-coop/wine/bin/winecpp", "winegcc")
+        mk("Old Place/wine-coop/wine/lib/wine/x86_64-unix/ntdll.so", 3000)
         let dest = F.appendingPathComponent("Dest", isDirectory: true)
         try? fm.createDirectory(at: dest, withIntermediateDirectories: true)
         let discarded = F.appendingPathComponent("discarded", isDirectory: true)
@@ -236,7 +241,7 @@ extension Headless {
             check("plan: the other prefixes stay behind", plan.excluded.count == 2)
             let oldNames = plan.oldCopy.map { String($0.path.dropFirst(F.path.count)) }
             check("plan: the old copy is this prefix (the wrapper holds another) and the data it linked to: \(oldNames)",
-                  oldNames == ["/\(P)", "/Other Drive/FFXI/SquareEnix"])
+                  oldNames == ["/\(P)", "/Other Drive/FFXI/SquareEnix", "/Old Place/wine-coop"])
             check("Move refuses a folder inside the install it moves, or inside the data it links to",
                   InstallMove.destinationProblem(F.appendingPathComponent("\(W)/Contents"), plan: plan) != nil
                     && InstallMove.destinationProblem(F.appendingPathComponent("Other Drive/FFXI/SquareEnix/FINAL FANTASY XI"), plan: plan) != nil
@@ -267,8 +272,18 @@ extension Headless {
             check("the other prefixes were left behind",
                   !fm.fileExists(atPath: nw.appendingPathComponent("Contents/SharedSupport/prefix-old").path)
                     && !fm.fileExists(atPath: nw.appendingPathComponent("Contents/SharedSupport/prefix-installers").path))
-            check("the copy counts the same as the source as copied: \(InstallMove.tally(nw.path))",
-                  InstallMove.tally(nw.path) == plan.expected)
+            let nc = destFolder.appendingPathComponent(InstallLocation.gameWineFolder)
+            let copied = InstallMove.add(InstallMove.tally(nw.path), InstallMove.tally(nc.path))
+            check("the copy counts the same as the source as copied: \(copied)", copied == plan.expected)
+            check("the game's Wine beside the wrapper came along, its relative link a link",
+                  fm.isExecutableFile(atPath: InstallLocation.gameWine(in: destFolder).path)
+                    && (try? fm.destinationOfSymbolicLink(atPath: nc.appendingPathComponent("wine/bin/winecpp").path)) == "winegcc"
+                    && plan.keyFiles.contains("wine-coop/wine/bin/wine"))
+            let savedWine2 = ProcessInfo.processInfo.environment["FFXI_ON_MAC_WINE"]
+            unsetenv("FFXI_ON_MAC_WINE")
+            check("... and is the game Wine Play runs from the new folder",
+                  X87Sidecar.patchedWine()?.path == InstallLocation.gameWine(in: destFolder).path)
+            if let w = savedWine2 { setenv("FFXI_ON_MAC_WINE", w, 1) }
             let leftovers = ((try? fm.contentsOfDirectory(atPath: destFolder.path)) ?? []).filter { $0.hasPrefix(".") }
             check("no hidden partial copy is left", leftovers.isEmpty)
             check("progress ended at 100%", shown.last == 1)
@@ -291,7 +306,8 @@ extension Headless {
                 check("a second Move into the same place is refused", false)
             } catch {
                 check("a second Move into the same place is refused: \((error as? InstallMove.Refusal)?.line ?? "?")",
-                      (error as? InstallMove.Refusal)?.line.contains("already") == true && InstallMove.tally(nw.path) == plan.expected)
+                      (error as? InstallMove.Refusal)?.line.contains("already") == true
+                        && InstallMove.add(InstallMove.tally(nw.path), InstallMove.tally(nc.path)) == plan.expected)
             }
             check("Move into the folder it is already in says so",
                   InstallMove.destinationProblem(dest, plan: try InstallMove.plan(moved, world: "HorizonXI")) == "The game is already in this folder.")

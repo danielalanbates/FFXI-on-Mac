@@ -3,7 +3,8 @@
 import Foundation
 
 /// Move…: copy an existing install into "<chosen>/FFXI on Mac/" so that everything -- Wine, its
-/// Windows drive and the game's files -- sits in the one folder the user chose (InstallLocation).
+/// Windows drive, the game's files and the game's Wine beside the wrapper -- sits in the one folder
+/// the user chose (InstallLocation).
 ///
 /// Daniel's own install showed why: the wrapper on 'x10', and `drive_c/HorizonXI/SquareEnix` a
 /// link onto a third drive, 'Games', which went missing (2026-10-14) and took the game with it.
@@ -114,6 +115,17 @@ enum InstallMove {
             }
         }
 
+        // The game's Wine beside the wrapper, where Setup puts it (and where Daniel's own install
+        // has it): it moves too, so the new folder holds what X87Sidecar.patchedWine looks for
+        // there. Its own links are relative and stay links.
+        let coop = w.deletingLastPathComponent().appendingPathComponent(InstallLocation.gameWineFolder, isDirectory: true)
+        if fm.isExecutableFile(atPath: coop.appendingPathComponent("wine/bin/wine").path),
+           let real = canonical(coop.path),
+           !p.parts.contains(where: { real == $0.source.path || real.hasPrefix($0.source.path + "/") }) {
+            p.parts.append(Part(source: URL(fileURLWithPath: real, isDirectory: true), rel: InstallLocation.gameWineFolder,
+                                resolveUnder: []))
+        }
+
         let insides = p.parts.map(\.source.path)
         for (n, part) in p.parts.enumerated() {
             try measure(part, index: n, insides: insides, excluded: p.excluded, into: &p)
@@ -125,6 +137,9 @@ enum InstallMove {
         let pre = "\(wr)/Contents/SharedSupport/\(i.prefixName)"
         keep(i.wine, "\(wr)/Contents/SharedSupport/wine/bin/wine")
         keep(i.systemReg, "\(pre)/system.reg")
+        if p.parts.contains(where: { $0.rel == InstallLocation.gameWineFolder }) {
+            keep(coop.appendingPathComponent("wine/bin/wine"), InstallLocation.gameWineFolder + "/wine/bin/wine")
+        }
         if game.hasPrefix(w.path + "/") {
             let g = "\(wr)/" + String(game.dropFirst(w.path.count + 1))
             keep(i.ashitaCLI, "\(g)/\(i.ashitaCLI.lastPathComponent)")
@@ -136,13 +151,14 @@ enum InstallMove {
         }
 
         // The old copy: the whole wrapper, unless it holds other installs (then just this
-        // prefix), plus the game data its links reached on other drives, plus the world folder.
+        // prefix), plus the game data its links reached on other drives, plus the world folder
+        // and the game's Wine.
         let others = p.excluded.filter { ($0 as NSString).lastPathComponent != Install.installerPrefixName }
         p.oldCopy = [others.isEmpty ? w : i.prefix.standardizedFileURL]
         for f in p.fixes where f.resolve && !p.fixes.contains(where: { $0.resolve && $0.part == f.part && f.rel.hasPrefix($0.rel + "/") }) {
             p.oldCopy.append(URL(fileURLWithPath: f.target))
         }
-        if p.parts.count > 1 { p.oldCopy.append(p.parts[1].source) }
+        p.oldCopy += p.parts.dropFirst().map(\.source)
         return p
     }
 
