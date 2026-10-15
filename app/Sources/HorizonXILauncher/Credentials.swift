@@ -146,7 +146,7 @@ enum Credentials {
     /// read, and the window size is written back off the main actor (WindowMemory) while a
     /// further client's launch writes its account line on it; interleaved, the older account
     /// came back just before the new client read the profile.
-    private static let profileLock = NSLock()
+    static let profileLock = NSLock()
 
     /// Make sure `config/boot/<profile>` exists, seeding it from a profile that already works.
     ///
@@ -154,8 +154,12 @@ enum Credentials {
     /// server it points at, so copying the configured one and letting `apply` rewrite the single
     /// `command` line gives a new world the same working setup rather than Ashita's bare example.
     /// Needed for the local server, whose profile no HorizonXI install ships.
+    ///
+    /// A world with its own template (`Server.bootTemplate`: HorizonXI) is made from that instead,
+    /// and every new profile then boots the world's own loader when it is there (`loader`).
     @discardableResult
-    static func ensureProfile(_ profile: String, in install: Install) -> Bool {
+    static func ensureProfile(_ profile: String, in install: Install, loader: String = "",
+                              template: String = "", host: String = "") -> Bool {
         let fm = FileManager.default
         let dir = install.gameDir.appendingPathComponent("config/boot")
         let name = install.bootProfileName(profile)
@@ -195,6 +199,18 @@ enum Credentials {
             return true
         }
 
+        // HorizonXI's client ships no horizonxi.ini (their launcher writes it at Play), and
+        // Ashita's examples boot the wrong loader: its own profile comes from the app (b61).
+        // Without the template (a damaged bundle) the copies below still apply, and Play's
+        // `prepareProfile` adds what HorizonXI needs.
+        if name.hasSuffix(".ini"), let text = BootProfile.seed(template, for: install, host: host) {
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            if writeFile(text, to: target) {
+                fixBootLoader(profile, in: install, loader: loader)
+                return true
+            }
+        }
+
         // Seed order: a profile the world's own installer shipped (any non-example .ini in the
         // folder), then HorizonXI's, then Ashita's examples. Whatever it came from, `file =` is
         // then made to name the boot loader that actually exists in this install's bootloader/
@@ -210,7 +226,7 @@ enum Credentials {
             guard fm.fileExists(atPath: src.path),
                   let text = readFile(at: src) else { continue }
             guard writeFile(text, to: target) else { continue }
-            fixBootLoader(profile, in: install)
+            fixBootLoader(profile, in: install, loader: loader)
             return true
         }
         return false
@@ -260,35 +276,42 @@ enum Credentials {
 
     /// Boot loaders this launcher knows how to find, in preference order, when a profile names one
     /// that is not in the install.
-    static let knownLoaders = ["horizon-loader.exe", "xiloader.exe", "pol.exe", "catseye-loader.exe", "gxiloader.exe"]
+    static let knownLoaders = BootProfile.knownLoaders
 
-    /// Make `[ashita.boot] file =` name a loader that exists in `bootloader/`.
-    static func fixBootLoader(_ profile: String, in install: Install) {
+    /// Make `[ashita.boot] file =` name the loader to boot: the world's own (`loader`, see
+    /// `Server.loader`) whenever it is in `bootloader/`, whatever the profile named; otherwise the
+    /// profile's choice while it exists, or a known one that does. Returns "old -> new" when it
+    /// changed the file.
+    @discardableResult
+    static func fixBootLoader(_ profile: String, in install: Install, loader: String = "") -> String? {
         let fm = FileManager.default
         let name = install.bootProfileName(profile)
         // v3 profiles are seeded from the world's own XML, which already names its own loader.
-        guard name.hasSuffix(".ini") else { return }
+        guard name.hasSuffix(".ini") else { return nil }
         let url = install.gameDir.appendingPathComponent("config/boot/\(name)")
         profileLock.lock(); defer { profileLock.unlock() }
-        guard let text = readFile(at: url) else { return }
-        let bl = install.bootLoaderDir
-        let present = ((try? fm.contentsOfDirectory(atPath: bl.path)) ?? []).filter { $0.lowercased().hasSuffix(".exe") }
-        guard !present.isEmpty else { return }
-        let named = bootLoaderName(in: install, profile: profile) ?? ""
-        if present.contains(where: { $0.caseInsensitiveCompare(named) == .orderedSame }) { return }
-        let pick = knownLoaders.first { k in present.contains { $0.caseInsensitiveCompare(k) == .orderedSame } } ?? present.sorted()[0]
-        let eol = TextFile.terminator(of: text)
-        var replaced = false
-        let lines = TextFile.lines(of: text).map { l -> String in
-            let t = l.trimmingCharacters(in: .whitespaces)
-            if !t.hasPrefix(";"), t.hasPrefix("file"), t.contains("="), !replaced {
-                replaced = true
-                return "file        = .\\\\bootloader\\\\\(pick)"
-            }
-            return String(l)
+        guard let text = readFile(at: url) else { return nil }
+        let present = ((try? fm.contentsOfDirectory(atPath: install.bootLoaderDir.path)) ?? [])
+            .filter { $0.lowercased().hasSuffix(".exe") }
+        let named = BootProfile.loaderName(in: text)
+        guard let pick = BootProfile.loaderToName(named: named, present: present, worldLoader: loader),
+              let out = BootProfile.withLoader(pick, in: text, addIfMissing: !loader.isEmpty),
+              writeFile(out, to: url) else { return nil }
+        return "\(named ?? "none") -> \(pick)"
+    }
+
+    /// Everything Play puts right in a world's boot profile before Ashita reads it (b61): the
+    /// world's loader, the settings its template requires (`BootProfile.complete`), and XIPivot's
+    /// overlay folder. Never a key the user set, never the account line. One line per change,
+    /// for launcher.log -- none of it is anything the player has to know or do.
+    static func prepareProfile(for server: Server, in install: Install) -> [String] {
+        var said: [String] = []
+        if let change = fixBootLoader(server.bootProfile, in: install, loader: server.loader) {
+            said.append("boot profile: \(install.bootProfileName(server.bootProfile)) loader \(change)")
         }
-        guard replaced else { return }
-        writeFile(TextFile.join(lines, terminator: eol), to: url)
+        said += BootProfile.complete(server.bootProfile, in: install, template: server.bootTemplate,
+                                     host: server.host)
+        return said
     }
 
 
@@ -335,15 +358,9 @@ enum Credentials {
                 .split(separator: "\\").last.map(String.init) ?? v
             return base.isEmpty ? nil : base
         }
-        for raw in TextFile.lines(of: text) {
-            let t = raw.trimmingCharacters(in: .whitespaces)
-            guard !t.hasPrefix(";"), t.hasPrefix("file"), let eq = t.firstIndex(of: "=") else { continue }
-            let v = t[t.index(after: eq)...].trimmingCharacters(in: .whitespaces)
-            guard !v.isEmpty else { return nil }
-            let name = v.replacingOccurrences(of: "/", with: "\\").split(separator: "\\").last.map(String.init) ?? v
-            return name.isEmpty ? nil : name
-        }
-        return nil
+        // The `file` key of [ashita.boot] itself; `hasPrefix("file")` also took any other key that
+        // happened to start with those letters, in whatever section came first.
+        return BootProfile.loaderName(in: text)
     }
 
     /// The `--server` the profile's boot command really passes the loader, which is what a

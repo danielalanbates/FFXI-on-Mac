@@ -959,7 +959,8 @@ struct ContentView: View {
                 Button("Apply") {
                     graphics.save(world: store.selected?.name)
                     if let i = selected, let s = store.selected {
-                        Credentials.ensureProfile(s.bootProfile, in: i)
+                        Credentials.ensureProfile(s.bootProfile, in: i, loader: s.loader,
+                                                  template: s.bootTemplate, host: s.host)
                         graphics.write(to: i, profile: s.bootProfile)
                     }
                     showGraphics = false
@@ -2426,7 +2427,8 @@ struct ContentView: View {
         }
         // A world the install has no boot profile for — the local one, on every machine — needs
         // that file to exist before anything can be written into it.
-        if !Credentials.ensureProfile(server.bootProfile, in: i) {
+        if !Credentials.ensureProfile(server.bootProfile, in: i, loader: server.loader,
+                                      template: server.bootTemplate, host: server.host) {
             notice = "Could not create config/boot/\(server.bootProfile)."
             r.logFileOnly("!! " + notice)
             return
@@ -2481,6 +2483,10 @@ struct ContentView: View {
             // The client was installed by HorizonXI and carries their logo in its own data. On
             // any other world, show the stock title screen instead. See Branding.swift.
             Branding.apply(stockBranding: Branding.wantsStockBranding(server), to: i)
+            // The world's loader and the settings its profile needs (b61): a HorizonXI profile
+            // copied from Ashita's example booted pol.exe and sat at its account menu. Fixed here,
+            // on every Play, so nothing ever has to say so or wait for the user.
+            for line in Credentials.prepareProfile(for: server, in: i) { r.logFileOnly("i  " + line) }
             if !account.user.isEmpty, !account.pass.isEmpty {
                 if !Credentials.apply(user: account.user, password: account.pass, to: i,
                                       profile: server.bootProfile, server: server.host) {
@@ -2615,9 +2621,11 @@ struct ContentView: View {
         let profile = store.selected?.bootProfile ?? "horizonxi.ini"
         let horizon = world == "HorizonXI"
         let required = store.selected.map { feeds.requiredClients[$0.name] ?? $0.requiredClient } ?? ""
+        let loader = store.selected?.loader ?? "", template = store.selected?.bootTemplate ?? ""
         checksInFlight += 1
         let p = await Task.detached(priority: .userInitiated) {
-            Primary.probe(i, profile: profile, horizon: horizon, requiredClient: required)
+            Primary.probe(i, profile: profile, horizon: horizon, requiredClient: required,
+                          loader: loader, template: template)
         }.value
         let (c, v) = (p.checks, p.horizonInstalled)
         checksInFlight -= 1

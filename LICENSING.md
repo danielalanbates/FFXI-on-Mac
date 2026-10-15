@@ -8,6 +8,9 @@ help@batesai.org
 - **What it covers:** the launcher (`app/`), the scripts (`scripts/`, `tools/`), this project's own
   addons (`addons/winecursor`, `fpslog`, `lslog`, `mousediag`) and the documentation. Terms:
   [`LICENSE`](LICENSE).
+- **`app/Resources/horizonxi-boot.ini`** (bundled) is this project's own file too: Ashita v4's
+  setting names and HorizonXI's stock values, which are configuration facts, written with our own
+  comments. No Ashita or HorizonXI text is copied into it (docs/BETA-61.md).
 - **Noncommercial use is free.** Commercial use (shipping this, or a derivative of it, in a product
   or service that earns revenue) needs a separate licence from Bates LLC; standard terms are 10%
   of the gross revenue attributable to it. Ask at help@batesai.org.

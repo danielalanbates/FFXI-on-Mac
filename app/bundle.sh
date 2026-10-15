@@ -142,7 +142,7 @@ for required in \
   "$REPO/scripts/install.sh" "$REPO/scripts/fix-wine-rpath.sh" \
   "$REPO/scripts/lsb-server.sh" "$REPO/scripts/update-client.sh" "$REPO/scripts/game-wine.sh" \
   "$REPO/scripts/catseye-launcher.sh" "$REPO/scripts/retail-client.sh" \
-  "$REPO/vendor/dxvk.conf" "$REPO/LICENSE" \
+  "$REPO/vendor/dxvk.conf" "$REPO/LICENSE" "$HERE/Resources/horizonxi-boot.ini" \
   "$REPO/vendor/licenses/README.txt" "$REPO/vendor/licenses/d3d8to9-BSD-3-Clause.txt" \
   "$REPO/vendor/licenses/DXVK-zlib.txt" "$REPO/vendor/licenses/MoltenVK-Apache-2.0.txt" \
   "$REPO/vendor/licenses/cereal-BSD-3-Clause.txt" "$REPO/vendor/licenses/x87sidecar-MIT.txt"; do
@@ -169,6 +169,9 @@ cp "$REPO/scripts/lsb-server.sh"     "$APP/Contents/Resources/lsb-server.sh"
 cp "$REPO/scripts/update-client.sh"  "$APP/Contents/Resources/update-client.sh"
 cp "$REPO/scripts/game-wine.sh"      "$APP/Contents/Resources/game-wine.sh"
 cp "$HERE/Resources/apply-update.sh" "$APP/Contents/Resources/apply-update.sh"
+# HorizonXI's boot profile: their client ships none (their launcher writes it at Play), so a new
+# horizonxi.ini is made from this one (BootProfile.swift). This project's own file.
+cp "$HERE/Resources/horizonxi-boot.ini" "$APP/Contents/Resources/horizonxi-boot.ini"
 cp "$REPO/scripts/catseye-launcher.sh" "$APP/Contents/Resources/catseye-launcher.sh"
 cp "$REPO/scripts/retail-client.sh"    "$APP/Contents/Resources/retail-client.sh"
 chmod +x "$APP/Contents/Resources/"*.sh

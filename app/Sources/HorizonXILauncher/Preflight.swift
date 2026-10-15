@@ -24,7 +24,10 @@ struct Check: Identifiable {
 
 enum Preflight {
 
-    static func run(_ install: Install, profile: String = "horizonxi.ini") -> [Check] {
+    /// `loader` and `template` are the world's (`Server.loader`, `Server.bootTemplate`); with
+    /// either set, the boot profile is checked against them too.
+    static func run(_ install: Install, profile: String = "horizonxi.ini",
+                    loader: String = "", template: String = "") -> [Check] {
         let fm = FileManager.default
         var out: [Check] = []
 
@@ -116,23 +119,19 @@ enum Preflight {
         let reg: String
         do { reg = try String(contentsOf: install.systemReg, encoding: .utf8) }
         catch { reg = ""; regErr = " (\(error.localizedDescription))" }
-        let hasWow = reg.contains(#"Wow6432Node\\PlayOnlineUS\\InstallFolder"#)
-            || reg.contains(#"[Software\\Wow6432Node\\PlayOnlineUS\\InstallFolder]"#)
-            || reg.range(of: "Wow6432Node\\\\+PlayOnlineUS", options: .regularExpression) != nil
+        let (hasWow, layoutOK, comOK) = registryState(reg)
         add("reg32", "PlayOnline registry (32-bit view)", hasWow,
             "Wow6432Node\\PlayOnlineUS present",
             "missing from the 32-bit view\(regErr) — the game will exit silently (run Repair)",
             short: "Play sets the game up on the way in.", path: install.systemReg.path)
 
         // The layout itself: 0001 must be the FINAL FANTASY XI dir, not PlayOnlineViewer.
-        let layoutOK = reg.range(of: #""0001"=".*FINAL FANTASY XI""#, options: .regularExpression) != nil
         add("reglayout", "InstallFolder layout", layoutOK,
             "0001 = FINAL FANTASY XI (correct)",
             "0001 does not point at the FINAL FANTASY XI dir — FFXiMain.dll will not load",
             short: "Play sets the game up on the way in.", path: install.systemReg.path)
 
         // FINDINGS #4: three in-proc COM servers, all required.
-        let comOK = reg.contains("FFXi.FFXiEntry") && reg.contains("FFXiMain.GameMain")
         add("com", "FFXI COM servers registered", comOK,
             "FFXi.FFXiEntry + FFXiMain.GameMain registered",
             "COM servers not registered (run Repair)",
@@ -161,7 +160,37 @@ enum Preflight {
             install.d3dMetal.path,
             "no D3DMetal in the wrapper — falls back to wine's slower GL path", warnOnly: true)
 
+        // b61: a HorizonXI profile copied from Ashita's example booted pol.exe and never logged
+        // in. Play puts the loader and the missing settings right itself (Primary.fixedByPlay),
+        // so this never greys Play or says anything under it; Setup & Diagnostics shows it.
+        if !loader.isEmpty || !template.isEmpty {
+            let wrong = BootProfile.problems(profile, in: install, loader: loader, template: template)
+            let name = install.bootProfileName(profile)
+            add("bootprofile", "Boot profile", wrong.isEmpty,
+                "config/boot/\(name)",
+                "config/boot/\(name): " + wrong.joined(separator: "; ") + " — Play fixes this on the way in",
+                short: "Play sets the game up on the way in.")
+        }
+
         return out
+    }
+
+    /// The PlayOnline registry checks (32-bit view, InstallFolder layout, COM servers) on the text
+    /// of `system.reg`. FINDINGS #3/#4.
+    static func registryState(_ reg: String) -> (wow: Bool, layout: Bool, com: Bool) {
+        let wow = reg.contains(#"Wow6432Node\\PlayOnlineUS\\InstallFolder"#)
+            || reg.contains(#"[Software\\Wow6432Node\\PlayOnlineUS\\InstallFolder]"#)
+            || reg.range(of: "Wow6432Node\\\\+PlayOnlineUS", options: .regularExpression) != nil
+        let layout = reg.range(of: #""0001"=".*FINAL FANTASY XI""#, options: .regularExpression) != nil
+        let com = reg.contains("FFXi.FFXiEntry") && reg.contains("FFXiMain.GameMain")
+        return (wow, layout, com)
+    }
+
+    /// The registry and COM entries Play writes are in the prefix right now (a fresh read).
+    static func registryPointed(_ install: Install) -> Bool {
+        guard let reg = try? String(contentsOf: install.systemReg, encoding: .utf8) else { return false }
+        let r = registryState(reg)
+        return r.wow && r.layout && r.com
     }
 
     static var blocking: (([Check]) -> Bool) = { $0.contains { $0.state == .bad } }

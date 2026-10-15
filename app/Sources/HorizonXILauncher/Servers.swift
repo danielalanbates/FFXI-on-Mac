@@ -106,6 +106,23 @@ struct Server: Codable, Identifiable, Hashable {
     var maxClients: Int = 1
     var allowsMultipleClients: Bool { maxClients > 1 }
     static let noClientCap = Int.max
+    /// The boot loader (in the client's `bootloader/`) this world's login server needs, when it
+    /// needs one in particular. Play makes the boot profile name it whenever it is there
+    /// (`Credentials.fixBootLoader`), whatever the profile said. Empty: the profile's own choice
+    /// stands while that file exists. Not the user's to edit: refreshed from `builtins`.
+    ///
+    /// HorizonXI's login server takes horizon-loader.exe, and the `pol.exe` beside it in every
+    /// Ashita v4 client is Ashita's DarkStar-era loader, which connects and then sits at its own
+    /// account menu (b60, 2026-10-15). The local world plays through that same client and loader
+    /// (MultiWorld), so it declares it too: on a fresh client its profile is copied from Ashita's
+    /// example, which names pol.exe. CatsEyeXI's own loader *is* called pol.exe, Gaia XI's is
+    /// gxiloader.exe and Supernova's xiloader.exe, and each of those profiles already names its
+    /// own: they declare none, and keep exactly what they had.
+    var loader: String = ""
+    /// The boot profile shipped in the app that a new profile for this world is made from, and
+    /// whose required settings an existing one is completed with (see `BootProfile`). Empty: a
+    /// new profile is copied from one already in the client, as before. Refreshed from `builtins`.
+    var bootTemplate: String = ""
 
     /// How a world's client is obtained.
     /// - `clientZip`: a plain archive of the finished client, unpacked straight into `dataPath`.
@@ -126,7 +143,7 @@ struct Server: Codable, Identifiable, Hashable {
          installURL: String = "", installKind: InstallKind = .website, installNote: String = "",
          accountURL: String = "", accountHow: String = "", discordURL: String = "",
          renderer: Renderer? = nil, x87: Bool = true, msync: Bool = true,
-         maxClients: Int = 1) {
+         maxClients: Int = 1, loader: String = "", bootTemplate: String = "") {
         self.codebase = codebase; self.retired = retired
         self.name = name; self.host = host; self.bootProfile = bootProfile
         self.verified = verified; self.note = note; self.era = era
@@ -136,6 +153,7 @@ struct Server: Codable, Identifiable, Hashable {
         self.accountURL = accountURL; self.accountHow = accountHow; self.discordURL = discordURL
         self.renderer = renderer; self.x87 = x87; self.msync = msync
         self.maxClients = maxClients
+        self.loader = loader; self.bootTemplate = bootTemplate
     }
 
     init(from decoder: Decoder) throws {
@@ -166,6 +184,8 @@ struct Server: Codable, Identifiable, Hashable {
         x87         = try c.decodeIfPresent(Bool.self, forKey: .x87) ?? Server.builtins.first { $0.name == name }?.x87 ?? true
         msync       = try c.decodeIfPresent(Bool.self, forKey: .msync) ?? Server.builtins.first { $0.name == name }?.msync ?? true
         maxClients  = Server.all.first { $0.name == name }?.maxClients ?? 1
+        loader      = Server.all.first { $0.name == name }?.loader ?? ""
+        bootTemplate = Server.all.first { $0.name == name }?.bootTemplate ?? ""
         // A world the user has not renamed inherits a renderer the project has since measured
         // for it -- otherwise a servers.json written before this field existed keeps launching
         // Gaia XI on the pathway that is known to kill it.
@@ -230,7 +250,8 @@ struct Server: Codable, Identifiable, Hashable {
                installNote: "HorizonXI's own client, fetched the way their launcher does it: a 9.4 GB torrent, then their updates. Needs aria2 (brew install aria2).",
                accountURL: "https://horizonxi.com/register",
                accountHow: "Sign up on horizonxi.com, then log in here with that account.",
-               discordURL: "https://discord.gg/horizonxi"),
+               discordURL: "https://discord.gg/horizonxi",
+               loader: "horizon-loader.exe", bootTemplate: BootProfile.horizonTemplate),
         Server(name: "Local server", host: "127.0.0.1", bootProfile: "lsb.ini",
                verified: true,
                note: "LandSandBoat, built and run on this Mac. Nobody else can reach it.",
@@ -239,7 +260,7 @@ struct Server: Codable, Identifiable, Hashable {
                accountHow: "Your own world: the loader window offers to create the account the "
                      + "first time you connect. No signup site, and nobody to ask.",
                // Daniel's own server: nobody's rules but his.
-               maxClients: Server.noClientCap),
+               maxClients: Server.noClientCap, loader: "horizon-loader.exe"),
         Server(name: "CatsEyeXI", host: "server.catseyexi.com", bootProfile: "catseyexi.ini",
                verified: false,
                note: "Login host from CatsEyeXI's own connect page. Untested by this project.",
@@ -403,6 +424,8 @@ final class ServerStore: ObservableObject {
                 // Not the user's to edit, and an old servers.json predates the flag entirely.
                 out[i].local = b.local
                 out[i].maxClients = b.maxClients
+                out[i].loader = b.loader
+                out[i].bootTemplate = b.bootTemplate
                 if b.local { out[i].host = b.host }
                 // A stored blank host means the user never set one — adopt a host this project
                 // has since sourced (Gaia XI shipped blank until 2026-08-19). A user-typed host

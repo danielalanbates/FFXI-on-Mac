@@ -210,9 +210,10 @@ struct PrimaryInputs {
 }
 
 enum Primary {
-    /// Checks Play fixes by itself on the way in (GameRegistry.point, Sandbox.repair): they
+    /// Checks Play fixes by itself on the way in (GameRegistry.point, Sandbox.repair,
+    /// Credentials.prepareProfile): they
     /// must not grey PLAY, and say nothing.
-    static let fixedByPlay: Set<String> = ["reg32", "reglayout", "com", "sandbox"]
+    static let fixedByPlay: Set<String> = ["reg32", "reglayout", "com", "sandbox", "bootprofile"]
     /// What only Repair fixes.
     static let fixedByRepair: Set<String> = ["rpath"]
     static let gameFiles: Set<String> = ["client", "squareenix", "ashita"]
@@ -392,9 +393,10 @@ enum Primary {
     }
 
     /// Everything the decision needs from disk. Read-only; may be slow on a sleeping drive.
-    static func probe(_ i: Install, profile: String, horizon: Bool, requiredClient: String) -> Probe {
+    static func probe(_ i: Install, profile: String, horizon: Bool, requiredClient: String,
+                      loader: String = "", template: String = "") -> Probe {
         var p = Probe()
-        p.checks = Preflight.run(i, profile: profile)
+        p.checks = Preflight.run(i, profile: profile, loader: loader, template: template)
         for d in Set(p.checks.filter { $0.state == .bad }.compactMap(\.drive)) {
             p.driveStates[d] = Preflight.driveState(d)
         }

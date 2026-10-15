@@ -49,7 +49,8 @@ extension Headless {
         }
         let i = base.forServer(server)
         let p = Primary.probe(i, profile: server.bootProfile, horizon: server.name == "HorizonXI",
-                              requiredClient: server.requiredClient)
+                              requiredClient: server.requiredClient,
+                              loader: server.loader, template: server.bootTemplate)
         x.checks = p.checks
         x.driveStates = p.driveStates
         x.hasGame = p.hasGame

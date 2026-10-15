@@ -126,7 +126,8 @@ enum Headless {
         var worst = 0
         for server in store.servers where only == nil || server.name == only! {
             let i = base.forServer(server)
-            let checks = Preflight.run(i, profile: server.bootProfile)
+            let checks = Preflight.run(i, profile: server.bootProfile, loader: server.loader,
+                                       template: server.bootTemplate)
             let bad = checks.filter { $0.state == .bad }
             let flag = bad.isEmpty ? "ok  " : "BAD "
             let where_ = server.dataPath.isEmpty ? "(wrapper default)" : i.gameDir.path
