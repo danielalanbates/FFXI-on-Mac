@@ -415,11 +415,13 @@ final class Runner: ObservableObject {
     /// Why Repair cannot help, before anything is written: the game data is behind a drive that
     /// is not there, or its DLLs are gone. 2026-10-15: Repair ran against a ghost-mounted
     /// 'Games' drive, rewrote the registry, re-updated the prefix with the wrong wine, and then
-    /// died in regsvr32 with a bare "exited 3".
+    /// died in regsvr32 with a bare "exited 3". On the main thread, so the drive's line is the
+    /// plain one: telling "unmounted" apart runs `diskutil list`, which can stall (the main
+    /// button's own line comes from the checks, off the main thread).
     nonisolated static func repairBlocker(_ install: Install) -> String? {
         let se = install.squareEnix
         if let d = Preflight.unavailableDrive(for: se.appendingPathComponent("FINAL FANTASY XI").path) {
-            return Preflight.driveLine(d, Preflight.driveState(d)) + " Repair can't fix that; nothing was changed."
+            return Preflight.driveMessage(d) + " Repair can't fix that; nothing was changed."
         }
         let need = ["FINAL FANTASY XI/FFXi.dll", "FINAL FANTASY XI/FFXiMain.dll", "FINAL FANTASY XI/FFXiVersions.dll"]
         let missing = need.filter { !FileManager.default.fileExists(atPath: se.appendingPathComponent($0).path) }
@@ -526,7 +528,7 @@ final class Runner: ObservableObject {
     func updateHorizon(_ install: Install, done: @escaping (Bool) -> Void) {
         guard !Runner.workInFlight, !running else { appendLine("!! something else is running in the wrapper — try again when it finishes"); done(false); return }
         if let d = Preflight.unavailableDrive(for: install.squareEnix.path) {
-            appendLine("!! " + Preflight.driveLine(d, Preflight.driveState(d))); done(false); return
+            appendLine("!! " + Preflight.driveMessage(d)); done(false); return
         }
         guard claimForMaintenance("the HorizonXI update") else { done(false); return }
         guard let script = Self.updateScript() else {
@@ -947,7 +949,7 @@ final class Runner: ObservableObject {
         // Files behind a drive that is gone cannot be fetched into: say so before anything is
         // written (update-client.sh checks again, for the CLI).
         if let d = Preflight.unavailableDrive(for: dir.appendingPathComponent("SquareEnix/FINAL FANTASY XI").path) {
-            appendLine("!! " + Preflight.driveLine(d, Preflight.driveState(d))); done(false); return
+            appendLine("!! " + Preflight.driveMessage(d)); done(false); return
         }
         guard let script = Self.updateScript() else {
             appendLine("!! update-client.sh not found in the bundle"); done(false); return
@@ -980,7 +982,7 @@ final class Runner: ObservableObject {
     func installGameWine(into folder: URL, done: @escaping (Bool) -> Void) {
         if refuseWhileBusy("the game's Wine") { done(false); return }
         if let d = Preflight.unavailableDrive(for: folder.path) {
-            appendLine("!! " + Preflight.driveLine(d, Preflight.driveState(d))); done(false); return
+            appendLine("!! " + Preflight.driveMessage(d)); done(false); return
         }
         guard let script = Self.gameWineScript() else {
             appendLine("!! game-wine.sh not found in the bundle"); done(false); return
