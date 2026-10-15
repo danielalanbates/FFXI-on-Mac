@@ -415,3 +415,44 @@ Nothing launched, nothing published.
 
 Needs Daniel's live test: with a real 3.10, press Restart then PLAY at once (PLAY must be grey);
 Restart while "Set up server" runs (button grey, tooltip names it); quitting during setup asks.
+
+## Review fixes: build/install scripts and docs
+
+- **bundle.sh `/Applications` guard**: paths are physical (`cd -P`/`pwd -P`) and the folder is
+  compared by device and inode, so `/System/Volumes/Data/Applications`, `/applications` or a
+  symlink to `/Applications` no longer skip it.
+- **Live pattern narrowed** (bundle.sh and the installer): `FFXI-on-Mac\.app/Contents/(MacOS|
+  Resources/x87sidecar)|horizon-loader|Ashita-cli|/wine-coop/wine/|/SharedSupport/wine/`. Covers
+  the launcher, its sidecars, the patched wine at every `X87Sidecar.patchedWineCandidates` place
+  (its wineserver runs as `…/wine-coop/wine/lib/wine/../../bin/wineserver`) and a wrapper's wine;
+  CrossOver, Whisky, XIV on Mac and Homebrew wine no longer block. Another Wineskin-style wrapper
+  (same `SharedSupport/wine` layout) still does. Refusals list pid + executable only: the old
+  `pgrep -fl` printed a loader's `--pass`.
+- **Installer**: the running-game check now comes before step 3, so `install.sh` never rewrites
+  a live prefix; step 4 is `bundle.sh /Applications` (staged build, swap with rollback, archive),
+  not `rm -rf` + `cp -R`, and no longer installs a stale `app/build` left from an earlier run.
+- **package.sh**: refuses uncommitted launcher changes; bundle.sh writes `HXILauncherRevision`
+  (`-dirty` like the addons) and package.sh checks and prints it. Gitignored files inside the
+  bundled addon folders (navgrids, character settings, `dialogue.jsonl`) refuse the release and
+  are listed; ignored files elsewhere in those checkouts do not.
+- **FRIENDLIST.md**: the second account's password goes in the game folder's
+  `config/boot/lsb2.ini`, never in the tracked `addons/lsb2.ini.example`.
+
+How it was verified: `zsh -n` on all three scripts. `bundle.sh` to `/Applications`,
+`/System/Volumes/Data/Applications`, `/applications` and a symlink to `/Applications` (with
+`HXI_BINARY=/nonexistent`, so nothing could install): all four refuse and list the running
+launcher. The pattern, against canned command lines: matches the launcher, sidecars, loader,
+Ashita, coop and wrapper wineservers; not XIV on Mac, CrossOver, Whisky, Homebrew, a staging
+bundle or bundle.sh itself. The installer's live-check block run on its own: refuses with the
+launcher listed; passes with nothing matching. package.sh: refuses this dirty checkout; against
+scratch repos, refuses an ignored folder in the Vanaguide source and an ignored `dialogue.jsonl`
+in the VanaVoice source, passes ignored files elsewhere; the real siblings list nothing.
+`bundle.sh` twice into a symlinked scratch folder under `~/Downloads/FFXI-on-Mac-build/`: built at
+the physical path, second run archived the first, `HXILauncherRevision` = HEAD, `plutil -lint`
+and `codesign --verify --deep --strict` OK (scratch unregistered and removed). `swift build -c
+release` clean; all 15 `--selftest-*` pass; `--check` runs (BAD only for the missing Games drive
+and uninstalled worlds, as before). Nothing launched, nothing installed, nothing pushed.
+
+Needs Daniel's live test: run "Install FFXI on Mac.command" with the launcher quit (installs,
+old copy in `~/Downloads/FFXI-on-Mac-build/archive-apps`), and once with it open (refuses at
+once, before step 3).
