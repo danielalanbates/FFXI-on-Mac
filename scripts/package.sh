@@ -42,13 +42,23 @@ if ! launcher_state="$(/usr/bin/git -C "$REPO" status --porcelain)" || [[ -n "$l
 fi
 # The app bundles Vanaguide and VanaVoice straight from the sibling checkouts, so a release is only
 # reproducible from committed addon code. Refuse uncommitted or untracked changes in either.
-VANAGUIDE_ROOT="${${HXI_VANAGUIDE_SOURCE:-$REPO/../vanaguide/Vanaguide}:h}"
-VANAVOICE_ROOT="${${HXI_VANAVOICE_SOURCE:-$REPO/../vanavoice/addon/vanavoice}:h:h}"
-for addon_root in "$VANAGUIDE_ROOT" "$VANAVOICE_ROOT"; do
+VANAGUIDE_SOURCE="${HXI_VANAGUIDE_SOURCE:-$REPO/../vanaguide/Vanaguide}"
+VANAVOICE_SOURCE="${HXI_VANAVOICE_SOURCE:-$REPO/../vanavoice/addon/vanavoice}"
+for addon_root addon_source in "${VANAGUIDE_SOURCE:h}" "$VANAGUIDE_SOURCE" \
+                               "${VANAVOICE_SOURCE:h:h}" "$VANAVOICE_SOURCE"; do
   [[ -e "$addon_root/.git" ]] || { echo "release packaging needs a git checkout at $addon_root" >&2; exit 1; }
   if ! addon_state="$(/usr/bin/git -C "$addon_root" status --porcelain)" || [[ -n "$addon_state" ]]; then
     echo "release packaging refuses an addon checkout with uncommitted changes: $addon_root" >&2
     /usr/bin/git -C "$addon_root" status --short >&2 || true
+    exit 1
+  fi
+  # bundle.sh copies the whole addon folder, so a gitignored file in it ships too: built navgrids
+  # (Vanaguide/data/nav, never to be shipped), per-character settings, VanaVoice's dialogue.jsonl
+  # play history. Plain status hides those; with the checkout clean, anything listed here is one.
+  if ! addon_state="$(/usr/bin/git -C "$addon_source" status --porcelain --ignored -- .)" \
+     || [[ -n "$addon_state" ]]; then
+    echo "release packaging refuses ignored files in the addon folder (they would ship): $addon_source" >&2
+    print -r -- "$addon_state" >&2
     exit 1
   fi
 done
