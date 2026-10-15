@@ -189,6 +189,10 @@ enum Preflight {
             if cur.isEmpty, part == "Volumes", n + 1 < parts.count {
                 let vol = "/Volumes/" + parts[n + 1]
                 if !fm.fileExists(atPath: vol) { return parts[n + 1] }
+                // /Volumes is case-insensitive: with 'Games' ghost-mounted, a USB stick named
+                // 'GAMES' answered at /Volumes/Games (2026-10-15) and the data looked deleted
+                // rather than on a drive that is not there.
+                if isImpostor(volume: vol, mountPoint: mountPoint(of: vol)) { return parts[n + 1] }
             }
             let next = cur + "/" + part
             var st = stat()
@@ -202,6 +206,24 @@ enum Preflight {
             cur = next
         }
         return nil
+    }
+
+    /// The mount point that serves `path` (statfs), or nil.
+    static func mountPoint(of path: String) -> String? {
+        var st = statfs()
+        guard statfs(path, &st) == 0 else { return nil }
+        var mp = st.f_mntonname
+        return withUnsafePointer(to: &mp) {
+            $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+        }
+    }
+
+    /// `/Volumes/<name>` is answered by a different drive: another volume's mount point (exact
+    /// case) rather than its own. A folder under /Volumes that is not a mount point at all, or
+    /// the boot volume's link, is served by "/" and does not count.
+    static func isImpostor(volume: String, mountPoint mp: String?) -> Bool {
+        guard let mp, mp.hasPrefix("/Volumes/") else { return false }
+        return mp != volume
     }
 
     // MARK: - Why a drive is missing (b60)

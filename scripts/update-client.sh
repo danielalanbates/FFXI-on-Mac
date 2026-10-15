@@ -105,17 +105,26 @@ horizon_marketing() {
 
 fetch_json() { curl -fsSL -A "$UA" --max-time 20 -o "$2" "$1"; }
 
+# The mount point serving $1. /Volumes is case-insensitive: with 'Games' ghost-mounted, a stick
+# named 'GAMES' answered at /Volumes/Games (2026-10-15), so "it exists" is not enough.
+mount_of() { /bin/df -P "$1" 2>/dev/null | /usr/bin/awk 'NR == 2 { for (i = 6; i <= NF; i++) printf "%s%s", $i, (i < NF ? " " : "") }'; }
+vol_gone() {
+  [[ -e "$1" ]] || return 0
+  local m; m=$(mount_of "$1")
+  [[ "$m" == /Volumes/* && "$m" != "$1" ]]
+}
+
 # The game's files can sit behind a symlink on another drive (SquareEnix -> /Volumes/Games/…).
 # Writing through it while that drive is gone fails half way, so say so before writing anything.
 drive_check() {
   local se="$game/SquareEnix" tgt vol
-  [[ -L "$se" && ! -e "$se" ]] || return 0
+  [[ -L "$se" ]] || return 0
   tgt=$(readlink "$se")
   if [[ "$tgt" == /Volumes/* ]]; then
     vol="/Volumes/${${tgt#/Volumes/}%%/*}"
-    [[ -e "$vol" ]] || die "The '${vol:t}' drive isn't connected — reconnect it or press Setup. Nothing was changed."
+    vol_gone "$vol" && die "The '${vol:t}' drive isn't connected — reconnect it or press Setup. Nothing was changed."
   fi
-  die "The game's files link to $tgt, which isn't there. Nothing was changed."
+  [[ -e "$se" ]] || die "The game's files link to $tgt, which isn't there. Nothing was changed."
 }
 
 # Bytes free on the volume holding $1, and a refusal when a download would not fit.

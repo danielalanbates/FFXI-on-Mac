@@ -1317,10 +1317,6 @@ struct ContentView: View {
                                 .disabled(runner.busy)
                                 .help("Run a Windows installer or launcher (.exe or .zip) you already downloaded for \(s.name), inside the wrapper. It installs into C:\\Games\\\(s.name), which is \(s.dataPath.isEmpty ? "the folder you choose" : s.dataPath).")
                         }
-                        if runner.busy {
-                            Button("Stop install") { if let i = active { runner.cancelInstaller(i) } }
-                                .help("Kills whatever is running in the installer prefix.")
-                        }
                         // Also reachable when an install already exists: a wrapper can be
                         // broken past what Repair fixes, and rebuilding a fresh one beside it
                         // is faster than diagnosing wine by hand.
@@ -1552,10 +1548,16 @@ struct ContentView: View {
                 // Stop is never one Return key away.
                 .keyboardShortcut(d.destructive ? nil : .defaultAction)
                 .disabled(!d.enabled)
+                // The running job's own Stop, beside its progress (it used to sit in a banner,
+                // and the installers' in Setup & Diagnostics).
                 if runner.updatingHorizon {
                     Button("Stop") { runner.stopHorizonUpdate() }
                         .controlSize(.small)
                         .help("Stops the download. Press the button again later to resume.")
+                } else if runner.busy, runner.busyReason.hasPrefix("Installing") || runner.busyReason.hasPrefix("Running") {
+                    Button("Stop") { if let i = active { runner.cancelInstaller(i) } }
+                        .controlSize(.small)
+                        .help("Stops the installer running inside the wrapper.")
                 }
             }
             if let p = d.progress { ProgressView(value: p).tint(Vana.gold) }

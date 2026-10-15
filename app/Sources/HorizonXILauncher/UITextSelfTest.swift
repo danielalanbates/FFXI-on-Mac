@@ -35,6 +35,12 @@ extension Headless {
         try? fm.createSymbolicLink(atPath: a.path, withDestinationPath: b.path)
         try? fm.createSymbolicLink(atPath: b.path, withDestinationPath: a.path)
         checks.append(("a symlink loop ends (no drive, no hang)", Preflight.unavailableDrive(for: a.path) == nil))
+        checks.append(("a different drive answering at /Volumes/<name> (other case) counts as that drive missing",
+                       Preflight.isImpostor(volume: "/Volumes/Games", mountPoint: "/Volumes/GAMES")
+                           && !Preflight.isImpostor(volume: "/Volumes/Games", mountPoint: "/Volumes/Games")
+                           && !Preflight.isImpostor(volume: "/Volumes/Macintosh HD", mountPoint: "/")
+                           && !Preflight.isImpostor(volume: "/Volumes/x", mountPoint: nil)))
+        checks.append(("the boot volume's mount point is /", Preflight.mountPoint(of: "/") == "/"))
         checks.append(("the root volume is always there", Preflight.unavailableDrive(for: "/Volumes/Macintosh HD/Users") == nil
                            || !fm.fileExists(atPath: "/Volumes/Macintosh HD")))
 
@@ -73,7 +79,9 @@ extension Headless {
                        ![reason(ok), reason(starting: true, ok), reason(plain)].contains {
                            ["ready to play", "game running", "setup incomplete"].contains($0 ?? "") }))
         checks.append(("reason: nothing installed", reason(installed: false, ok) == "CatsEyeXI isn't installed yet."))
-        checks.append(("reason: not installed", reason(hasGame: false, ok) == "CatsEyeXI isn't installed yet."))
+        let none = [Check(id: "client", title: "Game folder", state: .bad, detail: ""),
+                    Check(id: "squareenix", title: "FINAL FANTASY XI data", state: .bad, detail: "")]
+        checks.append(("reason: not installed", reason(hasGame: false, none) == "CatsEyeXI isn't installed yet."))
         checks.append(("reason: Wine missing", reason(wine) == "Wine isn't installed yet."))
         checks.append(("reason: an unknown failing check gives its title", reason(plain) == "Something"))
         checks.append(("reason: the missing drive, ahead of an earlier failing check",

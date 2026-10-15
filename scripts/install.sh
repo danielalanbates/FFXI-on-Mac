@@ -47,13 +47,21 @@ die() { print -r -- "!! $*" >&2; exit "${2:-1}"; }
 # answers (reconnect the drive / get the files again), and neither is something Repair can fix.
 # Checked before anything is written.
 # ---------------------------------------------------------------------------
+# The mount point serving $1. /Volumes is case-insensitive: with 'Games' ghost-mounted, a stick
+# named 'GAMES' answered at /Volumes/Games (2026-10-15), so "it exists" is not enough.
+mount_of() { /bin/df -P "$1" 2>/dev/null | /usr/bin/awk 'NR == 2 { for (i = 6; i <= NF; i++) printf "%s%s", $i, (i < NF ? " " : "") }'; }
+vol_gone() {
+  [[ -e "$1" ]] || return 0
+  local m; m=$(mount_of "$1")
+  [[ "$m" == /Volumes/* && "$m" != "$1" ]]
+}
 # The /Volumes/<name> that $1 lives on or links into, when that volume is not there.
 missing_drive() {
   local p="$1" hops=0 t
   while (( hops < 16 )); do
     if [[ "$p" == /Volumes/* ]]; then
       local vol="/Volumes/${${p#/Volumes/}%%/*}"
-      [[ -e "$vol" ]] || { print -r -- "${vol:t}"; return 0; }
+      vol_gone "$vol" && { print -r -- "${vol:t}"; return 0; }
     fi
     [[ -L "$p" ]] || break
     t=$(readlink "$p"); [[ "$t" == /* ]] || t="${p:h}/$t"
