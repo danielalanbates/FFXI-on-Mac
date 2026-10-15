@@ -31,13 +31,49 @@ GAME_DIR="${3:-$WINEPREFIX/drive_c/HorizonXI}"
 SE_C="${4:-C:\\HorizonXI\\SquareEnix}"
 SE_DIR="${5:-$GAME_DIR/SquareEnix}"
 REG32='C:\windows\syswow64\reg.exe'
+WINESERVER="${WINE:h}/wineserver"
 # Never the Mono/Gecko install prompts (they would wait forever for a click), never a stray
 # DYLD_* from whoever started this.
-export WINEDEBUG=-all WINEDLLOVERRIDES="mscoree,mshtml=" WINEBOOT_HIDE_DIALOG=1
+#
+# And no window driver: nothing here draws, and Wine's Mac driver started from a script (not
+# through `open`) crashes in a loop inside explorer.exe. 2026-10-15, b60 Setup on a fresh prefix
+# with the game's Wine: regsvr32 waited on that explorer for good and the button said "Setting
+# up…" forever. With winemac.drv off the same calls finish in about a second. The session is
+# ended at the bottom, so Play starts a new one with the driver on.
+export WINEDEBUG=-all WINEDLLOVERRIDES="mscoree,mshtml=;winemac.drv=d" WINEBOOT_HIDE_DIALOG=1
 unset DYLD_FALLBACK_LIBRARY_PATH DYLD_LIBRARY_PATH
 
 info() { print -r -- "==> $*"; }
 die() { print -r -- "!! $*" >&2; exit "${2:-1}"; }
+
+# Every wine call is bounded. One that has not returned after $1 seconds ends this prefix's
+# whole session (that is what a hang holds) and returns 124, so the step names itself instead of
+# leaving the button spinning.
+wine_t() {
+  local limit=$1 n=0 pid; shift
+  "$WINE" "$@" >/dev/null 2>&1 &
+  pid=$!
+  while kill -0 $pid 2>/dev/null; do
+    if (( n >= limit * 2 )); then
+      "$WINESERVER" -k >/dev/null 2>&1 || true
+      wait $pid 2>/dev/null || true
+      return 124
+    fi
+    sleep 0.5; n=$((n + 1))
+  done
+  wait $pid
+}
+
+# End this prefix's session and wait (bounded) for it to go. The launcher runs Repair only with
+# no game live in any launcher, so what is left here is wine's own programs or a leftover from an
+# interrupted Setup -- e.g. that regsvr32 still waiting on a crash-looping explorer.
+end_session() {
+  "$WINESERVER" -k >/dev/null 2>&1 || return 0
+  "$WINESERVER" -w >/dev/null 2>&1 &
+  local pid=$! n=0
+  while kill -0 $pid 2>/dev/null && (( n < 60 )); do sleep 0.5; n=$((n + 1)); done
+  kill $pid 2>/dev/null || true
+}
 
 [[ -x "$WINE" ]] || die "Wine isn't installed in $APP — press Setup."
 [[ -d "$GAME_DIR" ]] || die "The game isn't installed yet (no $GAME_DIR) — press Setup."
@@ -109,10 +145,16 @@ rpath_out=$("${0:h}/fix-wine-rpath.sh" "$APP" 2>&1) \
 # reg.exe writes only the 64-bit view, so a prefix configured with plain `wine reg add` leaves the
 # game seeing nothing.
 # ---------------------------------------------------------------------------
+end_session
 info "writing PlayOnline registry (both views)"
+# The first call also brings the prefix up to this wine's version, which can take a minute on a
+# slow drive; a second call is quick.
 reg_set() {
-  "$WINE" "$@" >/dev/null 2>&1 \
-    || die "Couldn't write the game's registry settings (reg exit $?). Quit the game, then press Repair again."
+  local rc=0
+  wine_t 300 "$@" || rc=$?
+  (( rc == 0 )) && return 0
+  (( rc == 124 )) && die "Wine stopped answering while writing the game's settings. Press Repair to try again."
+  die "Couldn't write the game's registry settings (reg exit $rc). Quit the game, then press Repair again."
 }
 for REG in "$REG32" reg; do
   reg_set $REG add "HKLM\\SOFTWARE\\PlayOnlineUS\\InstallFolder" /v 0001 /d "$SE_C\\FINAL FANTASY XI" /f
@@ -128,7 +170,7 @@ reg_set reg add "HKCU\\Software\\Wine\\Mac Driver" /v RightOptionIsAlt /d y /f
 
 # The client ships pol.reg / polu.reg; polu.reg holds HKCU video settings the game needs present.
 for r in pol polu; do
-  [[ -f "$WINEPREFIX/drive_c/$r.reg" ]] && "$WINE" regedit /S "C:\\$r.reg" >/dev/null 2>&1 || true
+  [[ -f "$WINEPREFIX/drive_c/$r.reg" ]] && wine_t 120 regedit /S "C:\\$r.reg" || true
 done
 
 # ---------------------------------------------------------------------------
@@ -150,9 +192,10 @@ info "registering FFXI COM servers"
 failed=()
 register() {
   local rc=0
-  "$WINE" regsvr32 /s "$1" >/dev/null 2>&1 || rc=$?
+  wine_t 120 regsvr32 /s "$1" || rc=$?
   case $rc in
     0) ;;
+    124) failed+=("${1##*\\} didn't answer within two minutes") ;;
     3) failed+=("${1##*\\} couldn't be loaded (regsvr32 3)") ;;
     4) failed+=("${1##*\\} has no registration entry (regsvr32 4)") ;;
     5) failed+=("${1##*\\} refused to register (regsvr32 5)") ;;
@@ -224,8 +267,8 @@ if [[ -n "${HXI_METAL:-}" && -f "${0:h}/../vendor/d3d8to9.dll" && -f "${0:h}/../
   done
 
   for REG in "$REG32" reg; do
-    "$WINE" $REG add "HKCU\\Software\\Wine\\DllOverrides" /v "*d3d8" /d native /f >/dev/null 2>&1
-    "$WINE" $REG add "HKCU\\Software\\Wine\\DllOverrides" /v "*d3d9" /d native /f >/dev/null 2>&1
+    wine_t 120 $REG add "HKCU\\Software\\Wine\\DllOverrides" /v "*d3d8" /d native /f || true
+    wine_t 120 $REG add "HKCU\\Software\\Wine\\DllOverrides" /v "*d3d9" /d native /f || true
   done
 
   # 3. the MoltenVK that can actually create a Vulkan 1.2 device
@@ -238,6 +281,9 @@ if [[ -n "${HXI_METAL:-}" && -f "${0:h}/../vendor/d3d8to9.dll" && -f "${0:h}/../
     echo "  ! moltenvkcx not found; DXVK will fail to create a device" >&2
   fi
 fi
+
+# Play must not join this session: its explorer has no window driver.
+end_session
 
 # ---------------------------------------------------------------------------
 # 4. Launcher.

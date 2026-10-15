@@ -76,9 +76,13 @@ enum LiveClients {
     /// leader of its own group. The rest are the ones wine starts on demand and leaves running
     /// (tabtip, conhost, start, winemenubuilder). Only matched under `C:\windows\` (or with no
     /// folder at all), so a game program that happens to share a name still counts.
+    /// Setup's own tools (regsvr32, reg, regedit, wineboot) are wine's too: one left hanging by
+    /// an interrupted Setup (2026-10-15) otherwise read as a game "running elsewhere", which
+    /// blocked the very Repair that ends it.
     static let wineSystemPrograms = ["services.exe", "explorer.exe", "winedevice.exe", "plugplay.exe",
                                      "svchost.exe", "rpcss.exe", "tabtip.exe", "conhost.exe",
-                                     "start.exe", "winemenubuilder.exe"]
+                                     "start.exe", "winemenubuilder.exe",
+                                     "regsvr32.exe", "reg.exe", "regedit.exe", "wineboot.exe"]
 
     /// `127.0.0.1` and `localhost` are the same world; hosts are case-insensitive.
     static func normalize(_ host: String) -> String {

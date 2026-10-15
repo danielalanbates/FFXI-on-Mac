@@ -66,8 +66,11 @@ enum GameRegistry {
         return true
     }
 
+    /// No window driver: registry and COM work draws nothing, and on a fresh prefix the Mac
+    /// driver's explorer can crash-loop and hold regsvr32 for good (see install.sh). `point`
+    /// stops the wineserver afterwards, so the game's own session starts with the driver on.
     private static func wine(_ i: Install, _ args: [String]) {
-        let cmd = "export WINEPREFIX=\(Bridge.shellQuote(i.prefix.path)); export WINEDEBUG=-all; export WINEBOOT_HIDE_DIALOG=1; \(Bridge.shellQuote(Runner.playWine(i).path)) " + args.map(Bridge.shellQuote).joined(separator: " ")
+        let cmd = "export WINEPREFIX=\(Bridge.shellQuote(i.prefix.path)); export WINEDEBUG=-all; export WINEBOOT_HIDE_DIALOG=1; export WINEDLLOVERRIDES='winemac.drv=d'; \(Bridge.shellQuote(Runner.playWine(i).path)) " + args.map(Bridge.shellQuote).joined(separator: " ")
         Bridge.runShell(cmd)
     }
 }
