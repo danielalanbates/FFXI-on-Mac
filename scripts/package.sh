@@ -3,8 +3,9 @@
 #
 #   HXI_SIGN_ID=<Developer ID SHA-1> [HXI_NOTARY_PROFILE=batesai-notary] ./scripts/package.sh [output-dir]
 #
-# Needs the signing identity and a notarytool keychain profile, and clean, committed vanaguide and
-# vanavoice checkouts beside this repo (their commits are recorded in Info.plist and printed).
+# Needs the signing identity and a notarytool keychain profile, and this repo and the vanaguide and
+# vanavoice checkouts beside it clean and committed (all three commits are recorded in Info.plist
+# and printed).
 #
 # What ships in the .dmg:
 #   FFXI-on-Mac.app   the launcher (preflight, repair, account, play, renderer)
@@ -32,6 +33,13 @@ if [[ -z "${HXI_SIGN_ID:-}" ]]; then
   exit 1
 fi
 PROFILE="${HXI_NOTARY_PROFILE:-batesai-notary}"
+# The launcher is built from this checkout as it sits on disk, so the same goes for it: a release
+# must be a commit (HXILauncherRevision in Info.plist, and the release notes).
+if ! launcher_state="$(/usr/bin/git -C "$REPO" status --porcelain)" || [[ -n "$launcher_state" ]]; then
+  echo "release packaging refuses uncommitted launcher changes: $REPO" >&2
+  /usr/bin/git -C "$REPO" status --short >&2 || true
+  exit 1
+fi
 # The app bundles Vanaguide and VanaVoice straight from the sibling checkouts, so a release is only
 # reproducible from committed addon code. Refuse uncommitted or untracked changes in either.
 VANAGUIDE_ROOT="${${HXI_VANAGUIDE_SOURCE:-$REPO/../vanaguide/Vanaguide}:h}"
@@ -60,11 +68,13 @@ VERSION="$(/usr/bin/plutil -extract CFBundleShortVersionString raw "$APP/Content
 BUILD="$(/usr/bin/plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")"
 [[ -n "$VERSION" ]] || { echo "app has no version" >&2; exit 1; }
 [[ "$BUILD" == <-> ]] || { echo "app has no numeric build (CFBundleVersion): $BUILD" >&2; exit 1; }
-# bundle.sh records the addon commits in Info.plist (HXIAddonRevisions); they go in the notes.
+# bundle.sh records the launcher and addon commits in Info.plist (HXILauncherRevision,
+# HXIAddonRevisions); they go in the notes.
+LAUNCHER_REV="$(/usr/bin/plutil -extract HXILauncherRevision raw "$APP/Contents/Info.plist")"
 VANAGUIDE_REV="$(/usr/bin/plutil -extract HXIAddonRevisions.Vanaguide raw "$APP/Contents/Info.plist")"
 VANAVOICE_REV="$(/usr/bin/plutil -extract HXIAddonRevisions.VanaVoice raw "$APP/Contents/Info.plist")"
-for rev in "$VANAGUIDE_REV" "$VANAVOICE_REV"; do
-  [[ "$rev" =~ '^[0-9a-f]{40}$' ]] || { echo "app records no clean addon revision: $rev" >&2; exit 1; }
+for rev in "$LAUNCHER_REV" "$VANAGUIDE_REV" "$VANAVOICE_REV"; do
+  [[ "$rev" =~ '^[0-9a-f]{40}$' ]] || { echo "app records no clean revision: $rev" >&2; exit 1; }
 done
 # The build rides in the asset name: the updater compares (version, build) and checks the
 # staged app's CFBundleVersion against it (Updater.swift, UpdateRules.build(fromAssetName:)).
@@ -122,4 +132,4 @@ ditto "$CANDIDATE" "$FINAL_STAGE"
 mv "$FINAL_STAGE" "$DMG"
 FINAL_STAGE=""
 echo "built $DMG"
-echo "for the release notes: Vanaguide $VANAGUIDE_REV, VanaVoice $VANAVOICE_REV"
+echo "for the release notes: launcher $LAUNCHER_REV, Vanaguide $VANAGUIDE_REV, VanaVoice $VANAVOICE_REV"

@@ -218,10 +218,10 @@ fi
 # DockIcon.swift, so it has to ride along in the launcher's Resources.
 [[ -f "$HERE/GameIcon.icns" ]] && cp "$HERE/GameIcon.icns" "$APP/Contents/Resources/GameIcon.icns"
 
-# Which Vanaguide and VanaVoice commits this bundle carries: they are copied from the sibling
-# checkouts as they sit on disk. "-dirty" means uncommitted changes went in; package.sh refuses
-# that for a release and prints both revisions for the release notes.
-addon_revision() {
+# Which launcher, Vanaguide and VanaVoice commits this bundle carries: all three are built or
+# copied from checkouts as they sit on disk. "-dirty" means uncommitted changes went in;
+# package.sh refuses that for a release and prints the revisions for the release notes.
+checkout_revision() {
   local root="$1" rev state
   [[ -e "$root/.git" ]] || { print -r -- "unknown"; return 0; }
   rev="$(/usr/bin/git -C "$root" rev-parse HEAD 2>/dev/null)" || { print -r -- "unknown"; return 0; }
@@ -231,8 +231,9 @@ addon_revision() {
   fi
   print -r -- "$rev"
 }
-VANAGUIDE_REVISION="$(addon_revision "${VANAGUIDE_SOURCE:h}")"
-VANAVOICE_REVISION="$(addon_revision "${VANAVOICE_SOURCE:h:h}")"
+LAUNCHER_REVISION="$(checkout_revision "$REPO")"
+VANAGUIDE_REVISION="$(checkout_revision "${VANAGUIDE_SOURCE:h}")"
+VANAVOICE_REVISION="$(checkout_revision "${VANAVOICE_SOURCE:h:h}")"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -260,6 +261,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
+  <key>HXILauncherRevision</key><string>${LAUNCHER_REVISION}</string>
   <key>HXIAddonRevisions</key>
   <dict>
     <key>Vanaguide</key><string>${VANAGUIDE_REVISION}</string>
