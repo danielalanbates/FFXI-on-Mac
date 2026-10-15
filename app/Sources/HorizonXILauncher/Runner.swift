@@ -42,6 +42,22 @@ final class Runner: ObservableObject {
     private func beginBusy(_ reason: String) {
         busyReason = reason
         busy = true
+        stopRequested = false
+        errorsAtJobStart = errorsShown
+    }
+
+    /// The user pressed Stop on the running job (update, installer): its exit is not a failure.
+    private var stopRequested = false
+    /// "!!" lines sent to the strip, and how many there were when the current job began.
+    private var errorsShown = 0
+    private var errorsAtJobStart = 0
+
+    /// A job that failed says so in one line, unless the user stopped it or it already printed
+    /// its own "!!" reason. Scripts' `set -e` aborts and wine's errors carry no "!!", and with
+    /// the strip showing errors only, a failed Repair otherwise left no text at all.
+    private func reportFailure(_ code: Int32, _ line: String) {
+        guard code != 0, !stopRequested, errorsShown == errorsAtJobStart else { return }
+        appendLine("!! " + line)
     }
     /// The world, or "<world> #2" for a further client of a world that allows several.
     let session: String
@@ -310,6 +326,7 @@ final class Runner: ObservableObject {
     private var uiLogLines = 0
 
     private func uiAppend(_ s: String) {
+        errorsShown += 1
         pendingLog += s
         // A burst (an update's progress, a chatty client) is cut down before it waits.
         if pendingLog.utf8.count > 4 * Self.uiLogMaxBytes {
@@ -401,6 +418,7 @@ final class Runner: ObservableObject {
             self?.endMaintenance()
             self?.busy = false
             self?.appendLine("==> repair exited \(code)")
+            self?.reportFailure(code, "Repair failed — Open log in Setup & Diagnostics")
             if code == 0, let self { Task { await self.syncPrefixIfStale(install) } }
         }
     }
@@ -436,6 +454,7 @@ final class Runner: ObservableObject {
             self?.busy = false
             self?.updatingHorizon = false
             self?.appendLine("==> update exited \(code)")
+            self?.reportFailure(code, "HorizonXI update failed — Open log in Setup & Diagnostics")
             done(code == 0)
         }
     }
@@ -447,6 +466,7 @@ final class Runner: ObservableObject {
         let k = Process(); k.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
         k.arguments = ["-TERM", "-P", String(p.processIdentifier)]
         try? k.run(); k.waitUntilExit()
+        stopRequested = true
         p.terminate()
         appendLine("==> update stopped")
     }
@@ -774,6 +794,7 @@ final class Runner: ObservableObject {
             self.appendLine("==> installer exited \(code)")
             guard let found = Self.findInstalledClient(in: install, world: nm) else {
                 if silent { self.appendLine("!! \(nm)'s installer finished but no client folder was found under \(install.driveC.path). Check the log above.") }
+                self.reportFailure(code, "\(nm)'s installer failed — Open log in Setup & Diagnostics")
                 return
             }
             self.appendLine("==> \(nm)'s client is at \(found.path)")
@@ -805,6 +826,7 @@ final class Runner: ObservableObject {
                        env: env, cwd: Self.scratchDir) { [weak self] code in
                 self?.busy = false
                 self?.appendLine("==> retail install exited \(code)")
+                self?.reportFailure(code, "\(s.name) install failed — Open log in Setup & Diagnostics")
             }
         }
     }
@@ -814,6 +836,7 @@ final class Runner: ObservableObject {
         let ip = gameInstall.installerPrefix
         let k = Process(); k.executableURL = ip.wineserver; k.arguments = ["-k"]; k.environment = ["WINEPREFIX": ip.prefix.path]
         try? k.run()
+        stopRequested = true
         appendLine("==> installer prefix stopped")
     }
 
@@ -829,6 +852,7 @@ final class Runner: ObservableObject {
         spawn(URL(fileURLWithPath: "/bin/zsh"), args: [script.path, "install", dir.path],
               env: env, cwd: Self.scratchDir) { [weak self] code in
             self?.busy = false; self?.appendLine("==> install exited \(code)")
+            self?.reportFailure(code, "HorizonXI download failed — Open log in Setup & Diagnostics")
         }
     }
 
@@ -858,6 +882,7 @@ final class Runner: ObservableObject {
               env: [:], cwd: Self.scratchDir) { [weak self] code in
             self?.busy = false
             self?.appendLine("==> CatsEyeXI launcher exited \(code)")
+            self?.reportFailure(code, "CatsEyeXI's launcher failed — Open log in Setup & Diagnostics")
         }
     }
 
