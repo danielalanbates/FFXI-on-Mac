@@ -1,4 +1,4 @@
-HorizonXI-on-Mac
+FFXI on Mac (formerly HorizonXI-on-Mac)
 Copyright (c) 2026 Daniel Bates / Bates LLC.  All rights reserved.
 
 Licensed under the PolyForm Noncommercial License 1.0.0, reproduced in full below,
@@ -12,9 +12,10 @@ with one additional term:
   Ask for one at help@batesai.org.
 
 
-Third-party components vendored in this repository (DXVK, d3d8to9, Ashita and the
-wine build) remain under their own licences -- see LICENSING.md. This licence covers
-this project's own code and documentation only.
+Third-party components in this repository (DXVK, d3d8to9, MoltenVK, x87sidecar, and
+the addons under addons/ that carry their own LICENSE) remain under their own licences
+-- see LICENSING.md and vendor/licenses/. This licence covers this project's own code
+and documentation only.
 
 Contact: help@batesai.org · https://batesai.org
 

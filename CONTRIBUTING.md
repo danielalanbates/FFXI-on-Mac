@@ -47,6 +47,22 @@ A few house rules, learned the hard way:
   Square Enix or to CrossOver and cannot be redistributed.
 - **Never commit an account name or password.** Credentials live in the macOS Keychain.
 
+## Licence of contributions
+
+This project is PolyForm Noncommercial 1.0.0 with a commercial rider ([`LICENSE`](LICENSE)), and
+Bates LLC sells commercial licences to it. So a contribution has to come in on terms that let it
+ship under both. By opening a pull request or otherwise submitting a contribution, you:
+
+- grant Bates LLC a perpetual, worldwide, irrevocable, royalty-free, non-exclusive licence to use,
+  copy, modify, distribute and sublicense your contribution under any terms, including commercial
+  licences, plus a matching patent licence for any of your patent claims it necessarily infringes;
+- confirm it is your own work, or that you have the right to submit it on these terms, and that
+  it contains no code you copied under a licence that does not allow this;
+- keep your copyright, and may still use your own contribution however you like.
+
+Third-party code keeps its own licence: say so in the pull request and keep its licence file
+beside it (see [`LICENSING.md`](LICENSING.md)). Questions: help@batesai.org.
+
 ## Server rules
 
 Addons that a server hasn't approved can get a player banned. If you add or change an addon list,

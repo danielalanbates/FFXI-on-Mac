@@ -212,7 +212,12 @@ Standing on other people's work: [Ashita](https://github.com/AshitaXI),
 
 ## Licence
 
-GPL-3.0. Third-party components and their licences: [`vendor/NOTICE.md`](vendor/NOTICE.md).
+PolyForm Noncommercial 1.0.0 plus a 10% commercial-use rider — see [`LICENSE`](LICENSE). Copies
+taken before 2026-08-22 keep the licence they carried then (MIT). Third-party components keep
+their own licences: [`LICENSING.md`](LICENSING.md) and [`vendor/NOTICE.md`](vendor/NOTICE.md).
 
 Not affiliated with HorizonXI, Square Enix, or the Ashita project. Final Fantasy XI is a trademark
 of Square Enix Holdings Co., Ltd.
+
+Copyright (c) 2026 Daniel Bates / Bates LLC. All rights reserved. https://batesai.org ·
+help@batesai.org
