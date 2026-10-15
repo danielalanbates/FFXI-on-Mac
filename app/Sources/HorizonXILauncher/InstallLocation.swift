@@ -53,7 +53,7 @@ enum InstallLocation {
     // MARK: - Remembered
 
     /// Swapped by the self-test, so it never changes the real choice.
-    static var defaults: UserDefaults = .standard
+    static var defaults: UserDefaults = AppDefaults.store
     private static let key = "install.location"
 
     /// The "FFXI on Mac" folder chosen last, whether or not its drive is there right now.

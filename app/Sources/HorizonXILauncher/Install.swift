@@ -1,5 +1,20 @@
 import Foundation
 
+/// The app's own preferences, whichever binary reads them: the install and folder in use, the
+/// account names, the selected world. The window runs from the bundle, where `.standard` is
+/// `org.batesai.horizonxi-on-mac`. A `swift build` binary (`--check`, `--next-action`, `--fix`)
+/// has no bundle identifier, so its `.standard` is a domain of its own with its own, older
+/// `install.last`: on Daniel's Mac (2026-10-15) the window used ".../FFXI on Mac/FFXI on Mac
+/// Wine.app" while `--check` reported siku.app. Self-tests keep `.standard`: they must never
+/// write the real choice.
+enum AppDefaults {
+    static let store: UserDefaults = {
+        guard Bundle.main.bundleIdentifier == nil,
+              !CommandLine.arguments.contains(where: { $0.hasPrefix("--selftest-") }) else { return .standard }
+        return UserDefaults(suiteName: UpdateRules.bundleID) ?? .standard
+    }()
+}
+
 /// Locating and describing a Sikarugir/Kegworks-style wine wrapper that holds the HorizonXI prefix.
 struct Install: Identifiable, Hashable {
     let wrapper: URL          // .../siku.app
@@ -301,7 +316,7 @@ struct Install: Identifiable, Hashable {
     /// volume scan finishes. Its prefix is what must be there, not the game: right after Setup
     /// builds Wine in the chosen folder the game is not downloaded yet, and that install (not
     /// an older one with a game elsewhere) is the one being set up.
-    static func remembered(_ defaults: UserDefaults = .standard) -> Install? {
+    static func remembered(_ defaults: UserDefaults = AppDefaults.store) -> Install? {
         guard let s = defaults.string(forKey: key) else { return nil }
         let parts = s.components(separatedBy: "#")
         guard parts.count == 2 else { return nil }
@@ -312,13 +327,13 @@ struct Install: Identifiable, Hashable {
     /// The remembered install's wrapper, from defaults alone: nothing on disk is checked, so
     /// it is cheap enough for every process scan (`OwnWine`).
     static func rememberedWrapper() -> URL? {
-        guard let s = UserDefaults.standard.string(forKey: key) else { return nil }
+        guard let s = AppDefaults.store.string(forKey: key) else { return nil }
         let parts = s.components(separatedBy: "#")
         return parts.count == 2 ? URL(fileURLWithPath: parts[0]) : nil
     }
 
     func remember() {
-        UserDefaults.standard.set(id, forKey: Self.key)
+        AppDefaults.store.set(id, forKey: Self.key)
     }
 
     // MARK: - Discovery

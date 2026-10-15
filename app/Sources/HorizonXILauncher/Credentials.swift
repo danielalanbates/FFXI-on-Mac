@@ -8,30 +8,30 @@ enum Credentials {
     private static let service = "org.batesai.horizonxi-on-mac"
 
     static var username: String {
-        get { UserDefaults.standard.string(forKey: "account.user") ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: "account.user") }
+        get { AppDefaults.store.string(forKey: "account.user") ?? "" }
+        set { AppDefaults.store.set(newValue, forKey: "account.user") }
     }
 
     // Accounts are per server on LandSandBoat worlds, so remember which account name was last
     // used on each world and recall it when the user switches back. Falls back to the global
     // last-used name so existing installs keep their filled-in field.
     static func username(forWorld world: String) -> String {
-        UserDefaults.standard.string(forKey: "account.user.\(world)") ?? username
+        AppDefaults.store.string(forKey: "account.user.\(world)") ?? username
     }
 
     /// An account name was saved for this world itself (not the global fallback above).
     static func hasSavedAccount(forWorld world: String) -> Bool {
-        !(UserDefaults.standard.string(forKey: "account.user.\(world)") ?? "").isEmpty
+        !(AppDefaults.store.string(forKey: "account.user.\(world)") ?? "").isEmpty
     }
 
     static func setUsername(_ name: String, forWorld world: String) {
         username = name
-        UserDefaults.standard.set(name, forKey: "account.user.\(world)")
+        AppDefaults.store.set(name, forKey: "account.user.\(world)")
     }
 
     static var remember: Bool {
-        get { UserDefaults.standard.bool(forKey: "account.remember") }
-        set { UserDefaults.standard.set(newValue, forKey: "account.remember") }
+        get { AppDefaults.store.bool(forKey: "account.remember") }
+        set { AppDefaults.store.set(newValue, forKey: "account.remember") }
     }
 
     // MARK: - Stored password

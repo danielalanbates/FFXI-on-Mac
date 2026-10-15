@@ -379,7 +379,7 @@ final class ServerStore: ObservableObject {
         } else {
             list = Server.builtins
         }
-        let saved = UserDefaults.standard.string(forKey: "server.selected")
+        let saved = AppDefaults.store.string(forKey: "server.selected")
         servers = list
         selectedID = list.first(where: { $0.name == saved })?.name ?? list.first?.name ?? ""
     }
@@ -432,7 +432,7 @@ final class ServerStore: ObservableObject {
 
     func select(_ s: Server) {
         selectedID = s.name
-        UserDefaults.standard.set(s.name, forKey: "server.selected")
+        AppDefaults.store.set(s.name, forKey: "server.selected")
     }
 
     func update(_ s: Server) {
