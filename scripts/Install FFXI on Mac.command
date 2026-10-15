@@ -76,6 +76,17 @@ fi
 APP="${choice%%::*}"; PREFIX="${choice##*::}"
 ok "using ${APP:t} · $PREFIX"
 
+# Nothing below may run under a live game: step 3 rewrites the prefix the client is using and
+# step 4 replaces the launcher. The same processes app/bundle.sh refuses to install under (see its
+# LIVE_PATTERN); it checks again itself before the swap. Pid and executable only: a loader's
+# arguments carry the account password.
+LIVE_PATTERN='FFXI-on-Mac\.app/Contents/(MacOS|Resources/x87sidecar)|horizon-loader|Ashita-cli|/wine-coop/wine/|/SharedSupport/wine/'
+if live=$(/usr/bin/pgrep -f "$LIVE_PATTERN"); then
+  print -r -- ""
+  /bin/ps -o pid=,comm= -p "${(j:,:)${(f)live}}" 2>/dev/null | while read -r line; do info "$DIM$line$OFF"; done
+  die "FFXI on Mac or the game is running. Quit it (in game, type /shutdown) and run this again."
+fi
+
 # ---------------------------------------------------------------- 3. configure
 say "\n3. Configuring the Wine prefix"
 info "This writes the PlayOnline registry keys and registers FFXI's COM servers."
@@ -87,21 +98,13 @@ ok "prefix configured"
 
 # ---------------------------------------------------------------- 4. the app
 say "\n4. Installing the launcher"
-if [[ -d "$REPO/app/build/FFXI-on-Mac.app" ]]; then
-  SRC="$REPO/app/build/FFXI-on-Mac.app"
-elif command -v swift >/dev/null 2>&1; then
-  info "Building it (about a minute)…"
-  "$REPO/app/bundle.sh" "$REPO/app/build" >/dev/null || die "Build failed."
-  SRC="$REPO/app/build/FFXI-on-Mac.app"
-else
-  die "No prebuilt app and no Swift toolchain. Install Xcode Command Line Tools:
+command -v swift >/dev/null 2>&1 || die "No Swift toolchain. Install Xcode Command Line Tools:
       xcode-select --install"
-fi
-if /usr/bin/pgrep -f 'FFXI-on-Mac.app/Contents/MacOS|horizon-loader|Ashita-cli|wineserver' >/dev/null; then
-  die "FFXI on Mac or the game is running. Quit it (in game, type /shutdown) and run this again."
-fi
-rm -rf "/Applications/FFXI-on-Mac.app"
-cp -R "$SRC" /Applications/ || die "Could not copy to /Applications."
+info "Building it (about a minute)…"
+# bundle.sh builds beside the installed copy and swaps it in only once the new one is complete
+# (putting the old one back if that fails), and moves the old one to
+# ~/Downloads/FFXI-on-Mac-build/archive-apps instead of deleting it.
+"$REPO/app/bundle.sh" /Applications >/dev/null || die "Could not install to /Applications. See the lines above."
 ok "installed to /Applications/FFXI-on-Mac.app"
 
 # ---------------------------------------------------------------- done
