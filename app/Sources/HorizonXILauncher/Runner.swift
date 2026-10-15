@@ -266,7 +266,8 @@ final class Runner: ObservableObject {
     private var currentProfile = "horizonxi.ini"
     private var currentWorld = ""
 
-    func appendChunk(_ s: String) {
+    /// `capped`: the game's own output, whose repeats `gameOutputCap` keeps out of launcher.log.
+    func appendChunk(_ s: String, capped: Bool = false) {
         var s = s
         if updatingHorizon {
             // aria2's readout and the unzip's percentages become the button's progress instead
@@ -278,24 +279,34 @@ final class Runner: ObservableObject {
             s = ScriptProgress.loggable(s)
             if s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return }
         }
-        tee(s)
+        let logged = capped ? gameOutputCap.filter(s) : s
+        tee(logged)
         if !x87Settled { checkX87Output(s) }
-        // Every xiloader fork prints one of these and drops to an interactive menu no window shows.
-        let failMarkers = ["Failed to login", "Bad json reply from remote", "Error from remote",
-                           "version mismatch", "xi_connect", "Account already logged in"]
-        if loginFailure.isEmpty, let hit = failMarkers.first(where: { s.contains($0) }),
-           let r = s.range(of: hit) {
-            let raw = String(s[r.lowerBound...]).split(whereSeparator: { $0.isNewline }).first.map(String.init) ?? hit
-            let clean = raw.trimmingCharacters(in: CharacterSet(charactersIn: " \u{1b}[m")).trimmingCharacters(in: .whitespaces)
-            loginFailure = hit == "Bad json reply from remote"
-                ? "The login server sent a reply this client could not read. Usually the wrong password, an account that does not exist, or a client-version mismatch."
-                : (clean.isEmpty ? hit : clean)
-            appendLine("!! login refused: \(loginFailure) — stopping the loader")
+        // Every xiloader fork prints its refusal and drops to an interactive menu no window shows;
+        // a loader that never logged in (b60: Ashita's pol.exe on HorizonXI) shows only the menu.
+        if loginFailure.isEmpty, let refusal = LoaderOutput.refusal(in: s, world: currentWorld, menu: capped) {
+            loginFailure = refusal.message
+            if refusal.atMenu {
+                logFileOnly("i  the loader is at its account menu, which nothing can answer — stopping it")
+                appendLine("!! " + refusal.message)
+            } else {
+                appendLine("!! login refused: \(loginFailure) — stopping the loader")
+            }
             if let i = currentInstall { stop(i) }
         }
-        let errors = Self.errorLines(in: s)
+        let errors = Self.errorLines(in: logged)
         if !errors.isEmpty { uiAppend(errors) }
     }
+
+    /// Repeats of the game's output kept out of launcher.log, per launch (LoaderOutput.RepeatCap).
+    private var gameOutputCap = LoaderOutput.RepeatCap()
+    /// Bytes the game's stdout file has given this launch, and whether a poll ever found any of
+    /// this session's processes alive: both zero/false means wine ended before Ashita said a word.
+    private var gameOutputBytes = 0
+    private var sessionSeenAlive = false
+    /// How this launch ended is already said or asked for: a Stop (the player's, or a refused
+    /// login's), or a spawn that failed.
+    private var sessionExplained = false
 
     /// Every line goes to launcher.log; only errors ("!! …", the login refusal among them) reach
     /// the window. Progress, wine and Ashita output there was text nobody had to act on.
@@ -1736,7 +1747,12 @@ final class Runner: ObservableObject {
         // Detached, in its own session, so quitting the launcher does not take the game with
         // it. That means no Process object and no terminationHandler -- the child is not ours
         // any more -- so the injector's exit is noticed by polling instead. See Detach.
+        gameOutputCap = LoaderOutput.RepeatCap()
+        gameOutputBytes = 0
+        sessionSeenAlive = false
+        sessionExplained = false
         guard let pid = Detach.spawn(exe, args: args, env: e, cwd: cwd, stdoutPath: out.path) else {
+            sessionExplained = true
             appendLine("!! could not start the game (posix_spawn failed)")
             Task { @MainActor in done(-1) }
             return nil
@@ -1768,8 +1784,15 @@ final class Runner: ObservableObject {
                 if gameGone.claimEnd() { Task { @MainActor in self?.endTail(gameGone) } }
                 return
             }
-            guard let s = String(data: d, encoding: .utf8) else { return }
-            Task { @MainActor in self?.appendChunk(s) }
+            let n = d.count
+            guard let s = String(data: d, encoding: .utf8) else {
+                Task { @MainActor in self?.gameOutputBytes += n }
+                return
+            }
+            Task { @MainActor in
+                self?.gameOutputBytes += n
+                self?.appendChunk(s, capped: true)
+            }
         }
         timer.resume()
         tailTimer?.cancel()
@@ -1824,6 +1847,8 @@ final class Runner: ObservableObject {
 
     private func endTail(_ which: TailStop) {
         guard tailGameGone === which else { return }
+        let rest = gameOutputCap.flush()
+        if !rest.isEmpty { tee(rest + "\n") }
         tailTimer?.cancel()
         tailTimer = nil
         tailGameGone = nil
