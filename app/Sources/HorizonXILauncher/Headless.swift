@@ -31,6 +31,7 @@ enum Headless {
             || a.contains("--selftest-narration-disabled")
             || a.contains("--selftest-multiworld")
             || a.contains("--selftest-retroachievements")
+            || a.contains("--selftest-updater")
             || a.contains("--selftest-single-instance")
             || a.contains("--selftest-single-instance-probe")
     }
@@ -69,6 +70,9 @@ enum Headless {
         }
         if args.contains("--selftest-retroachievements") {
             runRetroAchievementsSelfTest()
+        }
+        if args.contains("--selftest-updater") {
+            runUpdaterSelfTest()
         }
         if let at = args.firstIndex(of: "--selftest-single-instance-probe") {
             runSingleInstanceProbe(Array(args[(at + 1)...]))

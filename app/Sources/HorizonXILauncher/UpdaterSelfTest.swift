@@ -1,0 +1,239 @@
+import Foundation
+
+/// `--selftest-updater`: the update rules, headless. Version/build comparison, asset-name and tag
+/// parsing, the API-response fixture, the rejected-tag memory and the URL checks. No network, no
+/// download, nothing staged or swapped. The rejected-tag check uses its own defaults domain, never
+/// the launcher's (that would make a real launcher skip a real release).
+///
+/// `--selftest-updater --dmg <file> --tag <vX.Y> [--expect-rejected]` instead stages a release
+/// disk image exactly as the updater would (mount read-only, copy out, bundle id, version and
+/// build, signing requirement, Gatekeeper), in a temporary folder that is deleted afterwards.
+/// The build comes from the file name, as it would from the release asset. Nothing is installed.
+///
+/// `--selftest-updater --fetch` runs the network half for real against the current latest release:
+/// the API call, the download through GitHub's redirect (the redirect guard), GitHub's digest,
+/// then the same staging, all in a temporary folder. Read-only on GitHub; nothing is installed.
+/// Passes when the release stages or is rejected for a stated reason; fails on anything else.
+extension Headless {
+    @MainActor static func runUpdaterSelfTest() -> Never {
+        let args = CommandLine.arguments
+        if let d = args.firstIndex(of: "--dmg"), d + 1 < args.count {
+            let tag = args.firstIndex(of: "--tag").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } ?? ""
+            exit(updaterStageCheck(dmg: URL(fileURLWithPath: args[d + 1]), tag: tag,
+                                   expectRejected: args.contains("--expect-rejected")))
+        }
+        if args.contains("--fetch") { exit(updaterFetchCheck()) }
+        typealias B = UpdateRules.Build
+        func offered(_ local: (String, Int), _ asset: String, tag: String) -> Bool {
+            guard let v = UpdateRules.version(fromTag: tag) else { return false }
+            return UpdateRules.isOffered(B(version: v, build: UpdateRules.build(fromAssetName: asset)),
+                                         over: B(version: local.0, build: local.1))
+        }
+        var checks: [(String, Bool, Bool)] = [
+            // The table the release plan depends on.
+            ("3.9 b58 vs v3.9 legacy asset: not offered",
+             offered(("3.9", 58), "FFXI-on-Mac-3.9.dmg", tag: "v3.9"), false),
+            ("3.9 b59 vs v3.10 b60: offered",
+             offered(("3.9", 59), "FFXI-on-Mac-3.10-b60.dmg", tag: "v3.10"), true),
+            ("3.10 b65 vs v3.10 b64: not offered",
+             offered(("3.10", 65), "FFXI-on-Mac-3.10-b64.dmg", tag: "v3.10"), false),
+            ("3.10 b59 vs v3.10 b65: offered",
+             offered(("3.10", 59), "FFXI-on-Mac-3.10-b65.dmg", tag: "v3.10"), true),
+            ("equal version and build: not offered",
+             offered(("3.10", 60), "FFXI-on-Mac-3.10-b60.dmg", tag: "v3.10"), false),
+            ("older short version with a higher build: not offered",
+             offered(("3.10", 1), "FFXI-on-Mac-3.9-b99.dmg", tag: "v3.9"), false),
+            ("3.8 b48 branch build vs v3.9 legacy: offered (newer short version)",
+             offered(("3.8", 48), "FFXI-on-Mac-3.9.dmg", tag: "v3.9"), true),
+            ("3.9.1 > 3.9", UpdateRules.compare("3.9.1", "3.9") > 0, true),
+            ("3.10 > 3.9 (numeric, not text)", UpdateRules.compare("3.10", "3.9") > 0, true),
+            ("3.9 == 3.9.0", UpdateRules.compare("3.9", "3.9.0") == 0, true),
+            // Asset names.
+            ("asset build parsed", UpdateRules.build(fromAssetName: "FFXI-on-Mac-3.10-b60.dmg") == 60, true),
+            ("legacy asset has build 0", UpdateRules.build(fromAssetName: "FFXI-on-Mac-3.9.dmg") == 0, true),
+            ("build must sit right before .dmg",
+             UpdateRules.build(fromAssetName: "FFXI-on-Mac-3.10-b60-x.dmg") == 0, true),
+            ("upper-case .DMG still parsed", UpdateRules.build(fromAssetName: "FFXI-on-Mac-3.10-b7.DMG") == 7, true),
+            // Tags.
+            ("tag v3.10 accepted", UpdateRules.version(fromTag: "v3.10") == "3.10", true),
+            ("tag v3.9.1 accepted", UpdateRules.version(fromTag: "v3.9.1") == "3.9.1", true),
+            ("tag v4.0-rc1 refused", UpdateRules.version(fromTag: "v4.0-rc1") == nil, true),
+            ("tag without v refused", UpdateRules.version(fromTag: "3.10") == nil, true),
+            ("tag v4 refused", UpdateRules.version(fromTag: "v4") == nil, true),
+        ]
+
+        // URL checks: the first link must be github.com under this repo; redirects only to
+        // GitHub's own hosts; always https.
+        let asset = "https://github.com/danielalanbates/FFXI-on-Mac/releases/download/v3.10/FFXI-on-Mac-3.10-b60.dmg"
+        checks += [
+            ("asset on github.com under the repo", UpdateRules.isTrustedAssetURL(URL(string: asset)!), true),
+            ("asset over http refused",
+             UpdateRules.isTrustedAssetURL(URL(string: asset.replacingOccurrences(of: "https:", with: "http:"))!), false),
+            ("asset on another repo refused",
+             UpdateRules.isTrustedAssetURL(URL(string: "https://github.com/someone/FFXI-on-Mac/releases/download/v3.10/x.dmg")!), false),
+            ("asset on a lookalike host refused",
+             UpdateRules.isTrustedAssetURL(URL(string: "https://github.com.evil.example/danielalanbates/FFXI-on-Mac/releases/download/v3.10/x.dmg")!), false),
+            ("asset first link on the CDN refused",
+             UpdateRules.isTrustedAssetURL(URL(string: "https://release-assets.githubusercontent.com/x")!), false),
+            ("redirect to release-assets.githubusercontent.com allowed",
+             UpdateRules.isTrustedRedirect(URL(string: "https://release-assets.githubusercontent.com/github-production-release-asset/1/x")!), true),
+            ("redirect to objects.githubusercontent.com allowed",
+             UpdateRules.isTrustedRedirect(URL(string: "https://objects.githubusercontent.com/x")!), true),
+            ("API redirect within api.github.com allowed (renamed repo)",
+             UpdateRules.isTrustedRedirect(URL(string: "https://api.github.com/repositories/1328293562/releases/latest")!), true),
+            ("redirect over http refused",
+             UpdateRules.isTrustedRedirect(URL(string: "http://release-assets.githubusercontent.com/x")!), false),
+            ("redirect elsewhere refused",
+             UpdateRules.isTrustedRedirect(URL(string: "https://example.com/x.dmg")!), false),
+        ]
+
+        // The /releases/latest shape (v3.9's real fields, the asset renamed to carry a build).
+        func api(tag: String, name: String, link: String = asset, prerelease: Bool = false) -> [String: Any] {
+            ["tag_name": tag, "draft": false, "prerelease": prerelease,
+             "html_url": "https://github.com/danielalanbates/FFXI-on-Mac/releases/tag/\(tag)",
+             "assets": [["name": "README.txt", "browser_download_url": "https://github.com/x"],
+                        ["name": name, "browser_download_url": link,
+                         "digest": "sha256:629DFBC91A901EEC4FEF2EC488A9448B99D4DF6570944318DD7A53753E091191"]]]
+        }
+        let parsed = UpdateRules.release(fromAPI: api(tag: "v3.10", name: "FFXI-on-Mac-3.10-b60.dmg"))
+        checks += [
+            ("API release parsed: tag, version, build",
+             parsed.map { $0.tag == "v3.10" && $0.version == "3.10" && $0.build.build == 60 } ?? false, true),
+            ("API digest lower-cased without its prefix",
+             parsed?.sha256 == "629dfbc91a901eec4fef2ec488a9448b99d4df6570944318dd7a53753e091191", true),
+            ("API page link kept", parsed?.pageURL.absoluteString.hasSuffix("/releases/tag/v3.10") ?? false, true),
+            ("API prerelease ignored",
+             UpdateRules.release(fromAPI: api(tag: "v3.10", name: "FFXI-on-Mac-3.10-b60.dmg", prerelease: true)) == nil, true),
+            ("API rc tag ignored",
+             UpdateRules.release(fromAPI: api(tag: "v3.10-rc1", name: "FFXI-on-Mac-3.10-b60.dmg")) == nil, true),
+            ("API asset off github.com ignored",
+             UpdateRules.release(fromAPI: api(tag: "v3.10", name: "FFXI-on-Mac-3.10-b60.dmg",
+                                              link: "https://example.com/FFXI-on-Mac-3.10-b60.dmg")) == nil, true),
+            ("API legacy v3.9 asset has build 0",
+             UpdateRules.release(fromAPI: api(tag: "v3.9", name: "FFXI-on-Mac-3.9.dmg"))?.build.build == 0, true),
+        ]
+
+        // Rejected-tag memory, in a scratch domain so the real defaults are never touched. One
+        // fixed name, emptied before and after (cfprefsd may leave its empty plist behind).
+        let suite = "org.batesai.horizonxi-on-mac.selftest-updater"
+        if let d = UserDefaults(suiteName: suite) {
+            d.removePersistentDomain(forName: suite)
+            checks.append(("nothing rejected at first", UpdateRules.isRejected("v3.10", in: d), false))
+            UpdateRules.reject("v3.10", in: d)
+            checks.append(("a rejected tag is remembered", UpdateRules.isRejected("v3.10", in: d), true))
+            checks.append(("a different tag is not rejected", UpdateRules.isRejected("v3.11", in: d), false))
+            d.removePersistentDomain(forName: suite)
+        } else {
+            checks.append(("scratch defaults suite", false, true))
+        }
+        checks.append(("requirement pins Apple anchor, bundle id and team",
+                       UpdateRules.requirement == #"anchor apple generic and identifier "org.batesai.horizonxi-on-mac" and certificate leaf[subject.OU] = "MG4YW8XX2Z""#,
+                       true))
+
+        var failures = 0
+        for (name, got, expected) in checks {
+            let passed = got == expected
+            if !passed { failures += 1 }
+            print("  \(passed ? "ok  " : "FAIL") \(name)")
+        }
+        print(failures == 0 ? "all checks passed" : "\(failures) FAILED")
+        exit(failures == 0 ? 0 : 1)
+    }
+
+    private static func updaterFetchCheck() -> Int32 {
+        final class Outcome: @unchecked Sendable { var checks: [(String, Bool)] = [] }
+        let outcome = Outcome()
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            defer { done.signal() }
+            let fm = FileManager.default
+            let dir = fm.temporaryDirectory.appendingPathComponent("hxi-selftest-updater-fetch-\(getpid())")
+            try? fm.removeItem(at: dir)
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? fm.removeItem(at: dir) }
+            let release: UpdateRelease
+            do {
+                guard let r = try await UpdateWork.fetchLatest() else {
+                    outcome.checks.append(("latest release has a usable .dmg", false)); return
+                }
+                release = r
+            } catch {
+                outcome.checks.append(("GitHub API answered: \(error.localizedDescription)", false)); return
+            }
+            print("  latest: \(release.tag) \(release.assetName) (build \(release.build.build))")
+            outcome.checks.append(("asset link is on github.com under the repo", UpdateRules.isTrustedAssetURL(release.dmgURL)))
+            let dmg: URL
+            do {
+                dmg = try await UpdateWork.download(release, into: dir)
+            } catch {
+                outcome.checks.append(("downloaded through GitHub's redirect: \(error.localizedDescription)", false)); return
+            }
+            let size = ((try? fm.attributesOfItem(atPath: dmg.path))?[.size] as? Int) ?? 0
+            outcome.checks.append(("downloaded through GitHub's redirect (\(size) bytes)", size > 0))
+            if let want = release.sha256 {
+                outcome.checks.append(("matches GitHub's sha256 digest", UpdateWork.sha256(of: dmg) == want))
+            } else {
+                print("  note: GitHub gave no digest for this asset")
+            }
+            do {
+                try UpdateWork.stage(dmg: dmg, release: release, in: dir)
+                outcome.checks.append(("staged and verified (an update would be offered as ready)", true))
+            } catch UpdateFailure.rejected(let why) {
+                print("  rejected: \(why)")
+                outcome.checks.append(("staging ended in a verdict (rejected, see above)", true))
+            } catch {
+                outcome.checks.append(("staging ended in a verdict: \(error.localizedDescription)", false))
+            }
+        }
+        done.wait()
+        var failures = 0
+        for (label, passed) in outcome.checks {
+            if !passed { failures += 1 }
+            print("  \(passed ? "ok  " : "FAIL") \(label)")
+        }
+        print(failures == 0 ? "all checks passed" : "\(failures) FAILED")
+        return failures == 0 ? 0 : 1
+    }
+
+    private static func updaterStageCheck(dmg: URL, tag: String, expectRejected: Bool) -> Int32 {
+        guard let version = UpdateRules.version(fromTag: tag) else {
+            print("  FAIL --tag must look like v3.10 (got \"\(tag)\")")
+            return 2
+        }
+        let name = dmg.lastPathComponent
+        let release = UpdateRelease(
+            tag: tag, build: UpdateRules.Build(version: version, build: UpdateRules.build(fromAssetName: name)),
+            assetName: name,
+            dmgURL: URL(string: "https://github.com/\(UpdateRules.repo)/releases/download/\(tag)/\(name)")!,
+            pageURL: URL(string: "https://github.com/\(UpdateRules.repo)/releases/latest")!, sha256: nil)
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("hxi-selftest-updater-\(getpid())")
+        try? fm.removeItem(at: dir)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let staged: Bool
+        do {
+            let app = try UpdateWork.stage(dmg: dmg, release: release, in: dir)
+            print("  staged and verified as \(tag) b\(release.build.build): \(app.lastPathComponent)")
+            staged = true
+        } catch UpdateFailure.rejected(let why) {
+            print("  rejected as \(tag) b\(release.build.build): \(why)")
+            staged = false
+        } catch {
+            print("  FAIL could not finish: \(error.localizedDescription)")
+            return 1
+        }
+        // A rejected stage leaves nothing behind; an accepted one leaves only its staged copy.
+        let left = ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? []).sorted()
+        let clean = staged ? left == ["staged-\(tag)"] : left.isEmpty
+        let checks = [("outcome is \(expectRejected ? "rejected" : "accepted")", staged != expectRejected),
+                      ("work dir clean afterwards (\(left.joined(separator: ", ")))", clean)]
+        var failures = 0
+        for (label, passed) in checks {
+            if !passed { failures += 1 }
+            print("  \(passed ? "ok  " : "FAIL") \(label)")
+        }
+        print(failures == 0 ? "all checks passed" : "\(failures) FAILED")
+        return failures == 0 ? 0 : 1
+    }
+}
