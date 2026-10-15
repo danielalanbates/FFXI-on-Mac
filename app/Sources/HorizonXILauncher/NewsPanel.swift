@@ -58,14 +58,16 @@ struct NewsPanel: View {
 struct NewsRow: View {
     let item: NewsItem
     var hovered = false
-    var now = Date()
+    /// nil: the time the row is drawn. Not a `Date()` default, which would differ on every
+    /// redraw of the panel (each hover) and make SwiftUI draw every row again, not just two.
+    var now: Date? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 NewsChip(item: item)
                 Spacer(minLength: 4)
-                Text(News.shortDate(item.date, fallback: item.printDate, now: now))
+                Text(News.shortDate(item.date, fallback: item.printDate, now: now ?? Date()))
                     .font(.system(size: 11)).foregroundStyle(Vana.muted)
                     .help(News.longDate(item.date, fallback: item.printDate))
             }

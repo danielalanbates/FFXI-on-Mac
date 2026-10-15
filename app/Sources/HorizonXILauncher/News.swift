@@ -19,17 +19,31 @@ struct NewsItem: Identifiable, Equatable {
     let excerpt: String
     /// The post's HTML, already turned into plain blocks (`NewsHTML`) off the main actor.
     let body: [NewsBlock]
+    /// The row's summary: the post's own sentences, section headings left out. The feed's
+    /// excerpt runs a heading into the first item ("Battlefields An issue where the orbs…"),
+    /// so it is used only for a post without a body. Worked out once, with `body`, off the main
+    /// actor: a row is drawn again on every hover, and a post's body can run to pages.
+    let summary: String
+
+    init(slug: String, title: String, date: Date?, printDate: String, author: String,
+         category: String, label: String, excerpt: String, body: [NewsBlock]) {
+        self.slug = slug; self.title = title; self.date = date; self.printDate = printDate
+        self.author = author; self.category = category; self.label = label
+        self.excerpt = excerpt; self.body = body
+        // Two lines are shown; a few hundred characters is more than two lines can hold.
+        var lines: [String] = []
+        var length = 0
+        for b in body where length < 600 {
+            if case .heading = b { continue }
+            let t = b.text
+            lines.append(t)
+            length += t.count + 1
+        }
+        summary = lines.isEmpty ? excerpt : lines.joined(separator: " ")
+    }
 
     /// Patch notes carry a one- or two-line summary under the title; notices are their title.
     var showsExcerpt: Bool { category == "patch-notes" && !summary.isEmpty }
-
-    /// The row's summary: the post's own sentences, section headings left out. The feed's
-    /// excerpt runs a heading into the first item ("Battlefields An issue where the orbs…"),
-    /// so it is used only for a post without a body.
-    var summary: String {
-        let lines = body.compactMap { b -> String? in if case .heading = b { return nil } else { return b.text } }
-        return lines.isEmpty ? excerpt : lines.joined(separator: " ")
-    }
 }
 
 /// The detail sheet's content. No HTML engine is involved: tags are read here and only text,
@@ -224,15 +238,30 @@ enum News {
 
     // MARK: - Fetching
 
+    /// HorizonXI's 30 posts are 33 KB (2026-10-15); anything past this is not the feed.
+    static let maxPayload = 4 << 20
+
+    /// No cookies, no disk cache, and a limit on the whole transfer as well as on each wait: a
+    /// request's own timeout restarts with every byte, so a feed that trickles would hold its
+    /// slot in `ServerFeeds.refreshNews` (one fetch per feed at a time) for good.
+    private static let session: URLSession = {
+        let c = URLSessionConfiguration.ephemeral
+        c.timeoutIntervalForRequest = 10
+        c.timeoutIntervalForResource = 30
+        c.urlCache = nil
+        c.httpCookieStorage = nil
+        return URLSession(configuration: c)
+    }()
+
     /// One GET with a short timeout; the parse runs off the caller's actor. nil on any failure
-    /// (offline, a non-200, a payload that is not the feed).
+    /// (offline, a non-200, a payload too big or not the feed).
     static func fetch(_ url: URL, timeout: TimeInterval = 10) async -> (items: [NewsItem], data: Data)? {
         var req = URLRequest(url: url)
         req.timeoutInterval = timeout
         req.setValue("FFXI-on-Mac launcher", forHTTPHeaderField: "User-Agent")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        guard let (data, resp) = try? await session.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200, data.count <= maxPayload else { return nil }
         let items = await Task.detached(priority: .utility) { parse(data) }.value
         return items.map { ($0, data) }
     }
@@ -254,6 +283,8 @@ enum NewsHTML {
         var runs: [Run] = []
         var kinds: [Kind] = []
         var depth = 0
+        /// `kinds.count` where each open list began.
+        var listOpenedAt: [Int] = []
         var em = 0, strong = 0
         var link: URL?
 
@@ -329,6 +360,9 @@ enum NewsHTML {
             guard !name.isEmpty else { continue }
 
             if !closing, dropped.contains(name) {
+                // `<embed …>` has no close tag, and `<svg …/>` closes itself: only the tag goes.
+                // Looking for their close tag would drop the rest of the post.
+                if name == "embed" || inner.hasSuffix("/") { continue }
                 // Skip to the matching close tag, contents and all.
                 if let end = html.range(of: "</\(name)", options: .caseInsensitive, range: i..<html.endIndex) {
                     i = html[end.upperBound...].firstIndex(of: ">").map { html.index(after: $0) } ?? html.endIndex
@@ -352,7 +386,15 @@ enum NewsHTML {
                 }
             case "ul", "ol":
                 flush()
-                depth = closing ? max(0, depth - 1) : depth + 1
+                if closing {
+                    depth = max(0, depth - 1)
+                    // Items left open (`<li>` needs no close tag) end with their list: what
+                    // follows it is not a bullet.
+                    if let n = listOpenedAt.popLast(), n <= kinds.count { kinds.removeSubrange(n...) }
+                } else {
+                    depth += 1
+                    listOpenedAt.append(kinds.count)
+                }
             case "li":
                 flush()
                 if closing { if case .bullet? = kinds.last { kinds.removeLast() } }

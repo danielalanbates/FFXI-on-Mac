@@ -130,6 +130,18 @@ extension Headless {
                            && NewsHTML.blocks("<ul><li>a<li>b").map(\.text) == ["a", "b"]
                            && NewsHTML.blocks("<p>x <a href='https://e.com/>'>y").map(\.text) == ["x y"]
                            && NewsHTML.blocks("<scr").isEmpty && NewsHTML.blocks("text <").map(\.text) == ["text"]))
+        let afterList = NewsHTML.blocks("<ul><li>a<li>b</ul><p>c</p>")
+        checks.append(("items left open end with their list: the paragraph after it is not a bullet",
+                       afterList.map(\.text) == ["a", "b", "c"]
+                           && afterList.last == .paragraph(AttributedString("c"))))
+        checks.append(("<embed> and a self-closed <svg/> drop only themselves, not the rest of the post",
+                       NewsHTML.blocks(#"<p>a</p><embed src="https://x/y.swf"><p>b</p><svg viewBox="0 0 1 1"/><p>c</p>"#).map(\.text)
+                           == ["a", "b", "c"]))
+        let long = News.parse(Data(("[{\"slug\":\"l\",\"title\":\"t\",\"category\":\"patch-notes\",\"html\":\""
+                                    + String(repeating: "<li>An issue where something long was fixed.</li>", count: 400)
+                                    + "\"}]").utf8))?.first
+        checks.append(("a long post's row summary is worked out once and kept short",
+                       long.map { $0.body.count == 400 && $0.summary.count < 700 && $0.summary.hasPrefix("An issue where") } == true))
 
         // Nothing to show is nothing shown.
         checks.append(("not the feed (empty, an object, an error page, garbage) is no news, not an empty panel's text",
