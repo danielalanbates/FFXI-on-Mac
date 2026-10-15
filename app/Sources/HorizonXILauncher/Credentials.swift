@@ -142,6 +142,12 @@ enum Credentials {
         Bridge.readFile(at: url)
     }
 
+    /// Boot-profile read-modify-writes, one at a time. Each rewrites the whole file from what it
+    /// read, and the window size is written back off the main actor (WindowMemory) while a
+    /// further client's launch writes its account line on it; interleaved, the older account
+    /// came back just before the new client read the profile.
+    private static let profileLock = NSLock()
+
     /// Make sure `config/boot/<profile>` exists, seeding it from a profile that already works.
     ///
     /// A boot profile is mostly graphics and input settings that have nothing to do with which
@@ -263,6 +269,7 @@ enum Credentials {
         // v3 profiles are seeded from the world's own XML, which already names its own loader.
         guard name.hasSuffix(".ini") else { return }
         let url = install.gameDir.appendingPathComponent("config/boot/\(name)")
+        profileLock.lock(); defer { profileLock.unlock() }
         guard let text = readFile(at: url) else { return }
         let bl = install.bootLoaderDir
         let present = ((try? fm.contentsOfDirectory(atPath: bl.path)) ?? []).filter { $0.lowercased().hasSuffix(".exe") }
@@ -372,6 +379,7 @@ enum Credentials {
                       server: String = "play.horizonxi.com") -> Bool {
         let name = install.bootProfileName(profile)
         let url = install.gameDir.appendingPathComponent("config/boot/\(name)")
+        profileLock.lock(); defer { profileLock.unlock() }
         guard var text = readFile(at: url) else { return false }
 
         if name.hasSuffix(".xml") {
@@ -408,6 +416,7 @@ enum Credentials {
         // v3's XML has no `[ffxi.direct3d8]` section, so there is nothing to override there.
         guard name.hasSuffix(".ini") else { return }
         let url = install.gameDir.appendingPathComponent("config/boot/\(name)")
+        profileLock.lock(); defer { profileLock.unlock() }
         guard let text = readFile(at: url) else { return }
 
         let eol = TextFile.terminator(of: text)
