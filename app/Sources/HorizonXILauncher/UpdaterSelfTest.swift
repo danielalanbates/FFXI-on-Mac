@@ -126,6 +126,22 @@ extension Headless {
         } else {
             checks.append(("scratch defaults suite", false, true))
         }
+        // Exit statuses: only a verdict rejects a release for good; a tool that failed, crashed or
+        // ran out of time is tried again later.
+        checks += [
+            ("codesign 1 (signature broken or missing) is a refusal", UpdateRules.isRefusal(codesign: 1), true),
+            ("codesign 3 (requirement not met) is a refusal", UpdateRules.isRefusal(codesign: 3), true),
+            ("codesign 2 (bad arguments) is no verdict", UpdateRules.isRefusal(codesign: 2), false),
+            ("codesign killed by a signal is no verdict", UpdateRules.isRefusal(codesign: -3), false),
+            ("codesign past its deadline is no verdict", UpdateRules.isRefusal(codesign: -2), false),
+            ("spctl 3 (Gatekeeper said no) is a refusal", UpdateRules.isRefusal(spctl: 3), true),
+            ("spctl 1 (assessment failed) is no verdict", UpdateRules.isRefusal(spctl: 1), false),
+            ("spctl killed by a signal is no verdict", UpdateRules.isRefusal(spctl: -3), false),
+            ("a tool killed by a signal reports -3, not the signal's number",
+             UpdateWork.run("/bin/sh", ["-c", "kill -KILL $$"], timeout: 10) == -3, true),
+            ("a tool's own exit status is passed through",
+             UpdateWork.run("/bin/sh", ["-c", "exit 3"], timeout: 10) == 3, true),
+        ]
         checks.append(("requirement pins Apple anchor, bundle id and team",
                        UpdateRules.requirement == #"anchor apple generic and identifier "org.batesai.horizonxi-on-mac" and certificate leaf[subject.OU] = "MG4YW8XX2Z""#,
                        true))

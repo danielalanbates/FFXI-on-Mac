@@ -388,6 +388,14 @@ enum UpdateRules {
                              assetName: name, dmgURL: link, pageURL: page, sha256: digest)
     }
 
+    /// codesign exits 1 when the signature is broken or missing and 3 when it does not meet the
+    /// requirement; 2 is bad arguments. Measured: unsigned 1, ad-hoc 3, another team's app 3.
+    static func isRefusal(codesign status: Int32) -> Bool { status == 1 || status == 3 }
+
+    /// spctl exits 3 when Gatekeeper says no (unsigned and ad-hoc apps measured 3) and 1 when the
+    /// assessment itself failed (a missing path measured 1), which is no verdict at all.
+    static func isRefusal(spctl status: Int32) -> Bool { status == 3 }
+
     static func isRejected(_ tag: String, in defaults: UserDefaults) -> Bool {
         defaults.string(forKey: rejectedKey) == tag
     }
@@ -569,16 +577,20 @@ enum UpdateWork {
         if r.build.build > 0, build != String(r.build.build) {
             throw UpdateFailure.rejected("app is build \(build), asset says b\(r.build.build)")
         }
+        // Only a verdict rejects the release for good. Any other status (bad arguments, a crash,
+        // a signal, the deadline, syspolicyd unavailable) says nothing about it: try again later.
         let sig = run("/usr/bin/codesign", ["--verify", "--strict", "--deep", "-R", "=" + UpdateRules.requirement,
                                             app.path], timeout: 300)
         guard sig == 0 else {
-            throw sig < 0 ? UpdateFailure.transient("codesign did not finish")
-                                 : UpdateFailure.rejected("signature does not meet the release requirement")
+            throw UpdateRules.isRefusal(codesign: sig)
+                ? UpdateFailure.rejected("signature does not meet the release requirement")
+                : UpdateFailure.transient("codesign did not finish (\(sig))")
         }
         let gk = run("/usr/sbin/spctl", ["-a", "-t", "execute", app.path], timeout: 180)
         guard gk == 0 else {
-            throw gk < 0 ? UpdateFailure.transient("spctl did not finish")
-                                : UpdateFailure.rejected("Gatekeeper rejected it (not notarized?)")
+            throw UpdateRules.isRefusal(spctl: gk)
+                ? UpdateFailure.rejected("Gatekeeper rejected it (not notarized?)")
+                : UpdateFailure.transient("spctl did not finish (\(gk))")
         }
     }
 
@@ -647,7 +659,8 @@ enum UpdateWork {
     // MARK: Processes
 
     /// Run a tool with no stdin and no output, and a deadline. Status -1: could not start;
-    /// -2: killed at the deadline. Neither is a verdict on the update.
+    /// -2: killed at the deadline; -3: died of a signal (a signal's number is no exit status).
+    /// None of them is a verdict on the update.
     @discardableResult
     static func run(_ exe: String, _ args: [String], timeout: TimeInterval) -> Int32 {
         let p = Process()
@@ -660,7 +673,9 @@ enum UpdateWork {
         let exited = DispatchSemaphore(value: 0)
         p.terminationHandler = { _ in exited.signal() }
         guard (try? p.run()) != nil else { return -1 }
-        if exited.wait(timeout: .now() + timeout) == .success { return p.terminationStatus }
+        if exited.wait(timeout: .now() + timeout) == .success {
+            return p.terminationReason == .uncaughtSignal ? -3 : p.terminationStatus
+        }
         // Not reaped until the handler has run, so this pid is still the tool's.
         p.terminate()
         if exited.wait(timeout: .now() + 10) == .timedOut {
