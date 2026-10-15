@@ -69,6 +69,7 @@ enum SingleInstance {
     static func isExempt(_ args: [String]) -> Bool {
         args.contains { $0.hasPrefix("--selftest-") } || args.contains("--check")
             || args.contains("--next-action") || args.contains("--fix")
+            || args.contains("--news-preview")
     }
 
     // MARK: - The lock

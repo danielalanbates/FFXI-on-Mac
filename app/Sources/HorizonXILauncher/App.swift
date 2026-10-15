@@ -188,6 +188,8 @@ struct ContentView: View {
     /// Clients started by another launcher. Every 15 s, and only while the window can be seen:
     /// each refresh is a whole-Mac `ps`, CPU taken from a running game on an 8 GB M1.
     private let elsewhereTick = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
+    /// The world's news feed, every 15 minutes while the window can be seen (one small GET).
+    private let newsTick = Timer.publish(every: 900, on: .main, in: .common).autoconnect()
     @State private var worldHover = false
     @State private var forceSetup = false
     @State private var newServer = false
@@ -398,6 +400,16 @@ struct ContentView: View {
             lastActivationRecheck = Date()
             autoRecheck()
         }
+        // News: the cached copy at once, then the feed, then every 15 minutes while visible.
+        // Its own task, so it does not wait for the volume scan below.
+        .task {
+            await feeds.loadCachedNews(servers: store.servers)
+            await feeds.refreshNews(servers: store.servers, minInterval: 0)
+        }
+        .onReceive(newsTick) { _ in
+            guard NSApplication.shared.occlusionState.contains(.visible) else { return }
+            Task { await feeds.refreshNews(servers: store.servers, minInterval: 600) }
+        }
         // Keep the players-online line current: on launch, whenever the world changes, and
         // every two minutes while the window is open. The fetch is three tiny GETs and silent
         // on failure, so this costs nothing when offline.
@@ -419,9 +431,11 @@ struct ContentView: View {
             Task { await sessions.refreshElsewhere(install: active, profiles: bootProfiles) }
         }
         // And at once when the window comes back into view, so the list is never 15 s stale.
+        // News too, when it was last asked for more than 15 minutes ago.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeOcclusionStateNotification)) { _ in
             guard NSApplication.shared.occlusionState.contains(.visible) else { return }
             Task { await sessions.refreshElsewhere(install: active, profiles: bootProfiles) }
+            Task { await feeds.refreshNews(servers: store.servers, minInterval: 900) }
         }
         // Discovery walks /Volumes, and an external drive can make that take tens of seconds.
         // Doing it on the main thread means the window never appears at all — which looked
@@ -477,6 +491,15 @@ struct ContentView: View {
                 populationLine
             }
             .padding(.horizontal, 34).padding(.top, 34).padding(.bottom, 20)
+
+            // The world's own news (ServerFeeds.news): only when it publishes a feed and there
+            // are posts. Sized first, so the cards below scroll rather than squeeze it.
+            if let s = store.selected, !s.newsURL.isEmpty, let items = feeds.news[s.name], !items.isEmpty {
+                NewsPanel(items: items, pageTemplate: s.newsPageURL)
+                    .frame(maxWidth: 500, alignment: .leading)
+                    .padding(.horizontal, 34).padding(.top, -8).padding(.bottom, 4)
+                    .layoutPriority(1)
+            }
 
             // Scrolled rather than clipped: the cards below already overflow a 632pt window once
             // the signup list is open, and an overflowing VStack pushes the game's title off the

@@ -123,6 +123,14 @@ struct Server: Codable, Identifiable, Hashable {
     /// whose required settings an existing one is completed with (see `BootProfile`). Empty: a
     /// new profile is copied from one already in the client, as before. Refreshed from `builtins`.
     var bootTemplate: String = ""
+    /// Where this world publishes its news as JSON (`News.parse`), and its page for one post
+    /// (`{slug}` replaced). Empty: the world publishes no feed a launcher can read, and the
+    /// left panel shows nothing for it. Curated, never read from servers.json: refreshed from
+    /// `builtins` like `loader`. Checked 2026-10-15: HorizonXI's site reads its news from
+    /// api.horizonxi.com/api/v1/news and routes each post at horizonxi.com/news/<slug> (its own
+    /// JSON-LD `mainEntityOfPage`). See ServerFeeds for the other worlds.
+    var newsURL: String = ""
+    var newsPageURL: String = ""
 
     /// How a world's client is obtained.
     /// - `clientZip`: a plain archive of the finished client, unpacked straight into `dataPath`.
@@ -143,7 +151,8 @@ struct Server: Codable, Identifiable, Hashable {
          installURL: String = "", installKind: InstallKind = .website, installNote: String = "",
          accountURL: String = "", accountHow: String = "", discordURL: String = "",
          renderer: Renderer? = nil, x87: Bool = true, msync: Bool = true,
-         maxClients: Int = 1, loader: String = "", bootTemplate: String = "") {
+         maxClients: Int = 1, loader: String = "", bootTemplate: String = "",
+         newsURL: String = "", newsPageURL: String = "") {
         self.codebase = codebase; self.retired = retired
         self.name = name; self.host = host; self.bootProfile = bootProfile
         self.verified = verified; self.note = note; self.era = era
@@ -154,6 +163,7 @@ struct Server: Codable, Identifiable, Hashable {
         self.renderer = renderer; self.x87 = x87; self.msync = msync
         self.maxClients = maxClients
         self.loader = loader; self.bootTemplate = bootTemplate
+        self.newsURL = newsURL; self.newsPageURL = newsPageURL
     }
 
     init(from decoder: Decoder) throws {
@@ -186,6 +196,8 @@ struct Server: Codable, Identifiable, Hashable {
         maxClients  = Server.all.first { $0.name == name }?.maxClients ?? 1
         loader      = Server.all.first { $0.name == name }?.loader ?? ""
         bootTemplate = Server.all.first { $0.name == name }?.bootTemplate ?? ""
+        newsURL     = Server.all.first { $0.name == name }?.newsURL ?? ""
+        newsPageURL = Server.all.first { $0.name == name }?.newsPageURL ?? ""
         // A world the user has not renamed inherits a renderer the project has since measured
         // for it -- otherwise a servers.json written before this field existed keeps launching
         // Gaia XI on the pathway that is known to kill it.
@@ -251,7 +263,9 @@ struct Server: Codable, Identifiable, Hashable {
                accountURL: "https://horizonxi.com/register",
                accountHow: "Sign up on horizonxi.com, then log in here with that account.",
                discordURL: "https://discord.gg/horizonxi",
-               loader: "horizon-loader.exe", bootTemplate: BootProfile.horizonTemplate),
+               loader: "horizon-loader.exe", bootTemplate: BootProfile.horizonTemplate,
+               newsURL: "https://api.horizonxi.com/api/v1/news",
+               newsPageURL: "https://horizonxi.com/news/{slug}"),
         Server(name: "Local server", host: "127.0.0.1", bootProfile: "lsb.ini",
                verified: true,
                note: "LandSandBoat, built and run on this Mac. Nobody else can reach it.",
