@@ -37,6 +37,7 @@ enum Headless {
             || a.contains("--selftest-primary-action")
             || a.contains("--selftest-install-location")
             || a.contains("--selftest-setup-progress")
+            || a.contains("--selftest-boot-profile")
             || a.contains("--progress-trace")
             || a.contains("--next-action")
             || a.contains("--fix")
@@ -96,6 +97,9 @@ enum Headless {
         }
         if args.contains("--selftest-setup-progress") {
             runSetupProgressSelfTest()
+        }
+        if args.contains("--selftest-boot-profile") {
+            runBootProfileSelfTest()
         }
         if args.contains("--progress-trace") { runProgressTrace() }
         if let at = args.firstIndex(of: "--selftest-single-instance-probe") {
