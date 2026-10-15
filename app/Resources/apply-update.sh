@@ -9,7 +9,9 @@
 #   * One helper at a time: <workdir>/apply.lock holds the owner's pid. The launcher quits only
 #     once it sees its own helper's pid there.
 #   * ANY failure after the launcher has quit puts the old app back and reopens it, and leaves
-#     the reason in <workdir>/last-failure for the reopened launcher to show.
+#     the reason in <workdir>/last-failure for the reopened launcher to show, with the release's
+#     tag and whether the same failure would recur on every try (the launcher then offers the
+#     Download link instead of Restart; see Updater.becomeReady).
 #   * The candidate must satisfy the same Apple-anchored requirement and Gatekeeper check the
 #     launcher used. The swap is two renames with rollback.
 #   * Exactly one previous copy is kept, in <workdir>.
@@ -56,7 +58,9 @@ if [[ -n "${HXI_UPDATE_TEST_STUBS:-}" ]]; then
 fi
 candidate="${current}.next-$$"
 backup="${current}.previous-$$"
-ok=0 launcher_gone=0 moved_current=0 placed=0 reason="stopped before finishing"
+# The launcher stages each release in <workdir>/staged-<tag>/.
+tag="${${${staged:h}:t}#staged-}"
+ok=0 launcher_gone=0 moved_current=0 placed=0 lasting=0 reason="stopped before finishing"
 
 finish() {
   if (( ! ok )); then
@@ -72,7 +76,7 @@ finish() {
     fi
     [[ -e "$candidate" ]] && /bin/rm -rf "$candidate"
     if (( launcher_gone )); then
-      print -r -- "$reason" > "$workdir/last-failure"
+      print -rl -- "reason=$reason" "tag=$tag" "lasting=$lasting" > "$workdir/last-failure"
       local app="$current"
       [[ -d "$app" ]] || app="$backup"
       if [[ -d "$app" ]] && "$OPEN" "$app"; then say "reopened $app"
@@ -85,6 +89,8 @@ finish() {
 trap finish EXIT
 trap 'reason="interrupted"; exit 1' INT TERM HUP
 fail() { reason="$1"; exit 1; }
+# A failure every later try would meet too (the folder or the rename refused).
+fail_lasting() { lasting=1; fail "$1"; }
 
 say "helper started: launcher pid $pid, $staged -> $current"
 
@@ -100,7 +106,7 @@ launcher_gone=1
 
 [[ -d "$staged" ]] || fail "the staged update is missing"
 [[ -d "$current" ]] || fail "the current app is missing"
-[[ -w "${current:h}" ]] || fail "no write access to ${current:h}"
+[[ -w "${current:h}" ]] || fail_lasting "no write access to ${current:h}"
 [[ ! -e "$backup" ]] || fail "a leftover $backup is in the way"
 /bin/rm -rf "$candidate"
 
@@ -112,7 +118,7 @@ launcher_gone=1
 /usr/sbin/spctl -a -t execute "$candidate" || fail "Gatekeeper rejected the update"
 say "candidate verified"
 
-/bin/mv "$current" "$backup" || fail "could not move the current app aside"
+/bin/mv "$current" "$backup" || fail_lasting "could not move the current app aside"
 moved_current=1
 [[ ! -e "$current" ]] || fail "$current reappeared during the swap"
 /bin/mv "$candidate" "$current" || fail "could not move the update into place"

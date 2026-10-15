@@ -16,23 +16,25 @@ TEAM_REQ='anchor apple generic and certificate leaf[subject.OU] = "MG4YW8XX2Z"'
 PINNED_REQ='anchor apple generic and identifier "org.batesai.horizonxi-on-mac" and certificate leaf[subject.OU] = "MG4YW8XX2Z"'
 
 T="$(mktemp -d "${TMPDIR:-/tmp}/apply-update-test.XXXXXX")"
-trap '/bin/chmod -R u+w "$T" 2>/dev/null; /bin/rm -rf "$T"' EXIT
+trap '/usr/bin/chflags -R nouchg "$T" 2>/dev/null; /bin/chmod -R u+w "$T" 2>/dev/null; /bin/rm -rf "$T"' EXIT
 fails=0
 check() { if eval "$2"; then print "  ok   $1"; else print "  FAIL $1"; fails=$((fails + 1)); fi }
 
 stubs="$T/stubs"
 mkdir -p "$stubs"
-for s in open lsregister; do
-  printf '#!/bin/sh\necho "$@" >> "%s/%s.calls"\n' "$T" "$s" > "$stubs/$s"
-  chmod +x "$stubs/$s"
-done
 export HXI_UPDATE_TEST_STUBS="$stubs"
 
 apps="$T/Apps" work="$T/work"
 current="$apps/FFXI-on-Mac.app" staged="$work/staged-v9.9/FFXI-on-Mac.app"
 setup() {
+  /usr/bin/chflags -R nouchg "$T" 2>/dev/null
   /bin/chmod -R u+w "$T" 2>/dev/null
   rm -rf "$apps" "$work" "$T"/*.calls(N)
+  # Stubs that only log; a case may replace one after setup.
+  for s in open lsregister; do
+    printf '#!/bin/sh\necho "$@" >> "%s/%s.calls"\n' "$T" "$s" > "$stubs/$s"
+    chmod +x "$stubs/$s"
+  done
   mkdir -p "$current/Contents" "${staged:h}"
   print old > "$current/Contents/marker"
   /usr/bin/plutil -create xml1 "$current/Contents/Info.plist"
@@ -65,7 +67,9 @@ helper "$(dead_pid)" "$staged" "$current" "$work" "$PINNED_REQ"; rc=$?
 check "exit non-zero" "(( rc != 0 ))"
 check "old app untouched" "[[ -f '$current/Contents/marker' ]]"
 check "reopened the old app" "grep -qx '$current' '$T/open.calls'"
-check "failure note written" "grep -q 'not signed by this project' '$work/last-failure'"
+check "failure note written" "grep -qx 'reason=the update is not signed by this project' '$work/last-failure'"
+check "failure note names the release" "grep -qx 'tag=v9.9' '$work/last-failure'"
+check "a wrong signer is not marked as recurring" "grep -qx 'lasting=0' '$work/last-failure'"
 check "no leftovers beside the app" "[[ -z \$(ls '$apps' | grep -v '^FFXI-on-Mac.app\$') ]]"
 check "lock released" "[[ ! -e '$work/apply.lock' ]]"
 check "staged copy kept for a retry" "[[ -d '$staged' ]]"
@@ -112,6 +116,7 @@ check "exit non-zero" "(( rc != 0 ))"
 check "old app untouched" "[[ -f '$current/Contents/marker' ]]"
 check "reopened the old app" "grep -qx '$current' '$T/open.calls'"
 check "failure note says why" "grep -q 'no write access' '$work/last-failure'"
+check "marked as recurring (the launcher offers Download instead)" "grep -qx 'lasting=1' '$work/last-failure'"
 
 print "7. the new app does not open: roll back to the old app and reopen it"
 setup
@@ -125,6 +130,18 @@ check "open tried twice (new, then old)" "(( \$(grep -cx '$current' '$T/open.cal
 check "no leftovers beside the app" "[[ -z \$(ls '$apps' | grep -v '^FFXI-on-Mac.app\$') ]]"
 check "failure note says why" "grep -q 'did not open' '$work/last-failure'"
 rm -f "$T/open.failed"
+
+print "8. the rename is refused (as App Management would): old app reopened, marked as recurring"
+setup
+/usr/bin/chflags uchg "$current"
+helper "$(dead_pid)" "$staged" "$current" "$work" "$TEAM_REQ"; rc=$?
+/usr/bin/chflags nouchg "$current"
+check "exit non-zero" "(( rc != 0 ))"
+check "old app untouched" "[[ -f '$current/Contents/marker' ]]"
+check "reopened the old app" "grep -qx '$current' '$T/open.calls'"
+check "failure note says why" "grep -qx 'reason=could not move the current app aside' '$work/last-failure'"
+check "marked as recurring" "grep -qx 'lasting=1' '$work/last-failure'"
+check "no leftovers beside the app" "[[ -z \$(ls '$apps' | grep -v '^FFXI-on-Mac.app\$') ]]"
 
 print
 if (( fails == 0 )); then print "all checks passed"; else print "$fails FAILED"; fi

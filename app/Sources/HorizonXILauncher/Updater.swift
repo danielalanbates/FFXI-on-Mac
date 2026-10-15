@@ -14,6 +14,8 @@ import Security
 ///                     same way, but this copy cannot replace itself (bundle or its folder not
 ///                     writable);
 ///   * `restartFailed` one short reason, when a Restart the user pressed did not go through.
+///                     After two failed installs of one release, or one failure that every try
+///                     would meet (the folder or the rename refused), `manual` instead.
 ///
 /// When: once at launch, every 6 h, and on activation only if the last check is over an hour
 /// old. Nothing is checked, downloaded or staged while a game client is live or starting, or a
@@ -74,8 +76,8 @@ final class Updater: ObservableObject {
     private var checkTimer: Timer?
     private var activeObserver: NSObjectProtocol?
     private var retryTask: Task<Void, Never>?
-    /// The reason the helper left before reopening this launcher after a failed update.
-    private var lastAttemptFailure: String?
+    /// Why the helper reopened this launcher after a failed update, shown once.
+    private var lastAttemptFailure: UpdateRules.HelperFailure?
 
     private init() {}
 
@@ -98,7 +100,12 @@ final class Updater: ObservableObject {
         guard !started else { return }
         started = true
         guard updatesEnabled else { return }
-        lastAttemptFailure = UpdateWork.takeHelperFailure()
+        if let failure = UpdateWork.takeHelperFailure() {
+            lastAttemptFailure = failure
+            if let tag = failure.tag {
+                UpdateRules.recordRestartFailure(tag, lasting: failure.lasting, in: .standard)
+            }
+        }
         check()
         checkTimer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { _ in
             Task { @MainActor in Updater.shared.check() }
@@ -237,10 +244,20 @@ final class Updater: ObservableObject {
     }
 
     private func becomeReady(_ release: UpdateRelease) {
-        UpdateWork.note("\(release.tag) ready")
-        if let why = lastAttemptFailure {
+        // Restart already failed for this release twice, or in a way every try would: the
+        // Download link instead of a Restart that quits and reopens the launcher for nothing.
+        // The staged copy stays, so later checks re-verify it rather than download it again.
+        if UpdateRules.restartGivenUp(release.tag, in: .standard) {
+            UpdateWork.note("\(release.tag) verified; Restart failed to install it before, offering the download")
             lastAttemptFailure = nil
-            state = .restartFailed(release, .lastAttempt(why))
+            state = .manual(release)
+            return
+        }
+        UpdateWork.note("\(release.tag) ready")
+        let failure = lastAttemptFailure
+        lastAttemptFailure = nil
+        if let failure, failure.tag == nil || failure.tag == release.tag {
+            state = .restartFailed(release, .lastAttempt(failure.reason))
         } else {
             state = .ready(release)
         }
@@ -362,6 +379,10 @@ enum UpdateRules {
         + "and certificate leaf[subject.OU] = \"\(teamID)\""
     static let lastCheckKey = "updater.lastCheck"
     static let rejectedKey = "updater.rejectedTag"
+    static let failedTagKey = "updater.failedTag"
+    static let failedCountKey = "updater.failedCount"
+    /// Failed Restarts of one release before the Download link replaces Restart.
+    static let restartTries = 2
     /// Hosts a request may be redirected to. A download's first URL must be github.com; the API
     /// itself redirects within api.github.com when a repo is renamed (v3.9 clients rely on it).
     static let redirectHosts: Set<String> = [
@@ -477,6 +498,37 @@ enum UpdateRules {
 
     static func reject(_ tag: String, in defaults: UserDefaults) {
         defaults.set(tag, forKey: rejectedKey)
+    }
+
+    /// What apply-update.sh left in `last-failure` after putting the old app back.
+    struct HelperFailure: Equatable {
+        let reason: String
+        let tag: String?        // the release it was installing
+        let lasting: Bool       // every later try would fail the same way
+    }
+
+    /// `reason=…`, `tag=…`, `lasting=0|1`, one per line. A file without them is all reason.
+    static func helperFailure(from text: String) -> HelperFailure? {
+        var fields: [String: String] = [:]
+        for line in text.split(whereSeparator: \.isNewline) {
+            guard let eq = line.firstIndex(of: "=") else { continue }
+            fields[String(line[..<eq])] = String(line[line.index(after: eq)...])
+        }
+        let reason = (fields["reason"] ?? text).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !reason.isEmpty else { return nil }
+        return HelperFailure(reason: reason, tag: fields["tag"].flatMap { $0.isEmpty ? nil : $0 },
+                             lasting: fields["lasting"] == "1")
+    }
+
+    /// Count a failed Restart of `tag`; a failure that will recur counts as every try at once.
+    static func recordRestartFailure(_ tag: String, lasting: Bool, in defaults: UserDefaults) {
+        let before = defaults.string(forKey: failedTagKey) == tag ? defaults.integer(forKey: failedCountKey) : 0
+        defaults.set(tag, forKey: failedTagKey)
+        defaults.set(lasting ? max(before + 1, restartTries) : before + 1, forKey: failedCountKey)
+    }
+
+    static func restartGivenUp(_ tag: String, in defaults: UserDefaults) -> Bool {
+        defaults.string(forKey: failedTagKey) == tag && defaults.integer(forKey: failedCountKey) >= restartTries
     }
 }
 
@@ -724,12 +776,12 @@ enum UpdateWork {
         return pid_t(s.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
     }
 
-    /// The reason a helper left before reopening this launcher, consumed so it is shown once.
-    static func takeHelperFailure() -> String? {
+    /// What a helper left before reopening this launcher, consumed so it counts once.
+    static func takeHelperFailure() -> UpdateRules.HelperFailure? {
         let url = workDir().appendingPathComponent("last-failure")
         guard let s = try? String(contentsOf: url, encoding: .utf8) else { return nil }
         try? FileManager.default.removeItem(at: url)
-        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+        return UpdateRules.helperFailure(from: s)
     }
 
     // MARK: Processes

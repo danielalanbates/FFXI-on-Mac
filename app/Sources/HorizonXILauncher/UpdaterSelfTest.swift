@@ -149,10 +149,38 @@ extension Headless {
             checks.append(("a different tag is not rejected", UpdateRules.isRejected("v3.11", in: d), false))
             checks.append(("a rejected tag is dropped before the Download line could show",
                            UpdateRules.step(for: newer, over: here, in: d) == .rejected, true))
+            // Failed Restarts, per release: the Download link after two, or after one that
+            // every try would meet.
+            checks.append(("Restart offered before any failure", UpdateRules.restartGivenUp("v3.10", in: d), false))
+            UpdateRules.recordRestartFailure("v3.10", lasting: false, in: d)
+            checks.append(("Restart still offered after one failure", UpdateRules.restartGivenUp("v3.10", in: d), false))
+            UpdateRules.recordRestartFailure("v3.10", lasting: false, in: d)
+            checks.append(("Download link after two failures", UpdateRules.restartGivenUp("v3.10", in: d), true))
+            checks.append(("another release still gets Restart", UpdateRules.restartGivenUp("v3.11", in: d), false))
+            UpdateRules.recordRestartFailure("v3.11", lasting: false, in: d)
+            checks.append(("a failure of another release starts its own count",
+                           UpdateRules.restartGivenUp("v3.11", in: d), false))
+            UpdateRules.recordRestartFailure("v3.12", lasting: true, in: d)
+            checks.append(("Download link after one failure that would recur",
+                           UpdateRules.restartGivenUp("v3.12", in: d), true))
             d.removePersistentDomain(forName: suite)
         } else {
             checks.append(("scratch defaults suite", false, true))
         }
+        // What apply-update.sh leaves in last-failure.
+        let lasting = UpdateRules.helperFailure(from: "reason=could not move the current app aside\ntag=v3.10\nlasting=1\n")
+        let once = UpdateRules.helperFailure(from: "reason=the launcher did not quit within 60 s\ntag=v3.10\nlasting=0\n")
+        checks += [
+            ("helper failure: reason, tag and lasting read",
+             lasting == UpdateRules.HelperFailure(reason: "could not move the current app aside", tag: "v3.10", lasting: true), true),
+            ("helper failure: a one-off is not lasting", once?.lasting == false && once?.tag == "v3.10", true),
+            ("helper failure: a reason with = in it is kept whole",
+             UpdateRules.helperFailure(from: "reason=a=b\ntag=v3.10\nlasting=0")?.reason == "a=b", true),
+            ("helper failure: plain text is all reason, no tag",
+             UpdateRules.helperFailure(from: "interrupted\n") == UpdateRules.HelperFailure(reason: "interrupted", tag: nil, lasting: false), true),
+            ("helper failure: an empty file is nothing", UpdateRules.helperFailure(from: "\n") == nil, true),
+        ]
+
         // Exit statuses: only a verdict rejects a release for good; a tool that failed, crashed or
         // ran out of time is tried again later.
         checks += [
