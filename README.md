@@ -113,7 +113,10 @@ Logging *in* always needs your own account, made on that server's own site.
 **Where the game goes.** You choose the folder the first time you press *Setup*; everything goes
 in one *FFXI on Mac* folder there (other worlds in its *Games* folder). Any Mac-formatted drive
 works, including an external one; the launcher refuses exFAT/FAT/NTFS, network, read-only and
-cloud-synced folders, and ones without room. Already have the game spread over other drives?
+cloud-synced folders, and ones without room. Choose a folder that already holds HorizonXI (a
+wrapper like *siku.app*, an earlier *FFXI on Mac* folder, a HorizonXI or SquareEnix folder) and
+Setup uses it: it says what it found, asks only for the room still needed, and never downloads
+the game a second time. Already have the game spread over other drives?
 **Setup & Diagnostics → Move…** copies it into one folder and asks before the old copy goes to the
 Trash. The launcher itself can live anywhere.
 

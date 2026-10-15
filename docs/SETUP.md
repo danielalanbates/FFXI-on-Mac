@@ -96,6 +96,14 @@ inside the wrapper, into the folder you chose:
 **Where it goes.** The folder you chose the first time. Any drive works, external included — but
 it must be Mac-formatted (APFS or Mac OS Extended); the chooser refuses an exFAT or FAT32 drive.
 
+**A folder that already has the game.** Setup looks before it writes anything. An earlier install
+there — an *FFXI on Mac* folder, a wrapper such as *siku.app*, a HorizonXI or SquareEnix folder on
+its own — is used, not duplicated: the chooser says what it found ("Found HorizonXI 2.0.4 in
+“siku.app” — Setup will use it.") and asks only for the room still needed. A HorizonXI folder on
+its own is moved into the install after one question (on the same drive it is one rename, nothing
+is copied) or, from another drive, copied with the original kept. Files on a drive that isn't
+connected are left alone; Setup offers a fresh download instead.
+
 **Moving it.** **Setup & Diagnostics → Move…** copies Wine, its Windows drive and the game into one
 *FFXI on Mac* folder somewhere else — including game files that were linked from another drive —
 checks the copy, switches to it, and then asks whether the old copy goes to the Trash.

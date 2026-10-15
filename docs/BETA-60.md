@@ -5,7 +5,8 @@ Part 1: the main button (never a greyed-out PLAY). Part 2: where things go — S
 folder before writing anything and puts everything in one "FFXI on Mac" folder there; Move…
 brings an existing install into one folder. Part 3: the game's Wine — Setup downloads athei's
 pinned `wine-cx-26.3.0-1` (and installs Rosetta 2 when it is missing), so a fresh user reaches PLAY
-with Setup alone.
+with Setup alone. Part 4: Setup uses what is already in the chosen folder — never a second wrapper
+or a second 25 GB download — and its button names each step with one figure that only rises.
 
 Daniel's directives for this build, oldest first:
 
@@ -21,6 +22,10 @@ Daniel's directives for this build, oldest first:
    dependencies aren't done."
 5. "i'm saying take out the button that says 'play' and replace it with an update or repair text
    field when the game is not playable. the user should never encounter a greyed out play button"
+6. "when the folder already contains the previous installation is it going to auto recognize that
+   and continue setup based on the files there? or will it duplicate everything and create
+   problems"
+7. (live, on the b60 preview) "it's been stuck on setting up 0%"
 
 ## The main button
 
@@ -28,7 +33,10 @@ The big button under the account fields is always the next thing to do. Its labe
 **Setup, Update, Repair, Play, Stop** (Play Another where a world allows two clients), or a
 running job's progress: "Setting up… 42%", "Updating… 12%", "Repairing…", "Checking…",
 "Starting…", "Stopping…", "Moving… 40%", or a wait the user did not start: "Waiting…",
-"Running…", "Wine is closing…" (greyed). One short line under it says why when it is not PLAY;
+"Running…", "Wine is closing…" (greyed). While Setup's chain runs, the button names its step
+instead of "Setting up" — "Downloading Wine…", "Installing game Wine… 9%", "Downloading
+HorizonXI… 37%", "Unpacking HorizonXI… 60%", "Updating HorizonXI… 91%" — with the whole chain's
+figure (part 4, below); under 1% it shows no figure at all. One short line under it says why when it is not PLAY;
 PLAY itself has no line. Nothing anywhere tells the user to restart the Mac.
 
 **Never a greyed-out PLAY** (Daniel, 2026-10-15: "take out the button that says 'play' and
@@ -131,7 +139,8 @@ press tries again):
      `<chosen>/FFXI on Mac/Games/<world>`. With no route, and for `.chooseFolder`: the folder
      that already holds its files (`chooseGameData`).
    Cancel on the chooser or the sheet stops the chain with nothing written; the button stays
-   SETUP. The chain awaits the sheet through `SheetWaiter`.
+   SETUP. The chain awaits the sheet through `SheetWaiter`. What is already in the chosen folder
+   is used instead of built again (part 4, "What happens if the folder already has an install").
 2. **Wine and the Windows drive** — `Bootstrap.run` inside the sheet, into `Bootstrap.target`
    only (there is no default location any more); on success the sheet closes itself and the chain
    rescans (`refreshAsync`).
@@ -140,7 +149,9 @@ press tries again):
    or on its own (`setupRosettaStep`) when only Rosetta is missing.
 4. **The game** — HorizonXI (and the local world, which plays its client):
    `runner.installHorizon` → `update-client.sh install`, progress on the button (base 0–85 %,
-   updates the rest). Other worlds: their own installer route (`downloadGameData`); a
+   updates the rest). After the steps it needed, the chain also applies HorizonXI's update when
+   the install it found or finished is behind (part 4); a stopped or failed update leaves PLAY
+   for the session, as the Update button does. Other worlds: their own installer route (`downloadGameData`); a
    `.website` world opens its page on the first press and runs the downloaded installer on the next.
 5. **Registry / COM / Wine's links** — `runner.repair` (install.sh with Play's Wine) right after a
    download, or alone when only the rpath check fails.
@@ -294,7 +305,9 @@ what it copies.
 
 **Move…** (`InstallMove`, `Runner.moveInstall`): in Setup & Diagnostics, and as a small "Move…"
 beside the main button's Setup line when the game's files are on (or link to) another drive than
-Wine (`Primary.Probe.dataElsewhere`).
+Wine (`Primary.Probe.dataElsewhere`). Neither is shown while a drive the Move would read is gone
+(`InstallMove.offered`, part 4): Daniel's screen showed "Move…" beside "The 'Games' drive isn't
+connected", where it could only refuse.
 1. Refused in one line while a game (here, in another launcher, or seen by the process scan), a
    job, the local server (its login port answers) or any wineserver runs.
 2. Measured, read-only: the wrapper with only the selected prefix (other prefixes and the
@@ -325,6 +338,97 @@ Wine (`Primary.Probe.dataElsewhere`).
 
     B=~/Downloads/FFXI-on-Mac-build/swift-build/release/HorizonXILauncher
     $B --selftest-install-location ~/Downloads/FFXI-on-Mac-build/fixture   # builds fixture/install-location
+
+## What happens if the folder already has an install (part 4)
+
+Daniel, 2026-10-15: "when the folder already contains the previous installation is it going to
+auto recognize that and continue setup based on the files there? or will it duplicate everything
+and create problems". Before part 4: only the layout Setup builds ("FFXI on Mac/") was carried on
+from, and the chooser still demanded the full ~28 GB. A previous-style install — a wrapper such as
+`siku.app`, the old `~/Applications/FFXI on Mac Wine.app`, a bare HorizonXI client or SquareEnix
+folder — was not seen at all: Setup built a second wrapper and downloaded 25 GB again.
+
+**Looking** (`ExistingInstall.find`, read-only): the chosen folder itself and up to three folders
+below it, at most 3,000 folders, never into an app's own files (a wrapper is looked at, not
+walked), Library, system, backup or media folders, the game's ROM trees, or through a link (a link
+is looked at once). It runs off the main thread while the user browses the chooser; inside
+Desktop, Documents and Downloads only once a folder there is chosen (macOS asks before those are
+read). A client is HorizonXI's when it has HorizonXI's `version.json`, or Ashita and SquareEnix in
+a folder named for HorizonXI; a folder named for any other world the launcher knows (CatsEyeXI,
+Eden, Gaia XI, …) is never taken.
+
+**What it finds, best first:** a wrapper whose Windows drive holds HorizonXI (a complete client
+first, then the new layout); a HorizonXI or SquareEnix folder on its own; a wrapper with Wine and
+no game yet; the game's Wine alone. Anything whose files are behind a drive that is gone counts
+only when nothing usable is there.
+
+| Found in the chosen folder | Chooser line | What Setup does | Space it asks for |
+| --- | --- | --- | --- |
+| "FFXI on Mac" with HorizonXI 2.0.4 | Found HorizonXI 2.0.4 here — Setup will use it. | Uses that wrapper; builds nothing; only what is missing | nothing at the latest version ("nothing more to download"); ~1 GB if behind |
+| `siku.app` (any wrapper) with HorizonXI | Found HorizonXI 2.0.4 in “siku.app” — Setup will use it. | That wrapper becomes the install in use (remembered, selected); no new wrapper; the game's Wine goes beside it (Daniel's layout) if it is not found anywhere | as above, plus the game's Wine (1.3 GB) when not found |
+| A wrapper with part of HorizonXI | Found part of HorizonXI in “siku.app” — Setup will finish it. | Used; update-client.sh fetches the base again (it holds Ashita) and unpacks it over | the base download and unzip |
+| `FFXI on Mac Wine.app` with no game (old ~/Applications default) | Found Wine in “FFXI on Mac Wine.app” — Setup will use it. | Its Wine and Windows drive used; the game downloads into it; a part-downloaded base resumes | the game's Wine if missing, the base less what is downloaded |
+| A HorizonXI folder on its own, same drive | Found HorizonXI 2.0.3 here — Setup will move it into FFXI on Mac. | "Use the HorizonXI files already here? They'll be moved into FFXI on Mac, not copied" [Use Them] [Download Fresh]; Use Them: Wine and its drive built (or a no-game wrapper found there used), then **one rename** into `drive_c/HorizonXI` and a link left where it was | Wine, the game's Wine, ~1 GB update |
+| The same on another drive | Found HorizonXI 2.0.4 on another drive — Setup will copy it. | The question says it is copied and the original stays; a verified copy (`InstallMove.copyTree`: hidden name, counted against the source, renamed into place), the original never touched | as above, plus the client (~15.5 GB) |
+| A SquareEnix folder on its own | Found FINAL FANTASY XI's files here — Setup will move them into FFXI on Mac. | Moved into `drive_c/HorizonXI/SquareEnix` (no duplicate); HorizonXI's base still downloads (Ashita ships only inside it) and unpacks over it | the base download and unzip |
+| Files behind a drive that is gone | HorizonXI here is on the 'Games' drive, which isn't connected. | "Setup can download a fresh copy into … Nothing on the 'Games' drive is changed." [Download Fresh] [Cancel]; the link and its target are never touched | a fresh install |
+| … and that install is the chosen folder's own "FFXI on Mac" | the folder is refused: This install's files are on the 'Games' drive, which isn't connected. | nothing (there is nowhere to download fresh without touching it) | — |
+| Nothing | (no line) | a fresh install in `<chosen>/FFXI on Mac` | ~28 GB (36 GB on the Mac's own disk) |
+
+Choosing the client folder itself puts "FFXI on Mac" beside it. The space check is asked of where
+Setup writes (the found wrapper's folder, or the chosen one), with the Mac's own disk keeping 8 GB
+free only when something is to be written. After "Download Fresh" the full need is checked again
+before anything is written.
+
+**Moving in** (`ExistingInstall.moveIn`): `rename(2)` only, after checking both ends are on one
+drive (otherwise it refuses with nothing changed and the copy path is used). What was at the
+destination — an empty folder, or the launcher's own unfinished download — goes to the Trash first,
+never `rm`. A link is left at the old place pointing at the new one, so another wrapper's
+SquareEnix link or a world's folder setting still reaches the same files; a world's folder setting
+that named the client is re-pointed (HorizonXI's and the local world's back to the install's own),
+and HorizonXI's / the local world's setting is cleared when it names files that are gone.
+
+**One entry per install** (`Install.dedupe`): the picker lists one entry per set of game files
+(the real path of `SquareEnix/FINAL FANTASY XI`, or the prefix when there is no game). The same
+wrapper reached through a link, a second prefix whose HorizonXI links to the first's, an older
+wrapper that linked to the client Setup just moved: one entry, the one in use kept. Only the list
+changes, never anything on disk. Entries with different files all stay (a copy from another drive
+leaves the original's install in the list).
+
+**The game's Wine is never fetched twice**: the folders chosen before the last one (three at most,
+`install.location.earlier`) are looked in too, so choosing a new place or using an older install
+finds the wine-coop already on the Mac.
+
+## Progress that never looks stuck (part 4)
+
+Daniel, live on the b60 preview: "it's been stuck on setting up 0%". Measured: aria2c was fetching
+at ~5 MB/s while the button sat at "Setting up… 0%" for minutes. update-client.sh ran it with
+`--summary-interval=60` (its "(N%)" readout is the only figure the button read), the 9.4 GB unzip
+printed nothing, and the steps before the torrent (Wine, the Windows drive) reported nothing.
+
+- **update-client.sh**: aria2c `--summary-interval=2` (base and updates; its readout lines still
+  stay out of launcher.log). Unzips report "==> unpacking N%" every 2 s: bytes unpacked
+  (`du -skA` of the extraction folder) against the zip's own uncompressed size (`zipinfo -t`;
+  1.65× the zip when unreadable), capped at 99 % until ditto ends.
+- **No second 15 GB copy**: the base zip is rooted at `HorizonXI/`, and the old code flattened it
+  with `ditto HorizonXI/ .` — a second full copy (peak ~40 GB against a 25 GB space check). It
+  now unpacks into `updates/.base-extract` (same drive) and `merge_into` renames everything into
+  place (zsh's builtin `mv`; across a link onto another drive it copies, as before). Updates unpack
+  beside the game too, not in `$TMPDIR` on the Mac's own disk. A half-unpacked folder is removed on
+  exit.
+- **ScriptProgress** reads the scripts' output (lines split across reads, `\r` readouts), never
+  going back: a fresh install's base is 0–85 % of the job (download 70 % of that, unzip 30 %),
+  updates the rest; game-wine.sh's download 90 %, its unpack the rest. It names the stage.
+- **SetupMeter** weighs the whole chain (Wine 8, moving/copying files 12, the game's Wine 5,
+  the game 70, finishing 2, the local server 30, Rosetta 2), planned from the state Setup starts
+  in and re-planned by what the chooser found. The figure only rises: a job that ends does not
+  drop it, a step found unnecessary makes it jump, an unplanned one leaves it until the next.
+  It says 100 % only by ending.
+- **The button**: "Installing Rosetta…", "Downloading Wine…", "Building Wine…" (the setup sheet's
+  steps, reported to the window), "Moving game files…" / "Copying game files… 40%", "Installing
+  game Wine… 9%", "Downloading HorizonXI… 37%", "Unpacking HorizonXI… 60%", "Updating HorizonXI…
+  91%", "Finishing…", "Building the server…"; "Setting up…" while the chooser is open; no figure
+  under 1 %. Every label fits the button (≤ 26 characters).
 
 ## Tests run (2026-10-15, M1 8 GB, macOS 27.0)
 
@@ -413,6 +517,58 @@ Wine (`Primary.Probe.dataElsewhere`).
   (exit 10); `--check` the same line (exit 1). The game's Wine resolves to the x10 copy, so it is
   not offered for download there.
 
+**Part 4 (what is already there; progress), same day, same Mac:**
+
+- Release build clean (the same two pre-existing warnings).
+- `--selftest-install-location ~/Downloads/FFXI-on-Mac-build/fixture`: 106/106. New, each on its
+  own fixture tree: the new layout chosen again (and its "FFXI on Mac" folder chosen directly):
+  reused, no second wrapper, nothing to download at the latest version, ~1 GB a version behind,
+  accepted with 5 GB free where a fresh install is refused, looking leaves the tree unchanged;
+  `siku.app` three folders down with a `prefix-old` and a wrapper without HorizonXI beside it:
+  adopted with its prefix10, home its folder, the game's Wine found there, no wrapper created,
+  need 0, read-only; the old `FFXI on Mac Wine.app` with no game (its Wine used, the game still
+  needed, a part-downloaded base subtracted); a bare HorizonXI 2.0.3 on the same drive: its line,
+  need = Wine + the game's Wine + an update, moved by rename (same inode, one 0.DAT in the whole
+  folder, a link left, one wrapper), an older wrapper linking to it collapsed in the picker
+  (`keep` honoured, files untouched), different files kept apart, a second Setup reusing it, world
+  folder settings re-pointed; a bare client into a wrapper with an unfinished download (that
+  download to the injected Trash); a bare SquareEnix (moved into `HorizonXI/SquareEnix`, same
+  inode, the base still needed); Eden / CatsEyeXI / Gaia XI clients and SquareEnix folders left
+  alone; another drive (injected `sameVolume`): the copy line and need, a move refused with
+  nothing changed, then `copyTree` verified with the original byte-for-byte as it was and no hidden
+  leftovers; a SquareEnix linked to a missing drive (one line naming it, no "restart", Download
+  Fresh in the chosen folder with the full need, the link unchanged); that install being the
+  chosen folder's own "FFXI on Mac" (refused); a SquareEnix link onto a gone drive; a usable
+  client beside a ghost one wins; the chosen folder being the client itself; bounds (depth 4,
+  Library, inside an app: nothing); an empty folder; the TCC-gated folders; the game's Wine in an
+  earlier folder still found; Move… not offered for the ghost install.
+- `--selftest-setup-progress` (new): 27/27. update-client.sh's install output as printed (aria2
+  summary blocks, a readout that drops from 50 % to 40 %, the unzip's figures, two updates):
+  never goes back, stages Downloading → Unpacking → Updating, 25 % of the torrent = 14 % on the
+  button, 40 % unpacked = 69 %, the base in place = 85 %, the end = 100 %; the same output a byte at
+  a time; a `\r` readout; what launcher.log keeps; an install over a complete client; an update
+  alone; game-wine.sh; SetupMeter plans and a whole chain with jobs ending at 0 (only rises, under
+  100 %), a step dropped (jumps) and added (never drops), an unplanned step; the button's labels,
+  no figure under 1 %, every label ≤ 26 characters, plain words.
+- `--selftest-primary-action`: 77/77; the label rule now also accepts Setup's step names (each
+  checked as a greyed progress label).
+- Every other suite passes: addon-policy, addon-source, addon-installer, addon-profile,
+  addon-scrub, addon-install, cursor-fix, guide-disabled, narration-disabled, multiworld,
+  retroachievements (47), updater, perf, ui-text, single-instance.
+- `scripts/tests/setup-scripts-test.sh <aria2 archive>` with `HXI_LAUNCHER_BIN`: 101 checks, all
+  pass (the real game-Wine tarball case skipped: it is 204 MB and this part's rule was no download
+  over 50 MB). The stub aria2c now prints aria2's summary block once per `--summary-interval`; new
+  checks: every aria2c call asks for 2 s, its readout reaches the output, "==> unpacking 100%"
+  between "extracting" and the updates, no `.base-extract`/`.update-extract` left; a slow unzip
+  (stub ditto writing half first) shows "unpacking 50%", the base unzip's figures only rise; a
+  SquareEnix linked to another folder is unpacked through the link with the link kept; and the
+  launcher's own `--progress-trace` of the real output: rising figures, Downloading → Unpacking →
+  Updating, the torrent's 25 % at 14 %, ending at "100 Updating HorizonXI".
+- Real Mac, read-only, after part 4: `--next-action` for HorizonXI, Local server and CatsEyeXI →
+  `setup:data-drive | Setup | The 'Games' drive isn't connected — reconnect it or press Setup.`
+  (exit 10); `--check` the same line (exit 1). `ExistingInstall.find` was never pointed at the
+  x10 install or any real folder.
+
 ## Not tested (rules for this build: no GUI, no game, no wine on the real install)
 
 - The window itself: SwiftUI layout of the button, its line, the small Stop and the "Move…" link;
@@ -438,11 +594,26 @@ Wine (`Primary.Probe.dataElsewhere`).
   the injected flag). A launch on a freshly downloaded wine-coop (it is byte-identical to the
   measured one apart from the MoltenVK swap Play makes itself, but no game ran on it).
 
+- Part 4: the chooser's found line and its live update while browsing, the two questions (Use
+  Them / Download Fresh, the unreachable one), the button's step names behind the setup sheet, a
+  real 15 GB move or copy of a client, the copy's figure, Setup adopting a real `siku.app`
+  (Daniel's is behind the ghost 'Games' drive and was never looked at), aria2c 1.35.0's real
+  readout at `--summary-interval=2` when its output is a pipe (the stub prints the documented
+  summary block), and the unzip's figure on a real 9.4 GB zip (only fixture zips).
+
 ## Possible next pathways
 
 - **Space estimate per world**: the chooser uses HorizonXI's 28 GB for everyone (25 GB for
   another world's folder); CatsEyeXI and the retail-client worlds differ.
 - **Local server**: lsb-server.sh still builds where it always did, outside the chosen folder.
+- **A lone SquareEnix still costs the 9.4 GB base**: HorizonXI ships Ashita and its config only
+  inside the base zip, so update-client.sh fetches all of it and unpacks over the moved files. An
+  unzip of only the non-SquareEnix part (`unzip -x 'HorizonXI/SquareEnix/*'`) would save the 15 GB
+  unpack, not the download.
+- **Existing-install detection is HorizonXI's**: another world's client found in the folder is
+  left alone, never offered to that world.
+- **A link left where a client was moved from** keeps other references working; Daniel may prefer
+  none (it shows as an alias in Finder).
 - A SquareEnix symlink that dangles on a drive that *is* there (target folder deleted) reads as
   "files missing", and Setup's download then refuses ("links to …, which isn't there") — the
   chain could offer the location step there too.
