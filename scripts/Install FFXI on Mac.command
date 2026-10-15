@@ -17,11 +17,11 @@ say()  { print -r -- "$BOLD$*$OFF" }
 info() { print -r -- "  $*" }
 ok()   { print -r -- "  ${GRN}✓$OFF $*" }
 warn() { print -r -- "  ${YEL}!$OFF $*" }
-die()  { print -r -- "\n  ${RED}✗ $*$OFF\n"; print -r -- "  Press return to close."; read -r _; exit 1 }
+die()  { print; print -r -- "  ${RED}✗ $*$OFF"; print; print -r -- "  Press return to close."; read -r _; exit 1 }
 
 clear
 say "FINAL FANTASY XI on Mac — installer"
-print -r -- "${DIM}This sets up the launcher. It will tell you before it changes anything.$OFF\n"
+print -r -- "${DIM}This sets up the launcher. It will tell you before it changes anything.$OFF"; print
 
 # ---------------------------------------------------------------- 1. this Mac
 say "1. Checking this Mac"
@@ -32,7 +32,7 @@ ok "macOS $os on $(uname -m)"
 [[ "$(uname -m)" == arm64 ]] || warn "Intel Mac — untested. It may work; nobody has tried."
 
 # ---------------------------------------------------------------- 2. the wrapper
-say "\n2. Looking for a Wine wrapper with a HorizonXI client"
+print; say "2. Looking for a Wine wrapper with a HorizonXI client"
 typeset -a found
 for root in /Applications ~/Applications /Volumes/*(N); do
   for app in $root/**/*.app(N/); do
@@ -62,7 +62,7 @@ if (( ${#found} == 0 )); then
   volume, and if it is on an external drive every app touching it needs the
   "Removable Volumes" permission in System Settings › Privacy & Security.
 TXT
-  print -r -- "\n  Press return to close."; read -r _; exit 1
+  print; print -r -- "  Press return to close."; read -r _; exit 1
 fi
 
 if (( ${#found} == 1 )); then
@@ -70,7 +70,7 @@ if (( ${#found} == 1 )); then
 else
   print -r -- ""
   for i in {1..${#found}}; do info "$i) ${found[$i]%%::*} (${found[$i]##*::})"; done
-  print -rn -- "\n  Which one? [1] "; read -r n; n=${n:-1}
+  print; print -rn -- "  Which one? [1] "; read -r n; n=${n:-1}
   choice="${found[$n]:-${found[1]}}"
 fi
 APP="${choice%%::*}"; PREFIX="${choice##*::}"
@@ -88,16 +88,16 @@ if live=$(/usr/bin/pgrep -f "$LIVE_PATTERN"); then
 fi
 
 # ---------------------------------------------------------------- 3. configure
-say "\n3. Configuring the Wine prefix"
+print; say "3. Configuring the Wine prefix"
 info "This writes the PlayOnline registry keys and registers FFXI's COM servers."
 info "It does not touch anything outside the wrapper."
-print -rn -- "\n  Continue? [Y/n] "; read -r go
+print; print -rn -- "  Continue? [Y/n] "; read -r go
 [[ "${go:l}" == n* ]] && die "Stopped at your request. Nothing was changed."
 "$REPO/scripts/install.sh" "$APP" "$PREFIX" || die "Configuration failed. See the output above."
 ok "prefix configured"
 
 # ---------------------------------------------------------------- 4. the app
-say "\n4. Installing the launcher"
+print; say "4. Installing the launcher"
 command -v swift >/dev/null 2>&1 || die "No Swift toolchain. Install Xcode Command Line Tools:
       xcode-select --install"
 info "Building it (about a minute)…"
@@ -112,7 +112,7 @@ for _ in {1..60}; do /usr/bin/pgrep -qf "$LIVE_PATTERN" || break; /bin/sleep 0.5
 ok "installed to /Applications/FFXI-on-Mac.app"
 
 # ---------------------------------------------------------------- done
-say "\nDone."
+print; say "Done."
 cat <<'TXT'
 
   Open FFXI on Mac from /Applications, pick your server, type your account
