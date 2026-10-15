@@ -1271,7 +1271,7 @@ final class Runner: ObservableObject {
         // from extraEnv into a world-readable diagnostics file.
         let diagnosticKeys: Set<String> = [
             "CX_ROOT", "D3D9_RT_READBACK_FENCE", "D3DMETAL_FRAMEWORK_PATH",
-            "DXVK_STATE_CACHE_PATH", "DYLD_FALLBACK_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
+            "DXVK_CONFIG_FILE", "DXVK_STATE_CACHE_PATH", "DYLD_FALLBACK_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
             "FFXI_FPS_DIVISOR", "LSAppNapIsDisabled", "MVK_CONFIG_FAST_MATH_ENABLED",
             "MVK_CONFIG_USE_COMMAND_POOLING", "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS",
             "ROSETTA_X87_PATH", "WINEDEBUG", "WINEESYNC", "WINEMSYNC", "WINEPREFIX",

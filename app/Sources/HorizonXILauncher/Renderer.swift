@@ -185,6 +185,7 @@ enum RendererSetup {
             }
         }
         if placed > 0 { log("renderer: placed \(placed) DXVK DLLs beside this world's client") }
+        if syncDXVKConfig(install) { log("renderer: dxvk.conf updated") }
     }
 
     static func apply(_ renderer: Renderer, to install: Install, log: (String) -> Void) {
@@ -210,6 +211,39 @@ enum RendererSetup {
     }
 
     // MARK: - DXVK
+
+    /// DXVK_CONFIG_FILE, as the client sees it (Settings), and the same file on the Mac side.
+    static let dxvkConfigWinePath = #"C:\dxvk-cache\dxvk.conf"#
+    static func dxvkConfigFile(_ i: Install) -> URL {
+        i.driveC.appendingPathComponent("dxvk-cache/dxvk.conf")
+    }
+
+    /// vendor/dxvk.conf: in the bundle, or the repo copy under `swift run`.
+    static func bundledDXVKConfig() -> URL? {
+        if let u = Bundle.main.url(forResource: "dxvk", withExtension: "conf") { return u }
+        let dev = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("vendor/dxvk.conf")
+        return FileManager.default.fileExists(atPath: dev.path) ? dev : nil
+    }
+
+    /// Put the shipped dxvk.conf where DXVK_CONFIG_FILE points, only when it differs. Written
+    /// beside it and renamed over it, so a client starting at that moment reads a whole file.
+    /// A client already running read its copy at start-up; replacing the file does not reach it.
+    /// Returns whether the file was written.
+    @discardableResult
+    static func syncDXVKConfig(_ i: Install) -> Bool {
+        guard let src = bundledDXVKConfig() else { return false }
+        let fm = FileManager.default
+        let dst = dxvkConfigFile(i)
+        if fm.contentsEqual(atPath: src.path, andPath: dst.path) { return false }
+        try? fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let tmp = dst.deletingLastPathComponent().appendingPathComponent(".dxvk.conf.\(getpid()).tmp")
+        try? fm.removeItem(at: tmp)
+        guard (try? fm.copyItem(at: src, to: tmp)) != nil else { return false }
+        guard rename(tmp.path, dst.path) == 0 else { try? fm.removeItem(at: tmp); return false }
+        return true
+    }
 
     /// Directories whose processes load d3d8: Ashita injects into the loader, so the shim has to
     /// sit beside every one of them, not only the game directory.
@@ -246,6 +280,7 @@ enum RendererSetup {
         reg(i, add: #"HKCU\Software\Wine\DllOverrides"#, name: "*d3d9", type: "REG_SZ", data: "native")
         linkMoltenVK(i, toCX: true)
         upgradeCoopMoltenVK(log: log)
+        if syncDXVKConfig(i) { log("renderer: dxvk.conf updated") }
         log("renderer: DXVK 1.10.3 + d3d8to9 installed")
     }
 

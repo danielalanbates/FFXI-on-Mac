@@ -204,6 +204,12 @@ struct PerfSettings: Codable {
         // 2026-09-26), so every session recompiled every pipeline: turning the camera stalled.
         // An explicit C:\ path is written; a lap on local LSB went 7.5 -> 13.2 fps as it filled.
         if env["DXVK_STATE_CACHE_PATH"] == nil { env["DXVK_STATE_CACHE_PATH"] = #"C:\dxvk-cache"# }
+        // DXVK reads $DXVK_CONFIG_FILE, else dxvk.conf in the cwd at the moment its instance is
+        // created. The 2026-10-02 session logged 5 compiler threads and no "Found config file"
+        // although C:\HorizonXI\dxvk.conf (4 threads) was there, so the shipped settings never
+        // applied. One explicit file for every world instead (vendor/dxvk.conf, put in place by
+        // RendererSetup.syncDXVKConfig).
+        if env["DXVK_CONFIG_FILE"] == nil { env["DXVK_CONFIG_FILE"] = RendererSetup.dxvkConfigWinePath }
         for line in extraEnv.split(separator: "\n") {
             let parts = line.split(separator: "=", maxSplits: 1).map(String.init)
             if parts.count == 2 {

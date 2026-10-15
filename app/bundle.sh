@@ -87,7 +87,8 @@ for required in \
   "$WINECURSOR_SOURCE/winecursor.lua" \
   "$REPO/scripts/install.sh" "$REPO/scripts/fix-wine-rpath.sh" \
   "$REPO/scripts/lsb-server.sh" "$REPO/scripts/update-client.sh" \
-  "$REPO/scripts/catseye-launcher.sh" "$REPO/scripts/retail-client.sh"; do
+  "$REPO/scripts/catseye-launcher.sh" "$REPO/scripts/retail-client.sh" \
+  "$REPO/vendor/dxvk.conf"; do
   [[ -f "$required" ]] || { echo "required bundle input missing: $required" >&2; exit 1; }
 done
 
@@ -119,6 +120,8 @@ chmod +x "$APP/Contents/Resources/"*.sh
 for dll in d3d8to9.dll dxvk-1.10.3-x32-d3d9-horizonxi.dll libMoltenVK-1.4.2.dylib; do
   [[ -f "$REPO/vendor/$dll" ]] && cp "$REPO/vendor/$dll" "$APP/Contents/Resources/$dll"
 done
+# DXVK's settings file. Play copies it into the prefix and sets DXVK_CONFIG_FILE (Renderer.swift).
+cp "$REPO/vendor/dxvk.conf" "$APP/Contents/Resources/dxvk.conf"
 
 # x87sidecar: the fix for FFXI's x87 floating-point math running ~100x slow under Rosetta (see
 # docs/X87-WALL.md). Signed individually below with its own entitlements -- the app's deep-sign

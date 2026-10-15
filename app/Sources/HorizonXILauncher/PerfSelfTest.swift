@@ -1,8 +1,9 @@
 import Foundation
 
 /// `--selftest-perf`: the play-time performance rules, headless. The x87 guard's decision and
-/// failure markers, sidecar detection in a process scan. Nothing is launched; defaults writes go
-/// to a scratch domain that is deleted afterwards, never the launcher's own.
+/// failure markers, sidecar detection in a process scan, dxvk.conf placement. Nothing is
+/// launched; files go to a temporary folder and defaults writes to a scratch domain, both deleted
+/// afterwards, never the launcher's own.
 extension Headless {
     @MainActor static func runPerfSelfTest() -> Never {
         let fm = FileManager.default
@@ -77,6 +78,36 @@ extension Headless {
                        snap.sidecars == [57994, 58001]))
         checks.append(("process scan: the sidecar still files under its loader's host",
                        snap.byHost["play.horizonxi.com"] == [57992, 57994]))
+
+        // dxvk.conf: shipped with the current effective settings only, placed once, read by name.
+        if let conf = RendererSetup.bundledDXVKConfig(), let text = try? String(contentsOf: conf, encoding: .utf8) {
+            let keys = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+            checks.append(("dxvk.conf ships only dxvk.enableStateCache = True (current behaviour)",
+                           keys == ["dxvk.enableStateCache = True"]))
+        } else {
+            checks.append(("dxvk.conf found (bundle or vendor/)", false))
+        }
+        let root = fm.temporaryDirectory.appendingPathComponent("hxi-perf-conf-\(UUID().uuidString)", isDirectory: true)
+        let install = Install(wrapper: root.appendingPathComponent("wrapper.app"), prefixName: "prefix",
+                              gameDirOverride: root.appendingPathComponent("game", isDirectory: true))
+        let first = RendererSetup.syncDXVKConfig(install)
+        let second = RendererSetup.syncDXVKConfig(install)
+        let placed = RendererSetup.bundledDXVKConfig().map {
+            fm.contentsEqual(atPath: $0.path, andPath: RendererSetup.dxvkConfigFile(install).path) } ?? false
+        try? "d3d9.maxFrameLatency = 1\n".write(to: RendererSetup.dxvkConfigFile(install), atomically: true, encoding: .utf8)
+        let repaired = RendererSetup.syncDXVKConfig(install)
+        let leftovers = (try? fm.contentsOfDirectory(atPath: RendererSetup.dxvkConfigFile(install)
+                            .deletingLastPathComponent().path)) ?? []
+        checks.append(("dxvk.conf is copied into C:\\dxvk-cache once, then left alone while it matches",
+                       first && !second && placed))
+        checks.append(("a dxvk.conf that differs is replaced, leaving no temp file",
+                       repaired && leftovers == ["dxvk.conf"]))
+        try? fm.removeItem(at: root)
+        let env = PerfSettings().environment(for: install)
+        checks.append(("every client gets DXVK_CONFIG_FILE next to DXVK_STATE_CACHE_PATH",
+                       env["DXVK_CONFIG_FILE"] == #"C:\dxvk-cache\dxvk.conf"#
+                           && env["DXVK_STATE_CACHE_PATH"] == #"C:\dxvk-cache"#))
 
         let failures = checks.filter { !$0.1 }.count
         for (name, passed) in checks {
