@@ -33,7 +33,7 @@
 | --- | --- | --- |
 | Managed script blocks | `addons/default.txt` markers `--HORIZON_PLUGINS_*--` / `--HORIZON_ADDONS_*--` | `AddonSuite` (`Addons.swift`) rewrites only between markers |
 | Shipped / recommended loads | `addons/default.txt` | Plugins: Addons, Deeps, Minimap, Nameplate, PacketFlow, Sequencer, Thirdparty (+ winefix outside UI). Addons: mousediag, friendlist, allmaps, chains, chatmon, … (no vanavoice/vanaguide in **shipped** default) |
-| Repo addons tree | `addons/{FFXIFriendList,fpslog,gmtools,lslog,mousediag}`, `addons/lsb2.ini` | Friendlist is large Ashita addon; gmtools is LSB/GM-only |
+| Repo addons tree | `addons/{FFXIFriendList,fpslog,gmtools,lslog,mousediag}`, `addons/lsb2.ini.example` | Friendlist is large Ashita addon; gmtools is LSB/GM-only |
 | Policy gate | `AddonPolicy.swift`, `docs/ADDON-POLICY.md` | Allowlist servers hide/forbid unlisted; local LSB = unrestricted |
 | Narration wiring | `Narration.swift` | Copies `/Applications/VanaVoice.app/Contents/Resources/vanavoice` → `addons/vanavoice`, appends `/addon load vanavoice` **outside** AddonSuite markers; launches menu-bar app; **blocked on allowlist worlds** |
 | Local LSB | `LocalServer.swift` + `scripts/lsb-server.sh` | Client → `127.0.0.1`; root default `~/Games/lsb` |

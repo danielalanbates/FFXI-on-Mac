@@ -224,7 +224,7 @@ exclusively the side queue's.
 
 LSB-local status, corrected after live debugging with Daniel: the pathway WORKS. The
 "post-connect close" was simply a missing local account (the DB only had the harness's
-lsbtest fixtures; Daniel's login was refused). Account `danielalanbates` now exists in
+lsbtest fixtures; Daniel's login was refused). An account for Daniel now exists in
 the local DB (bcrypt row, id 3), and the launcher's Local-server world verified
 end-to-end to the title screen. First render on this path is slow (cold DXVK pipeline
 cache) — do not judge it by early screenshots. Two real residuals: the cooperative

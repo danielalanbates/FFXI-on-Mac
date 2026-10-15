@@ -32,3 +32,23 @@ accounts.json
 **/accounts.json
 *.bak
 *.macos26.bak
+
+# secrets and signing material (notary API keys are AuthKey_<id>.p8)
+.env
+.env.*
+*api-key*
+AuthKey_*.p8
+*.p8
+*.p12
+*.pem
+*.keychain-db
+# boot profiles anywhere in the tree, not only at the root (they hold --user/--pass)
+**/config/boot/*.ini
+**/config/boot/*.xml
+# repo-level boot profiles; addons/lsb2.ini.example is the template for twoclient.py
+addons/*.ini
+# per-launch diagnostics, chat/command channels (chat carries character names), ImGui layout
+last-spawn*.txt
+**/cmdpipe/cmd.txt
+**/cmdpipe/chat.txt
+imgui.ini

@@ -174,8 +174,9 @@ and LSB accounts are **per server** — no CatsEye account exists yet.
 
 Automated creation attempts, for the record:
 - xiloader's TUI (FTXUI) renders on a pty but consumes **no** input under our wine — arrows,
-  tab, digits, and SGR mouse clicks all dead (`scratchpad cexi_create*.py`, archived in
-  `archive/catseye-account-2026-08-19/`). Menu-driving is not a pathway.
+  tab, digits, and SGR mouse clicks all dead (`scratchpad cexi_create*.py`; they named a
+  personal account, so they were moved out of the repo on 2026-10-14 into a private local
+  archive). Menu-driving is not a pathway.
 - `--email` does not switch xiloader to create mode; it autologs-in.
 - The auth protocol is small: **JSON over TLS to server.catseyexi.com:54231**, e.g.
   `{"command":32,"username":…,"password":…,"version":[2,0,1]}` (`login_cmd::LOGIN_CREATE=0x20`;
@@ -191,7 +192,7 @@ field is updated), Play should reach character select with no further work.
 ## 2026-08-19 (later) — CatsEye login succeeded; "Valid Content ID not found" = no character yet
 
 Registration on catseyexi.com worked and the loader logged in ("Successfully logged in as
-danielalanbates!") but the client stops at **"Valid Content ID not found."** Per CatsEye's own
+<account>!") but the client stops at **"Valid Content ID not found."** Per CatsEye's own
 download page this means no character exists yet: characters are created on the **website
 dashboard** (Login → Create Character → pick a game mode), which then issues **separate game
 account credentials** (one game account per game mode — Accelerated / Crystal Warrior /

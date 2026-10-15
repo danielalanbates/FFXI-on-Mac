@@ -68,8 +68,9 @@ enum Credentials {
 
     /// Passwords are keyed per world AND user, because the same account name on two servers is
     /// two different accounts with two different passwords — keying on the name alone let a
-    /// CatsEye login overwrite the HorizonXI password for "danielalanbates" (2026-08-19). The
-    /// bare-username key survives as a read fallback for stores written before this.
+    /// CatsEye login overwrite the HorizonXI password of an account with the same name
+    /// (2026-08-19). The bare-username key survives as a read fallback for stores written before
+    /// this.
     static func passwordKey(_ user: String, world: String) -> String {
         world.isEmpty ? user : "\(world)|\(user)"
     }

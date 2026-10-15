@@ -46,9 +46,10 @@ enum CompanionSelfTest {
                            && GuideParser.parseStep("") == nil))
 
         // If the sibling checkout is present, the real guide library must parse without loss.
-        let real = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Library/CloudStorage/GoogleDrive-danielalanbates@gmail.com/My Drive/Code/GitHub/vanaguide/Vanaguide/guides")
-        if FileManager.default.fileExists(atPath: real.path) {
+        let real = CodeFolders.googleDriveCodeRoots
+            .map { $0.appendingPathComponent("GitHub/vanaguide/Vanaguide/guides", isDirectory: true) }
+            .first { FileManager.default.fileExists(atPath: $0.path) }
+        if let real {
             let library = GuideParser.loadAll(from: real)
             checks.append(("real guide library loads at least ten guides", library.count >= 10))
             checks.append(("every real guide parses at least three steps",

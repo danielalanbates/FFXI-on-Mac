@@ -72,7 +72,7 @@ name=Example Configuration
 [ashita.boot]
 ; Retail Server Usage
 file=.\\bootloader\\horizon-loader.exe
-command=--server 127.0.0.1 --user lsbtest2 --pass LsbTest123
+command=--server 127.0.0.1 --user lsbtest2 --pass CHANGE_ME
 gamemodule=ffximain.dll
 script=default.txt
 args=

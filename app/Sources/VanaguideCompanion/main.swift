@@ -64,8 +64,9 @@ final class CompanionState: ObservableObject {
             roots.append(URL(fileURLWithPath: env))
         }
         if let r = Bundle.main.resourceURL?.appendingPathComponent("Vanaguide") { roots.append(r) }
-        roots.append(home.appendingPathComponent(
-            "Library/CloudStorage/GoogleDrive-danielalanbates@gmail.com/My Drive/Code/GitHub/vanaguide/Vanaguide"))
+        roots += CodeFolders.googleDriveCodeRoots.map {
+            $0.appendingPathComponent("GitHub/vanaguide/Vanaguide", isDirectory: true)
+        }
         roots.append(home.appendingPathComponent("Downloads/vanaguide/Vanaguide"))
         return roots
     }
