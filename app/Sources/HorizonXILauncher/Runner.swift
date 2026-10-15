@@ -1366,7 +1366,7 @@ final class Runner: ObservableObject {
         // Registry edits now use this same wine build, so they do not bounce the prefix between
         // two wine.inf versions. Still wait for its server to flush before launching the client;
         // never stop it when another client is running.
-        if !clientsLive, RendererSetup.stopWineserver(install) {
+        if !clientsLive, RendererSetup.stopWineserver(install, log: { [weak self] in self?.logFileOnly($0) }) {
             appendLine("==> wineserver stopped; the game starts its own")
         }
         // Watched only where the sidecar can be reached: ROSETTA_X87_PATH means nothing to the
@@ -1505,6 +1505,7 @@ final class Runner: ObservableObject {
                 guard let self else { return }
                 let pids = self.sessionPIDs(in: snap)
                 if pids.isEmpty { break }
+                self.sessionSeenAlive = true
                 if !self.x87Settled { self.checkX87Alive(snap: snap, pids: pids) }
                 if let s = WindowMemory.currentSize(pids: pids, scale: scale) {
                     // The window is up: "Starting…" is over (90 s is only the fallback).
@@ -1528,6 +1529,12 @@ final class Runner: ObservableObject {
                     WindowMemory.remember(first: f, last: s, install: i, profile: profile, world: world)
                 }.value
             }
+            // Nothing printed, nothing ever seen running, nobody pressed Stop: wine ended before
+            // Ashita's first line. b60's first Play on 2026-10-15 did exactly this, and the button
+            // just went back to Play; the second press worked. Say so, once, and keep what is known
+            // in launcher.log (docs/BETA-61.md).
+            let silent = self.gameOutputBytes == 0 && !self.sessionSeenAlive && !self.sessionExplained
+                && self.firstWindowSize == nil && self.currentInstall?.ashitaGeneration == .v4
             self.lastWindowSize = nil
             self.firstWindowSize = nil
             self.running = false
@@ -1535,6 +1542,11 @@ final class Runner: ObservableObject {
             self.x87Settled = true
             self.tailGameGone?.raise()
             self.appendLine("==> game exited")
+            if silent {
+                self.logFileOnly("i  the injector printed nothing and no process of this launch was ever seen: "
+                                 + "wine ended before Ashita started")
+                self.appendLine("!! The game didn't start — press Play to try again.")
+            }
             if again.clients.isEmpty, self.othersPlaying() == 0 { Runner.stopNarrator() }
             if let line = remembered {
                 self.appendLine(line)
@@ -1592,6 +1604,7 @@ final class Runner: ObservableObject {
     /// Ends this session's client only. The wineserver is shared by every world in the prefix,
     /// so it is stopped only once no client at all is left.
     func stop(_ install: Install) {
+        sessionExplained = true
         // No x87 verdict on a session being ended: Stop takes the sidecar down at once while the
         // loader can outlive SIGTERM by seconds, which the minute check would read as a failure.
         x87Settled = true

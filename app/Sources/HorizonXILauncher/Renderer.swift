@@ -561,7 +561,7 @@ enum RendererSetup {
     /// the pathway it thought it had just switched away from.
     /// Returns whether a wineserver was actually running when asked, so callers can say so.
     @discardableResult
-    static func stopWineserver(_ i: Install) -> Bool {
+    static func stopWineserver(_ i: Install, log: (String) -> Void = { _ in }) -> Bool {
         let wine = Runner.playWine(i)
         let wineserver = wine.deletingLastPathComponent().appendingPathComponent("wineserver")
         let chk = Process()
@@ -586,10 +586,25 @@ enum RendererSetup {
         // (spinning disk) the flush can outlive it — and a game spawned while the old server is
         // still dying gets torn down with it about a second after login ("Closing…", every
         // world, 2026-08-19). `wineserver -w` blocks until the server has actually terminated.
-        let waitCmd = "export WINEPREFIX=\(Bridge.shellQuote(i.prefix.path)); \(Bridge.shellQuote(wineserver.path)) -w"
-        Bridge.runShell(waitCmd)
+        //
+        // Bounded since b61: `-w` waits on the server's lock with no limit, and Play runs this on
+        // the main thread, so a server stuck flushing to a drive that went away held the window
+        // for good. Past `waitLimit` Play goes on and launcher.log says so. (b60's silent first
+        // Play on 2026-10-15 was not this: the system log has the registry session's last
+        // wineserver gone 0.35 s before the game was spawned. See docs/BETA-61.md.)
+        let ws = Bridge.shellQuote(wineserver.path)
+        let waitCmd = "export WINEPREFIX=\(Bridge.shellQuote(i.prefix.path)); \(ws) -w & w=$!; n=0; "
+            + "while kill -0 $w 2>/dev/null; do n=$((n+1)); "
+            + "if [ $n -ge \(Int(waitLimit * 10)) ]; then kill $w 2>/dev/null; echo still-running; exit 0; fi; "
+            + "sleep 0.1; done"
+        if Bridge.runShell(waitCmd).output.contains("still-running") {
+            log("i  wineserver still closing after \(Int(waitLimit)) s; going on without waiting longer")
+        }
         return wasUp
     }
+
+    /// How long `stopWineserver` waits for the old wineserver to be gone.
+    static let waitLimit: Double = 30
 
     private static func reg(_ i: Install, add key: String, name: String, type: String, data: String) {
         wine(i, ["reg", "add", key, "/v", name, "/t", type, "/d", data, "/f"])

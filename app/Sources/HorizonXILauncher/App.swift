@@ -1675,8 +1675,12 @@ struct ContentView: View {
             // Registry and COM entries Preflight found missing are written by Play itself
             // (GameRegistry.point); forget its cache so it really does write them. Never under a
             // running client: its registry must not change (Runner.gate).
+            // Read the registry again rather than trust the last check: after a Play that wrote it,
+            // the checks taken before that Play still say "bad" until the next recheck, and the
+            // second press re-pointed it all over again, a minute of "Starting…" (b60, 2026-10-15).
             if let i = active, sessions.live.isEmpty,
-               checks.contains(where: { ["reg32", "reglayout", "com"].contains($0.id) && $0.state == .bad }) {
+               checks.contains(where: { ["reg32", "reglayout", "com"].contains($0.id) && $0.state == .bad }),
+               !Preflight.registryPointed(i) {
                 GameRegistry.invalidate(i)
             }
             play()
