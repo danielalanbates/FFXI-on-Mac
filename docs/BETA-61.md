@@ -228,7 +228,8 @@ launcher.log gets three `i  boot profile: …`/`i  pivot.ini: …` lines; the wi
 - The local world now forces `horizon-loader.exe` too, whenever it is in `bootloader/`: an
   `lsb.ini` that deliberately named another loader there is changed at Play.
 - A HorizonXI client without `horizon-loader.exe` in `bootloader/` keeps whatever its profile
-  names (there is nothing better to point at); Preflight still lists the problem.
+  names (there is nothing better to point at), and Preflight's `bootprofile` check says nothing
+  about it either: that client cannot log in to HorizonXI, and nothing here names why.
 - A user who points HorizonXI at a deliberately different loader has it replaced at every Play,
   while `horizon-loader.exe` is present. HorizonXI's server takes nothing else.
 - `pivot = 1` is added to a HorizonXI profile that lacks the key. If XIPivot misbehaves on some
@@ -237,3 +238,68 @@ launcher.log gets three `i  boot profile: …`/`i  pivot.ini: …` lines; the wi
   (broken wine); pressing Play again then shows it again.
 - The bounded wait can start the game beside a wineserver still flushing after 30 s, the old
   "Closing…" case, where b60 would have waited (and held the window) for as long as it took.
+
+## Review fixes
+
+An adversarial review of `beta-b60..beta-b61`, plus a Gemini 2.5 Flash pass over the same diff.
+
+- **The menu with no account asked for the wrong thing.** Worlds whose card says the loader
+  window makes the account (Local server, Eden, Supernova) can be played with the account fields
+  empty; their loader then opens at its menu having tried no login, and the line said "didn't
+  accept the login". `launch` now reads whether the boot command it handed the loader carries a
+  non-empty `--user` and `--pass` (`Credentials.bootHasAccount`, sharing `bootServer`'s parsing,
+  `Credentials.option`), and without them the line is "<world> needs an account — enter its name
+  and password, then press Play." With them, as before. (`bootServer` now also ignores a
+  `--server` with nothing after it, falling back to the world's host as when there is none.)
+- **`file =` always said `bootloader\`.** The loader is chosen from `Install.bootLoaderDir`
+  (`bootloader/` or `ffxi-bootmod/`); the rewritten line now names that folder, so a v4 client
+  whose loaders live in `ffxi-bootmod/` is not pointed at a file that is not there.
+- The risk above about a HorizonXI client without `horizon-loader.exe` said Preflight lists it; it
+  does not.
+
+Checked and left as they are:
+
+- **The template** (`app/Resources/horizonxi-boot.ini`) holds no account, password, user name or
+  machine path; neither does any line b61 added (`git log -p beta-b60..beta-b61`), and the built
+  binary's only `--pass` strings are the self-tests' fixture values.
+- **Other worlds.** CatsEyeXI, Gaia XI, Supernova and the rest declare no loader and no template:
+  `fixBootLoader` keeps a loader that exists, as in b60, and `prepareProfile` changes nothing else
+  for them. Eden (Ashita v3, XML) is never touched (`fixBootLoader` and `complete` take `.ini`
+  only). The local world's loader matches every `lsb*.ini` on the old install
+  (`horizon-loader.exe`, which is also what `lsb-server.sh` patches LandSandBoat to accept).
+- **Key insertion** keeps the file's line endings, comments, order and every existing value
+  (self-test: CRLF, a user's `pivot = 0`, the masked copy of Daniel's profile).
+- **The menu marker** cannot fire on a normal HorizonXI login: `horizon-loader.exe` (same SHA-1
+  in both installs) prints "Autologin activated!" when it has an account and only reaches "What
+  would you like to do?" when the autologin was refused or never tried; it does not print "Enter
+  a selection" at all (Ashita's `pol.exe` does). Its refusals all begin "Failed to login", which
+  still wins.
+- **Play's order** is profile (`beforeLaunch`: loader, missing settings, pivot.ini, then the
+  account) → renderer and registry (`GameRegistry.point`) → `fpu_preserve` override → Sandbox
+  bypass → `stopWineserver` (bounded wait) → spawn.
+- **Nothing greys Play or adds text when ready**: `bootprofile` is in `Primary.fixedByPlay`;
+  `--next-action` gives `play | Play |` for HorizonXI and the local world.
+- Gemini's two findings were both rejected: (1) "a world with no loader no longer gets a missing
+  `file` line added" — b60 never added one either (it only replaced an existing line); (2) "on
+  timeout the wait kills `wineserver -w`, not the server" — that is the design: the 30 s bound
+  stops waiting, it does not kill the server (listed under Risks).
+
+Tests after the fixes (release build, 2026-10-15): `--selftest-boot-profile` 43/43 (44/44 with
+the masked sample of Daniel's `horizonxi.ini` and `pivot.ini`: loader pol.exe → horizon-loader.exe,
+pivot added, pivot.ini root fixed, account line unchanged, then stable; the copy deleted after);
+the other 18 suites all pass (`--selftest-install-location <fixture>` 107/107,
+`--selftest-primary-action` 77/77, `--selftest-setup-progress` 27/27, `--selftest-retroachievements`
+47/47); `scripts/tests/setup-scripts-test.sh` with `HXI_LAUNCHER_BIN`: 100 ok, 0 failed, 2 skipped
+(no loader was running this time); `--check` (read-only) names the same three HorizonXI problems,
+exit 1 for the other worlds' missing drives; `--next-action` `play | Play |` for HorizonXI and
+the local world.
+
+Still open from the review:
+
+- The local world's account cannot be made from this launcher: its card says the loader window
+  makes it, but no loader window is ever shown (the loader's console is the game's stdout file),
+  so its "Create New Account" menu cannot be answered. Before b61 the menu looped unseen; now
+  Play stops and asks for an account. The same holds for Eden's and Supernova's cards.
+- A HorizonXI account with a one-time code (horizon-loader has `--otp-code` and an "OTP Code:"
+  prompt) is not handled; what its loader prints without the code was not observed.
+
