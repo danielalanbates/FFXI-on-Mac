@@ -223,7 +223,9 @@ struct Server: Codable, Identifiable, Hashable {
         Server(name: "HorizonXI", host: "play.horizonxi.com", bootProfile: "horizonxi.ini",
                verified: true,
                note: "The server this project was built and tested against.",
-               era: "Chains of Promathia · 75 cap", population: 9495, pinned: true, codebase: .landSandBoat,
+               // horizonxi.com, 2026-10-14: "Treasures of Aht Urhgan is live on HorizonXI"
+               // (launched 2026-08-07); contributor PR #24 said the same.
+               era: "Treasures of Aht Urhgan · 75 cap", population: 9495, pinned: true, codebase: .landSandBoat,
                installURL: "https://horizonxi.com/play", installKind: .horizonTorrent,
                installNote: "HorizonXI's own client, fetched the way their launcher does it: a 9.4 GB torrent, then their updates. Needs aria2 (brew install aria2).",
                accountURL: "https://horizonxi.com/register",
