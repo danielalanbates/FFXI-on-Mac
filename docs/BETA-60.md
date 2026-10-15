@@ -1,8 +1,9 @@
 # Beta 3.9 build 60 (local only)
 
 Branch `beta-b60`, on top of `beta-b59` (8b000a1). Local beta: no GitHub release, nothing pushed.
-Part 1 of 2: the main button. Part 2 (the install-location chooser) plugs into the seam described
-under "Setup's chain".
+Part 1: the main button (never a greyed-out PLAY). Part 2: where things go — Setup asks for a
+folder before writing anything and puts everything in one "FFXI on Mac" folder there; Move…
+brings an existing install into one folder.
 
 Daniel's directives for this build, oldest first:
 
@@ -16,6 +17,8 @@ Daniel's directives for this build, oldest first:
    shouldn't be listed."
 4. "there should be a setup button in place of the text 'play' when the game is not installed or
    dependencies aren't done."
+5. "i'm saying take out the button that says 'play' and replace it with an update or repair text
+   field when the game is not playable. the user should never encounter a greyed out play button"
 
 ## The main button
 
@@ -113,19 +116,22 @@ counts as that drive missing, in Preflight, install.sh and update-client.sh alik
 most once per step per press (a step that did not fix its need prints its own "!!" line; the next
 press tries again):
 
-1. **Location** — `setupLocationStep(_:)`. *This is the seam for part 2.* It is the only place a
-   location is decided:
-   - `.install`, `.wrapperDrive`, `.wine`: sets `Bootstrap.target` (`prepareWineSetup()`: the
-     selected wrapper when only its Wine is missing and its drive is there, else nil =
-     `~/Applications/FFXI on Mac Wine.app`) and shows `SetupSheet`, which now says where it goes
-     ("It goes in …" / "Wine is replaced in …") and builds nothing until "Set it up". The chain
-     awaits it through `SheetWaiter`; Cancel or closing the sheet stops the chain.
-   - `.dataDrive`, `.chooseFolder`: `chooseGameData(for:)` (folder panel) sets the world's
-     `dataPath`; cancelling stops the chain.
-   Part 2 replaces the bodies of these two branches (a chooser that sets `Bootstrap.target` and
-   the world's `dataPath`) and the sheet's location line; nothing else in the chain needs to change.
-2. **Wine and the Windows drive** — `Bootstrap.run` inside the sheet; on success the sheet closes
-   itself and the chain rescans (`refreshAsync`).
+1. **Location** — `setupLocationStep(_:)`, the only place a location is decided, before anything
+   is written (see "Where things go" below):
+   - `.install`, `.wrapperDrive`, `.wine` with no wrapper to fix in place, and `.dataDrive` for
+     HorizonXI and the local world: the folder chooser (`LocationPanel`), then `SetupSheet`
+     builds Wine and its Windows drive in `<chosen>/FFXI on Mac/`, and that install becomes the
+     one in use (remembered; the game downloads into it next). The old install is not touched.
+   - `.wine` when the selected wrapper is there and only its Wine is missing: Wine is replaced in
+     place (G11), no chooser.
+   - `.dataDrive` for another world with a download route: the chooser; its files go in
+     `<chosen>/FFXI on Mac/Games/<world>`. With no route, and for `.chooseFolder`: the folder
+     that already holds its files (`chooseGameData`).
+   Cancel on the chooser or the sheet stops the chain with nothing written; the button stays
+   SETUP. The chain awaits the sheet through `SheetWaiter`.
+2. **Wine and the Windows drive** — `Bootstrap.run` inside the sheet, into `Bootstrap.target`
+   only (there is no default location any more); on success the sheet closes itself and the chain
+   rescans (`refreshAsync`).
 3. **Patched game Wine** — see "Game Wine" below; noted, and said at the end.
 4. **The game** — HorizonXI (and the local world, which plays its client):
    `runner.installHorizon` → `update-client.sh install`, progress on the button (base 0–85 %,
@@ -194,16 +200,106 @@ stock Mac) is no longer needed.
   remembered install on an unplugged drive is named instead of "isn't installed"; mounting a
   drive rescans when nothing is selected.
 
+## Where things go (part 2)
+
+Daniel, 2026-10-15: "it shouldn't be on the games drive. the user should have the ability to
+choose where it goes. … i want to choose" — the old setup built `~/Applications/FFXI on Mac
+Wine.app` without asking (he had it deleted), and HorizonXI's `SquareEnix` was a link onto a third
+drive ('Games') that later went missing.
+
+**One folder** (`InstallLocation`):
+
+    <chosen>/FFXI on Mac/
+        FFXI on Mac Wine.app/                  Wine + its Windows drive (prefix10)
+            Contents/SharedSupport/prefix10/drive_c/HorizonXI/    HorizonXI, SquareEnix included
+        Games/<world>/                         any other world's client
+
+Bootstrap's downloads and unpacking sit beside the wrapper (`.ffxi-on-mac-setup`, same drive) and
+are removed once Wine is built. The choice is remembered (`install.location` in the launcher's
+defaults, plus `install.last` for the install); discovery looks in the remembered folder first,
+and `Install.remembered()` now needs the prefix, not the game, so a just-built install stays
+selected while the game downloads. Existing wrappers in `~/Applications`, `~/Games`, `/Volumes/*`
+are still found as before. Other worlds with no folder get `Games/<world>` in the chosen folder
+(asked for only when no folder was chosen yet); "Choose folder…" no longer creates
+`~/Games/FFXI/<world>` before the user picks.
+
+**The chooser** (`LocationPanel`): an open panel for folders ("New Folder" allowed), opening on
+the last choice, else the drive with the most room that would be accepted (home, or `~/Games` when
+it exists, if that is the Mac's own disk). One line under it follows the selection: "120.4 GB free
+here · about 27 GB needed", or why it can't be used. A folder that can't be used is refused in the
+panel (it stays open); Cancel returns nothing and nothing is written. Refusals, one plain line each:
+
+| Folder | Line |
+| --- | --- |
+| exFAT / FAT / NTFS / anything not APFS or Mac OS Extended | This drive is exFAT. Choose one formatted APFS or Mac OS Extended. |
+| Network volume (not local, or smbfs/afpfs/nfs/webdav) | This is a network drive. Choose a drive connected to this Mac. |
+| Read-only volume | This drive is read-only. Choose another. |
+| Folder not writable | This folder can't be written to. Choose another. |
+| iCloud Drive / CloudStorage / ubiquitous | This folder syncs to iCloud or another cloud. Choose one that doesn't. |
+| Inside an .app | Choose a folder outside an app. |
+| Drive gone (ghost, impostor) | The 'X' drive isn't connected. Choose another place. |
+| Not enough space | Not enough space here: 19.2 GB free, about 35 GB needed. |
+
+Space needed for a fresh HorizonXI install, from the measurements in this build's analysis: Wine
+and its Windows drive about 1.4 GB, the base zip 9,426,920,806 bytes, unpacked about 15.5 GB
+beside it until update-client.sh deletes the zip: about 27 GB at the peak. On the Mac's own disk
+8 GB more must stay free (35 GB). Another world's folder: about 25 GB (no Wine). A Move: exactly
+what it copies.
+
+**Move…** (`InstallMove`, `Runner.moveInstall`): in Setup & Diagnostics, and as a small "Move…"
+beside the main button's Setup line when the game's files are on (or link to) another drive than
+Wine (`Primary.Probe.dataElsewhere`).
+1. Refused in one line while a game (here, in another launcher, or seen by the process scan), a
+   job, the local server (its login port answers) or any wineserver runs.
+2. Measured, read-only: the wrapper with only the selected prefix (other prefixes and the
+   installer prefix stay behind), and the selected world's own folder when it is outside the
+   wrapper. A source behind a drive that is gone: "The 'Games' drive isn't connected, so the game
+   can't be moved." and nothing else happens.
+3. The chooser, with the same refusals, the need being exactly what is copied, and never inside
+   the install or the data its links reach.
+4. Copy with `ditto` into hidden names (discovery never sees a half copy). Links under the game's
+   folder (`drive_c/HorizonXI`, the folder itself included) that leave the install are copied as
+   real files, also when they chain onto a third place; links that loop back to a folder holding
+   them, dangling links and links to a whole drive or home stay links. Wine's own links stay as
+   Wine made them: `dosdevices` (`z:` is the whole Mac), `drive_c/users/*`, and the per-world
+   `C:\Games\<world>` links. Absolute links inside the install are re-pointed at the copy.
+5. Verify: files, folders, links and bytes of the copy equal the source as copied; Wine,
+   `system.reg`, Ashita and the three FFXI DLLs present. Only then renamed into place. Any
+   failure: the partial copy goes to the Trash (never `rm`), the old install is as it was.
+6. Switch: the remembered install and folder, world folders that pointed inside the old wrapper
+   (and the moved world's own folder) re-pointed; the checks run again.
+7. Ask once: "The game now plays from …. The old copy is still here: … Move it to the Trash?"
+   — Keep It (default) / Move to Trash. The old copy is the wrapper (or only the moved prefix when
+   the wrapper holds other installs), the data its links reached, and the world folder.
+8. The button shows "Moving… N%" (free-space change on the destination; a same-drive copy that
+   macOS clones may jump from 0 to 100).
+
+**How to test without the window** (never on the real install):
+
+    B=~/Downloads/FFXI-on-Mac-build/swift-build/release/HorizonXILauncher
+    $B --selftest-install-location ~/Downloads/FFXI-on-Mac-build/fixture   # builds fixture/install-location
+
 ## Tests run (2026-10-15, M1 8 GB, macOS 27.0)
 
 - `swift build -c release --scratch-path ~/Downloads/FFXI-on-Mac-build/swift-build`: clean (only
   the two pre-existing `ImplicitStrongCapture` warnings, LocalServer.swift and Runner.swift).
-- `--selftest-primary-action`: 63/63. Every state in the table above; ghost 'Games' → Setup with
+- `--selftest-primary-action`: 69/69. Every state in the table above; ghost 'Games' → Setup with
   the reconnect line; label ⊆ {Setup, Update, Repair, Play, Stop, Play Another} or a greyed
-  progress label; no "restart" in any label, reason, drive line or Setup's last line; reasons ≤ 72
-  characters, one line, no jargon; only Stop off Return; Play/Play Another without a line; Repair's
+  progress label; **a "Play"/"Play Another" label is always enabled, and every other state is an
+  enabled Setup/Update/Repair or a progress label** (over every state and every action); no
+  "restart" in any label, reason, drive line or Setup's last line; reasons ≤ 72 characters, one
+  line, no jargon; only Stop off Return; Play/Play Another without a line; "Moving… 40%"; Repair's
   refusal on a fixture behind a missing drive and with missing DLLs; `--fix` limited to jobs that
   need no person.
+- `--selftest-install-location ~/Downloads/FFXI-on-Mac-build/fixture`: 62/62 (also 62/62 with no
+  folder given, in a temporary folder it removes). The chooser's refusals from injected facts and
+  the facts of a real folder; the one-folder layout; the remembered choice in a throwaway defaults
+  suite; a real Move of a ~10 KB fixture whose SquareEnix links outside the tree and on to a third
+  place (real files in the copy, Wine's links kept, absolute link re-pointed, other prefixes left,
+  counts equal, source snapshot unchanged, moved install passes the file checks), a linked
+  HorizonXI folder, a copy whose source changed under it (refused, discarded inside the fixture),
+  a second Move into the same place, a source behind a missing drive (one line, nothing written),
+  and Move's blockers.
 - `--selftest-ui-text`: 24 checks, including the drive line wording and the impostor rule.
 - All other suites pass unchanged: addon-policy, addon-source, addon-installer, addon-profile,
   addon-scrub, addon-install, cursor-fix, guide-disabled, narration-disabled, multiworld,
@@ -223,18 +319,24 @@ stock Mac) is no longer needed.
   Setup, `--fix` refuses and runs nothing).
 - Real Mac, read-only: `--next-action HorizonXI` (and Local server, CatsEyeXI) →
   `setup:data-drive | Setup | The 'Games' drive isn't connected — reconnect it or press Setup.`
-  (exit 10), both before and after the exFAT 'GAMES' stick appeared. `--check` names the same
-  line (exit 1).
+  (exit 10), both before and after the exFAT 'GAMES' stick appeared, and again after part 2.
+  `--check` names the same line (exit 1).
 - `grep` of Sources and Resources: no string tells the user to restart the Mac. Remaining
   "Restart" text is the launcher's own self-update button (restarts the launcher, not the Mac)
   and log-only lines about it; one code comment quotes Daniel.
 
 ## Not tested (rules for this build: no GUI, no game, no wine on the real install)
 
-- The window itself: SwiftUI layout of the button, its line and the small Stop; the chain end to
-  end (sheet → rescan → download → Repair → PLAY); `SheetWaiter` with Cancel / closing the sheet;
-  the folder panel as the location step; the Full Disk Access pane and macOS's "Quit & Reopen";
-  the local server's Setup from the button; the `.website` second-press installer.
+- The window itself: SwiftUI layout of the button, its line, the small Stop and the "Move…" link;
+  the chain end to end (chooser → sheet → rescan → download → Repair → PLAY); `SheetWaiter` with
+  Cancel / closing the sheet; `LocationPanel` itself (its line under the panel, the refusal sheet,
+  the default folder); the Move… flow in the window (the chooser, "Moving… N%", the Trash
+  question and `trashItem`); the account PLAY putting the cursor in the field and Repair opening
+  the login host; the local server's "Set Up Anyway" alert; the Full Disk Access pane and macOS's
+  "Quit & Reopen"; the local server's Setup from the button; the `.website` second-press installer.
+- Move on a real install (only the fixture; never Daniel's): copy speed and the progress figure
+  on a 25 GB tree, `ditto` across drives and onto the Time Machine drive, a real wrapper and
+  prefix after the move (Wine's own checks, the registry marker, a launch).
 - Real wine: install.sh with real regsvr32/reg, `wineserver --version` on a real Sikarugir
   wrapper, Bootstrap's build and wineboot.
 - A real torrent (9.4 GB) or a real HorizonXI update; aria2c 1.35.0 against HorizonXI's swarm
@@ -249,9 +351,9 @@ stock Mac) is no longer needed.
   local-world launch test; install under Application Support, append to
   `X87Sidecar.patchedWineCandidates`, add a chain step before the game download, free-space check.
   Or, if Daniel prefers, drop the hard block and let Play fall back with a warning as in b59.
-- **Part 2, the location chooser**: fill `setupLocationStep(_:)` and the sheet's location line
-  (see "Setup's chain"). Consider moving an existing game (Daniel's "Move") rather than
-  re-downloading when the data drive is gone.
+- **Space estimate per world**: the chooser uses HorizonXI's 27 GB for everyone (25 GB for
+  another world's folder); CatsEyeXI and the retail-client worlds differ.
+- **Local server**: lsb-server.sh still builds where it always did, outside the chosen folder.
 - A SquareEnix symlink that dangles on a drive that *is* there (target folder deleted) reads as
   "files missing", and Setup's download then refuses ("links to …, which isn't there") — the
   chain could offer the location step there too.

@@ -24,19 +24,20 @@ It can also run a server on your own Mac if you want to play offline.
 
 1. **Open the `.dmg` and drag *FFXI on Mac* into Applications.** Version 3.9 is signed but not
    notarized; see its release notes if macOS blocks the first open.
-2. **Press *Install wine…*** It's the button on the front screen. Go make coffee; it takes about
-   five minutes and asks for your Mac password once.
-3. **Pick the world you want** from the **CHANGE WORLD** menu.
-4. **Press *Download…*** on the card that appears, and choose a folder to put the game in.
-   That's it — the launcher fetches that world's game files for you and sets everything up.
-   This part is big (15–30 GB) and slow. Leave it running; you can close the lid.
-5. **Make an account** on that world's website — the launcher links you straight to it.
-6. **Type your account name and password, press PLAY.**
+2. **Pick the world you want** from the **CHANGE WORLD** menu (HorizonXI is first).
+3. **Press *Setup*** — the big button. First it asks where to put everything: choose a folder on
+   any Mac-formatted drive with room (about 27 GB for HorizonXI). Wine, its Windows drive and the
+   game all go in one *FFXI on Mac* folder there. Then it installs Wine (it asks for your Mac
+   password once) and fetches that world's game files. This part is big and slow — leave it
+   running; you can close the lid.
+4. **Make an account** on that world's website — the launcher links you straight to it.
+5. **Type your account name and password, press PLAY.**
 
 Nothing else. No Terminal, no Homebrew, no downloading a client from somewhere else first.
 
-If anything goes wrong, open **Setup & Diagnostics** inside the app. Every check names the exact
-thing it couldn't find, and **Repair** fixes the usual causes automatically.
+If anything is missing or broken, the big button says what to do instead of PLAY — **Setup**,
+**Update** or **Repair** — with one short line under it. Press it. **Setup & Diagnostics** has
+the details.
 
 ---
 
@@ -66,13 +67,13 @@ buttons.
 | Piece | Size | How you get it |
 | --- | --- | --- |
 | **FFXI on Mac** (this launcher) | 8.6 MB | the download button above |
-| **Wine** (runs Windows programs on a Mac) | ~250 MB | press ***Install wine…*** — automatic |
-| **The FFXI game itself** | 15–30 GB | press ***Download…*** — automatic |
+| **Wine** (runs Windows programs on a Mac) | ~250 MB download | press ***Setup*** — automatic |
+| **The FFXI game itself** | 15–30 GB | the same ***Setup*** — automatic |
 
 The game files aren't inside the 8.6 MB download because they're Square Enix's property and nobody
 is allowed to hand them out. So the launcher fetches them the same way your server's own Windows
-launcher would. **You still don't have to do anything by hand** — that's what the *Download…*
-button is. If someone offers you a single file with the game already in it, they are giving away
+launcher would. **You still don't have to do anything by hand** — that's what the *Setup*
+button does. If someone offers you a single file with the game already in it, they are giving away
 Square Enix's client, which they may not do.
 
 **Do I need to own FFXI already?** No. You don't need a Square Enix account, a PlayOnline ID, or
@@ -91,10 +92,10 @@ This project redistributes no Square Enix data at all.
 ## The worlds
 
 Pick one from **CHANGE WORLD**. Each world keeps its own game folder and its own login, so you can
-have several installed side by side. **Every one of them is a single *Download…* button** — the
+have several installed side by side. **Every one of them is a single *Setup* button** — the
 differences below are just what happens behind it.
 
-| World | What *Download…* does | Tested end-to-end here |
+| World | What *Setup* does for the game | Tested end-to-end here |
 | --- | --- | --- |
 | **HorizonXI** | fetches their client the way their own launcher does — a 9.4 GB download, then their updates, up to the current version | ✅ downloaded, launched, reached login |
 | **CatsEyeXI** | runs CatsEyeXI's own launcher for you; it installs their full client (~15 GB) | ✅ downloaded, launched, reached login |
@@ -109,8 +110,12 @@ server's published installer but haven't been driven start-to-finish yet — see
 [`docs/SERVERS-WORKLOG.md`](docs/SERVERS-WORKLOG.md) for exactly what is and isn't proven.
 Logging *in* always needs your own account, made on that server's own site.
 
-**Where the game goes.** You choose the folder, per world, the first time you press *Download…*.
-Any drive works, including an external one. The launcher itself can live anywhere.
+**Where the game goes.** You choose the folder the first time you press *Setup*; everything goes
+in one *FFXI on Mac* folder there (other worlds in its *Games* folder). Any Mac-formatted drive
+works, including an external one; the launcher refuses exFAT/FAT/NTFS, network, read-only and
+cloud-synced folders, and ones without room. Already have the game spread over other drives?
+**Setup & Diagnostics → Move…** copies it into one folder and asks before the old copy goes to the
+Trash. The launcher itself can live anywhere.
 
 **Already downloaded an installer?** **Setup & Diagnostics → Run installer…** runs any `.exe`
 (or a `.zip` containing one) you already have.
@@ -123,7 +128,7 @@ Any drive works, including an external one. The launcher itself can live anywher
 asking *"may this app run Wine?"* — Wine's own developers don't notarise their builds, so macOS
 checks with you. It has nothing to do with Xcode.
 
-**A macOS password prompt during *Install wine…*** That's Rosetta 2 installing — Apple's
+**A macOS password prompt during *Setup*.** That's Rosetta 2 installing — Apple's
 translation layer. FFXI is a 32-bit Intel game and needs it.
 
 **The game window opens and closes right away.** Press **Repair** in Setup & Diagnostics.
@@ -159,7 +164,7 @@ can get you banned, so this matters more than it sounds.
 
 ## Running your own server
 
-Pick **Local server** in the World menu and press **Set up server**. The launcher builds
+Pick **Local server** in the World menu and press **Setup**. The launcher builds
 [LandSandBoat](https://github.com/LandSandBoat/server) on your Mac — about half an hour and 12 GB
 the first time. After that, Play starts the server and the game together. You still need a game
 client; a server isn't a game.
@@ -201,7 +206,7 @@ Building it yourself needs only Apple's Command Line Tools:
 ```
 
 Tested on: MacBook Pro M1, 8 GB, macOS 27.0.1, athei's patched `wine-cx-26.3.0-1` (Play prefers it;
-the Sikarugir 10.0 wine from *Install wine…* drops the client a second after login), DXVK 1.10.3
+the Sikarugir 10.0 wine that *Setup* installs drops the client a second after login), DXVK 1.10.3
 (patched) + MoltenVK 1.4.2, Ashita 4.3.1.2.
 
 ## Credits
