@@ -214,6 +214,10 @@ struct ContentView: View {
     @State private var checksGeneration = 0
     /// When switching back to the launcher last re-ran the checks; see `.didBecomeActive`.
     @State private var lastActivationRecheck = Date.distantPast
+    /// Preflights still running, and whether an automatic recheck arrived meanwhile. A hung
+    /// drive can stall Preflight; mount/activation rechecks then wait for it instead of piling up.
+    @State private var checksInFlight = 0
+    @State private var recheckPending = false
     /// One update attempt per Play press chain; a second Play retries.
     @State private var updateChecked = false
     @State private var scanning = false
@@ -311,15 +315,15 @@ struct ContentView: View {
         // A drive coming back (or going) changes the checks; "reconnect it" must not stay on
         // screen, PLAY grey, until somebody thinks of ↻.
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didMountNotification)
-                    .receive(on: DispatchQueue.main)) { _ in recheck() }
+                    .receive(on: DispatchQueue.main)) { _ in autoRecheck() }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didUnmountNotification)
-                    .receive(on: DispatchQueue.main)) { _ in recheck() }
+                    .receive(on: DispatchQueue.main)) { _ in autoRecheck() }
         // Coming back to the launcher, too, at most every 5 s and never while a game is starting
         // (Preflight reads the game drive, which the starting client is busy with).
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             guard !launchUnderWay, Date().timeIntervalSince(lastActivationRecheck) >= 5 else { return }
             lastActivationRecheck = Date()
-            recheck()
+            autoRecheck()
         }
         // Keep the players-online line current: on launch, whenever the world changes, and
         // every two minutes while the window is open. The fetch is three tiny GETs and silent
@@ -1950,15 +1954,24 @@ struct ContentView: View {
 
     private func recheck() { Task { await recheckAsync() } }
 
+    /// Mount, unmount and activation rechecks: one at a time, the latest folded into a single rerun.
+    private func autoRecheck() {
+        if checksInFlight > 0 { recheckPending = true; return }
+        recheck()
+    }
+
     private func recheckAsync() async {
         checksGeneration += 1
         let generation = checksGeneration
         guard let i = active else { checks = []; horizonInstalled = nil; return }
         let profile = store.selected?.bootProfile ?? "horizonxi.ini"
         let horizon = store.selected?.name == "HorizonXI"
+        checksInFlight += 1
         let (c, v) = await Task.detached(priority: .userInitiated) {
             (Preflight.run(i, profile: profile), horizon ? ClientVersion.horizonVersion(in: i) : nil)
         }.value
+        checksInFlight -= 1
+        if checksInFlight == 0, recheckPending { recheckPending = false; recheck() }
         // A newer recheck started meanwhile (world switched, drive mounted): its answer stands.
         guard generation == checksGeneration else { return }
         checks = c
