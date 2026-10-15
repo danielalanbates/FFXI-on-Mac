@@ -188,26 +188,94 @@ enum RendererSetup {
         if syncDXVKConfig(install) { log("renderer: dxvk.conf updated") }
     }
 
+    /// Runs on every Play with no client live, so it only writes what differs: each `reg add`
+    /// is a wine start under Rosetta through osascript, and the old unconditional dozen of them
+    /// (plus re-copying the DLLs into five folders) was most of the Play beach-ball in #25.
+    /// The order is unchanged; steps that find nothing to do are skipped, and say nothing.
     static func apply(_ renderer: Renderer, to install: Install, log: (String) -> Void) {
         stopWineserver(install)
-
-        reg(install, add: #"HKCU\Software\Wine\Direct3D"#, name: "renderer",
-            type: "REG_SZ", data: renderer.wineRendererKey)
-        reg(install, add: #"HKCU\Software\Wine\Direct3D"#, name: "MaxVersionGL",
-            type: "REG_DWORD", data: String(format: "0x%x", maxVersionGL))
+        // Read after the stop: a wineserver flushes the registry as it exits, so this is what the
+        // next wine will see. nil (unreadable) means every value is written, as before.
+        let hive = userHive(install)
+        var changed = 0
+        changed += regIfNeeded(install, hive, add: #"HKCU\Software\Wine\Direct3D"#, name: "renderer",
+                               type: "REG_SZ", data: renderer.wineRendererKey)
+        changed += regIfNeeded(install, hive, add: #"HKCU\Software\Wine\Direct3D"#, name: "MaxVersionGL",
+                               type: "REG_DWORD", data: String(format: "0x%x", maxVersionGL))
 
         if renderer.needsDXVK {
-            installDXVK(install, log: log)
+            changed += installDXVK(install, hive: hive, log: log)
         } else {
-            removeDXVK(install, log: log)
+            changed += removeDXVK(install, hive: hive, log: log)
         }
         if renderer == .vulkan {
             patchDXTFormats(install, log: log)
             // wined3d's Vulkan renderer needs a MoltenVK that is not the ancient bundled one.
-            linkMoltenVK(install, toCX: true)
+            if linkMoltenVK(install, toCX: true) { changed += 1 }
         }
         stopWineserver(install)
-        log("renderer: \(renderer.title)")
+        if changed > 0 { log("renderer: \(renderer.title)") }
+    }
+
+    // MARK: - Registry, read-only
+
+    /// `user.reg` as values: section as written, lowercased (`software\\wine\\direct3d`) ->
+    /// value name, lowercased -> the value exactly as stored (`"gl"`, `dword:00040001`). Only
+    /// ever read: hive files are wine's, and rewriting one by hand is how prefixes get damaged
+    /// (docs/HANDOFF.md).
+    typealias Hive = [String: [String: String]]
+
+    static func hiveValues(_ text: String) -> Hive {
+        var out: Hive = [:]
+        var section: String?
+        for raw in TextFile.lines(of: text) {
+            let t = raw.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("[") {
+                section = t.firstIndex(of: "]").map { String(t[t.index(after: t.startIndex)..<$0]).lowercased() }
+                continue
+            }
+            guard let sec = section, t.hasPrefix("\""), let eq = t.range(of: "\"=") else { continue }
+            let name = String(t[t.index(after: t.startIndex)..<eq.lowerBound]).lowercased()
+            out[sec, default: [:]][name] = String(t[eq.upperBound...])
+        }
+        return out
+    }
+
+    /// The prefix's user.reg, parsed; nil when it cannot be read directly.
+    static func userHive(_ i: Install) -> Hive? {
+        (try? String(contentsOf: i.prefix.appendingPathComponent("user.reg"), encoding: .utf8)).map(hiveValues)
+    }
+
+    /// `HKCU\Software\Wine\X` -> the section name user.reg files it under.
+    private static func hiveSection(_ key: String) -> String {
+        var k = key
+        for p in [#"HKCU\"#, #"HKEY_CURRENT_USER\"#] where k.uppercased().hasPrefix(p) { k = String(k.dropFirst(p.count)) }
+        return k.replacingOccurrences(of: #"\"#, with: #"\\"#).lowercased()
+    }
+
+    /// Does the hive already hold exactly what `reg add` would write? Only the two types this
+    /// file writes are understood; anything else (or a string needing escapes) is "no".
+    static func hiveHas(_ hive: Hive, key: String, name: String, type: String, data: String) -> Bool {
+        guard let stored = hive[hiveSection(key)]?[name.lowercased()]?.lowercased() else { return false }
+        switch type {
+        case "REG_SZ":
+            guard !data.contains("\""), !data.contains(#"\"#) else { return false }
+            return stored == "\"" + data.lowercased() + "\""
+        case "REG_DWORD":
+            let d = data.lowercased()
+            guard let v = d.hasPrefix("0x") ? UInt32(d.dropFirst(2), radix: 16) : UInt32(d) else { return false }
+            return stored == String(format: "dword:%08x", v)
+        default:
+            return false
+        }
+    }
+
+    /// `reg add` unless the hive shows the value is already there. Returns 1 if it wrote.
+    private static func regIfNeeded(_ i: Install, _ hive: Hive?, add key: String, name: String,
+                                    type: String, data: String) -> Int {
+        if let hive, hiveHas(hive, key: key, name: name, type: type, data: data) { return 0 }
+        reg(i, add: key, name: name, type: type, data: data)
+        return 1
     }
 
     // MARK: - DXVK
@@ -256,12 +324,14 @@ enum RendererSetup {
          i.squareEnix.appendingPathComponent("FINAL FANTASY XI")]
     }
 
-    private static func installDXVK(_ i: Install, log: (String) -> Void) {
+    /// Returns how many things it changed (DLLs, registry values, links, config).
+    private static func installDXVK(_ i: Install, hive: Hive?, log: (String) -> Void) -> Int {
         let fm = FileManager.default
         guard let d3d8to9 = Bundle.main.url(forResource: "d3d8to9", withExtension: "dll"),
               let dxvk = Bundle.main.url(forResource: "dxvk-1.10.3-x32-d3d9-horizonxi", withExtension: "dll")
-        else { log("renderer: bundled DXVK not found — staying on Classic"); return }
+        else { log("renderer: bundled DXVK not found — staying on Classic"); return 0 }
 
+        var changed = 0
         backupBuiltins(i)
         try? fm.createDirectory(at: i.driveC.appendingPathComponent("dxvk-cache"), withIntermediateDirectories: true)
         // wine ships no api-ms-win-crt-* forwarders; without them the shim silently fails to load
@@ -269,23 +339,31 @@ enum RendererSetup {
         let syswow = i.driveC.appendingPathComponent("windows/syswow64")
         if let kids = try? fm.contentsOfDirectory(at: crt, includingPropertiesForKeys: nil) {
             for k in kids where k.lastPathComponent.hasPrefix("api-ms-win-crt-") {
-                try? fm.copyItem(at: k, to: syswow.appendingPathComponent(k.lastPathComponent))
+                let dst = syswow.appendingPathComponent(k.lastPathComponent)
+                if !fm.fileExists(atPath: dst.path), (try? fm.copyItem(at: k, to: dst)) != nil { changed += 1 }
             }
         }
+        // Same guard as ensureFiles: a DLL that is already the bundled one is left alone.
         for dir in dllDirs(i) where fm.fileExists(atPath: dir.path) {
-            replace(d3d8to9, at: dir.appendingPathComponent("d3d8.dll"))
-            replace(dxvk, at: dir.appendingPathComponent("d3d9.dll"))
+            for (src, name) in [(d3d8to9, "d3d8.dll"), (dxvk, "d3d9.dll")] {
+                let dst = dir.appendingPathComponent(name)
+                guard !fm.contentsEqual(atPath: src.path, andPath: dst.path) else { continue }
+                replace(src, at: dst); changed += 1
+            }
         }
-        reg(i, add: #"HKCU\Software\Wine\DllOverrides"#, name: "*d3d8", type: "REG_SZ", data: "native")
-        reg(i, add: #"HKCU\Software\Wine\DllOverrides"#, name: "*d3d9", type: "REG_SZ", data: "native")
-        linkMoltenVK(i, toCX: true)
-        upgradeCoopMoltenVK(log: log)
-        if syncDXVKConfig(i) { log("renderer: dxvk.conf updated") }
-        log("renderer: DXVK 1.10.3 + d3d8to9 installed")
+        changed += regIfNeeded(i, hive, add: #"HKCU\Software\Wine\DllOverrides"#, name: "*d3d8", type: "REG_SZ", data: "native")
+        changed += regIfNeeded(i, hive, add: #"HKCU\Software\Wine\DllOverrides"#, name: "*d3d9", type: "REG_SZ", data: "native")
+        if linkMoltenVK(i, toCX: true) { changed += 1 }
+        if upgradeCoopMoltenVK(log: log) { changed += 1 }
+        if syncDXVKConfig(i) { log("renderer: dxvk.conf updated"); changed += 1 }
+        if changed > 0 { log("renderer: DXVK 1.10.3 + d3d8to9 installed") }
+        return changed
     }
 
-    private static func removeDXVK(_ i: Install, log: (String) -> Void) {
+    /// Returns how many things it changed.
+    private static func removeDXVK(_ i: Install, hive: Hive?, log: (String) -> Void) -> Int {
         let fm = FileManager.default
+        var changed = 0
         for dir in dllDirs(i) {
             for name in ["d3d8.dll", "d3d9.dll"] {
                 let f = dir.appendingPathComponent(name)
@@ -293,9 +371,11 @@ enum RendererSetup {
                 if dir.lastPathComponent == "syswow64" {
                     let backup = i.driveC.appendingPathComponent("dll-backup")
                         .appendingPathComponent(name.replacingOccurrences(of: ".dll", with: ".builtin.dll"))
-                    if fm.fileExists(atPath: backup.path) { replace(backup, at: f) }
-                } else {
-                    try? fm.removeItem(at: f)
+                    if fm.fileExists(atPath: backup.path), !fm.contentsEqual(atPath: backup.path, andPath: f.path) {
+                        replace(backup, at: f); changed += 1
+                    }
+                } else if fm.fileExists(atPath: f.path) {
+                    try? fm.removeItem(at: f); changed += 1
                 }
             }
         }
@@ -307,10 +387,13 @@ enum RendererSetup {
         //   err:module:import_dll Library d3d8.dll (which is needed by …\Ashita.dll) not found
         //   [E] Injection failed!
         // Deleting only the asterisked name is why that survived a renderer switch.
-        for name in ["*d3d8", "*d3d9", "d3d8", "d3d9"] {
+        let overrides = hive?[hiveSection(#"HKCU\Software\Wine\DllOverrides"#)]
+        for name in ["*d3d8", "*d3d9", "d3d8", "d3d9"] where hive == nil || overrides?[name] != nil {
             regDelete(i, key: #"HKCU\Software\Wine\DllOverrides"#, name: name)
+            changed += 1
         }
-        linkMoltenVK(i, toCX: false)
+        if linkMoltenVK(i, toCX: false) { changed += 1 }
+        return changed
     }
 
     private static func backupBuiltins(_ i: Install) {
@@ -332,30 +415,36 @@ enum RendererSetup {
     /// The patched launch wine (X87Sidecar.patchedWine) loads MoltenVK from its own lib/external,
     /// not through linkMoltenVK. Its CrossOver copy stalls command submission under macOS 27's
     /// Metal 4 (0.4-7 fps in-world); 1.4.2 held 49 fps avg. Replace it once, keeping a backup.
-    private static func upgradeCoopMoltenVK(log: (String) -> Void) {
+    @discardableResult
+    private static func upgradeCoopMoltenVK(log: (String) -> Void) -> Bool {
         let fm = FileManager.default
         guard let bundled = Bundle.main.url(forResource: "libMoltenVK-1.4.2", withExtension: "dylib"),
-              let wine = X87Sidecar.patchedWine() else { return }
+              let wine = X87Sidecar.patchedWine() else { return false }
         let live = wine.deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("lib/external/libMoltenVK.dylib")
-        guard fm.fileExists(atPath: live.path), !fm.contentsEqual(atPath: live.path, andPath: bundled.path) else { return }
+        guard fm.fileExists(atPath: live.path), !fm.contentsEqual(atPath: live.path, andPath: bundled.path) else { return false }
         let backup = live.appendingPathExtension("bak-pre-1.4.2")
         if !fm.fileExists(atPath: backup.path) { try? fm.copyItem(at: live, to: backup) }
         replace(bundled, at: live)
         log("renderer: MoltenVK 1.4.2 installed into the launch wine")
+        return true
     }
 
     /// DXVK needs a MoltenVK that can create a Vulkan 1.2 device; the wrapper's default
     /// one is 1.1 and DXVK refuses it with "DxvkAdapter: Failed to create device".
-    private static func linkMoltenVK(_ i: Install, toCX: Bool) {
+    /// Returns whether the link had to be changed.
+    @discardableResult
+    private static func linkMoltenVK(_ i: Install, toCX: Bool) -> Bool {
         let fm = FileManager.default
         let link = i.sharedSupport.appendingPathComponent("wine/lib/libMoltenVK.dylib")
         let cx = i.wrapper.appendingPathComponent("Contents/Frameworks/moltenvkcx/libMoltenVK.dylib")
         let stock = i.wrapper.appendingPathComponent("Contents/Frameworks/libMoltenVK.dylib")
         let target = toCX && fm.fileExists(atPath: cx.path) ? cx : stock
-        guard fm.fileExists(atPath: target.path) else { return }
+        guard fm.fileExists(atPath: target.path) else { return false }
+        if (try? fm.destinationOfSymbolicLink(atPath: link.path)) == target.path { return false }
         try? fm.removeItem(at: link)
         try? fm.createSymbolicLink(at: link, withDestinationURL: target)
+        return true
     }
 
     /// Every dylib in `wine/lib` is a symlink into the wrapper's own `Contents/Frameworks`.
@@ -480,7 +569,14 @@ enum RendererSetup {
         chk.arguments = ["-x", "wineserver"]
         chk.standardOutput = Pipe(); chk.standardError = Pipe()
         var wasUp = false
-        if (try? chk.run()) != nil { chk.waitUntilExit(); wasUp = chk.terminationStatus == 0 }
+        if (try? chk.run()) != nil {
+            chk.waitUntilExit()
+            wasUp = chk.terminationStatus == 0
+            // pgrep's 1 is "no such process": no wineserver at all, so none for this prefix and
+            // nothing to flush. Skip the -k and -w, each an osascript plus a wine start under
+            // Rosetta. A pgrep that errored or did not run falls through to both, as before.
+            if chk.terminationStatus == 1 { return false }
+        }
 
         let killCmd = "export WINEPREFIX=\(Bridge.shellQuote(i.prefix.path)); \(Bridge.shellQuote(wineserver.path)) -k"
         Bridge.runShell(killCmd)

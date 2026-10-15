@@ -870,7 +870,7 @@ final class Runner: ObservableObject {
             // Same moment, same reason: the registry has to name *this* world's SquareEnix folder.
             GameRegistry.point(install) { [weak self] in self?.appendLine($0) }
         } else {
-            appendLine("renderer: \(perf.renderer.title) already set up; left alone for the running world")
+            logFileOnly("renderer: \(perf.renderer.title) already set up; left alone for the running world")
             RendererSetup.ensureFiles(perf.renderer, for: install) { [weak self] in self?.appendLine($0) }
         }
         Self.cleanStaleWineSockets()

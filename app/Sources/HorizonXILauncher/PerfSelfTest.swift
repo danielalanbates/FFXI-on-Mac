@@ -1,7 +1,8 @@
 import Foundation
 
 /// `--selftest-perf`: the play-time performance rules, headless. The x87 guard's decision and
-/// failure markers, sidecar detection in a process scan, dxvk.conf placement. Nothing is
+/// failure markers, sidecar detection in a process scan, dxvk.conf placement, the registry
+/// values pre-launch setup skips. Nothing is
 /// launched; files go to a temporary folder and defaults writes to a scratch domain, both deleted
 /// afterwards, never the launcher's own.
 extension Headless {
@@ -109,9 +110,55 @@ extension Headless {
                        env["DXVK_CONFIG_FILE"] == #"C:\dxvk-cache\dxvk.conf"#
                            && env["DXVK_STATE_CACHE_PATH"] == #"C:\dxvk-cache"#))
 
+        // Idempotent pre-launch setup: what user.reg already holds is not written again.
+        let hive = RendererSetup.hiveValues("""
+            WINE REGISTRY Version 2
+            ;; All keys relative to REGISTRY\\User\\S-1-5-21-0-0-0-1000
+
+            [Software\\\\Wine\\\\Direct3D] 1786416352\r
+            #time=1dd293b86547c74\r
+            "MaxVersionGL"=dword:00040001\r
+            "renderer"="gl"\r
+
+            [Software\\\\Wine\\\\DllOverrides] 1787329915
+            #time=1dd318a94531662
+            "*d3d8"="native"
+            "*d3d9"="native"
+            "concrt140"="native,builtin"
+            """)
+        let d3d = #"HKCU\Software\Wine\Direct3D"#, dll = #"HKCU\Software\Wine\DllOverrides"#
+        checks.append(("registry: values already in user.reg are recognised (REG_SZ, REG_DWORD, CRLF)",
+                       RendererSetup.hiveHas(hive, key: d3d, name: "renderer", type: "REG_SZ", data: "gl")
+                           && RendererSetup.hiveHas(hive, key: d3d, name: "MaxVersionGL", type: "REG_DWORD",
+                                                    data: String(format: "0x%x", RendererSetup.maxVersionGL))
+                           && RendererSetup.hiveHas(hive, key: dll, name: "*d3d8", type: "REG_SZ", data: "native")
+                           && RendererSetup.hiveHas(hive, key: dll, name: "*d3d9", type: "REG_SZ", data: "native")))
+        checks.append(("registry: a different or missing value is written",
+                       !RendererSetup.hiveHas(hive, key: d3d, name: "renderer", type: "REG_SZ", data: "vulkan")
+                           && !RendererSetup.hiveHas(hive, key: d3d, name: "MaxVersionGL", type: "REG_DWORD", data: "0x40000")
+                           && !RendererSetup.hiveHas(hive, key: dll, name: "*d3d10", type: "REG_SZ", data: "native")
+                           && !RendererSetup.hiveHas(hive, key: #"HKCU\Software\Wine\Other"#, name: "renderer",
+                                                     type: "REG_SZ", data: "gl")
+                           && !RendererSetup.hiveHas(hive, key: dll, name: "concrt140", type: "REG_SZ", data: "native")))
+        checks.append(("registry: the prefix's renderer still reads as Metal from the same text",
+                           RendererSetup.renderer(fromUserReg: """
+                               [Software\\\\Wine\\\\DllOverrides] 1
+                               "*d3d8"="native"
+                               """) == .metal))
+
         let failures = checks.filter { !$0.1 }.count
         for (name, passed) in checks {
             print("  \(passed ? "ok  " : "FAIL") \(name)")
+        }
+        // Read-only, for the record: what Play's renderer step would still write on this Mac.
+        if let i = Install.remembered(), let real = RendererSetup.userHive(i) {
+            let wanted: [(String, String, String, String)] = [
+                (d3d, "renderer", "REG_SZ", Renderer.metal.wineRendererKey),
+                (d3d, "MaxVersionGL", "REG_DWORD", String(format: "0x%x", RendererSetup.maxVersionGL)),
+                (dll, "*d3d8", "REG_SZ", "native"), (dll, "*d3d9", "REG_SZ", "native")]
+            let missing = wanted.filter { !RendererSetup.hiveHas(real, key: $0.0, name: $0.1, type: $0.2, data: $0.3) }
+            print("  i    this Mac's prefix (\(i.prefixName)): Metal setup would write "
+                  + (missing.isEmpty ? "no registry values" : missing.map(\.1).joined(separator: ", ")))
         }
         print(failures == 0 ? "all checks passed" : "\(failures) FAILED")
         exit(failures == 0 ? 0 : 1)
