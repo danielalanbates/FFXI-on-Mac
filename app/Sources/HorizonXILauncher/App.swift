@@ -2256,12 +2256,15 @@ struct ContentView: View {
 
     /// Every world playing right now, each with its own Stop. Stopping one never stops another.
     @ViewBuilder private var runningList: some View {
-        let live = sessions.live
-        if live.contains(where: { $0.id != store.selected?.name }) || !elsewhere.isEmpty {
+        // The selected world's own client is left out only while the main button is its Stop:
+        // not while it says "Starting…", nor on a world that allows a second client, whose
+        // button is Play Another -- its first client's Stop is here.
+        let own = primary.action == .stop ? store.selected?.name : nil
+        let live = sessions.live.filter { $0.id != own }
+        if !live.isEmpty || !elsewhere.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 Text("RUNNING").font(.system(size: 12)).tracking(2).foregroundStyle(Vana.muted)
-                // The selected world's own Stop is the main button.
-                ForEach(live.filter { $0.id != store.selected?.name }, id: \.id) { s in
+                ForEach(live, id: \.id) { s in
                     HStack(spacing: 6) {
                         Circle().fill(Vana.crystal).frame(width: 6, height: 6)
                         Text(s.id).font(.system(size: 12)).foregroundStyle(Vana.text)
