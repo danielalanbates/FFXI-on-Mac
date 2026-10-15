@@ -368,3 +368,50 @@ How it was verified: `swift build -c release` clean (same 2 capture warnings); a
 Needs Daniel's live test: unplug/replug a game drive with the launcher open (footer clears, PLAY
 enables without ↻); Low Power Mode on → Play → line → turn it off → line goes; Stop the local
 world, then Play within a few seconds (Busy, then works).
+
+## Review fixes: self-updater
+
+- **Nothing starts under a Restart** (`Updater.install`): while `.installing`, PLAY is grey and
+  `play()`, `launchClient` and a handed-over `--play` refuse (launcher.log only). The checks
+  count this launcher's own launches from the moment they pass their gate (`Runner.anyPlaying`),
+  before and after the client scan, and once more after the helper starts (helper called off).
+- **Local-server setup/start/stop block Restart and ask on quit** (`LocalServer.jobs`, per child
+  process): Restart's button, `install()`, the updater's own checks and the quit question.
+  The `.workInFlight` line now reads "Finish the running job, then restart to update".
+- **"Launcher X available" only for a verified release**: a rejected tag is dropped first
+  (`UpdateRules.step`); a copy that can't replace itself downloads, stages and verifies in the
+  work dir like any other before the Download line shows. A line for an older or vanished
+  release goes.
+- **Restart re-asks GitHub** (8 s): installs only while the staged release is still exactly the
+  latest (tag, version, build); otherwise prunes, goes quiet and checks again. No answer from
+  GitHub still installs.
+- **A Restart that keeps failing falls back to Download**: `last-failure` is now
+  `reason=`/`tag=`/`lasting=`; two failures of one release, or one that recurs (no write access,
+  the rename refused, e.g. App Management), show "Launcher X available" + Download instead
+  (`updater.failedTag`/`updater.failedCount`; staged copy kept). "Last update didn't install"
+  shows only for the release that failed.
+- **Only a verdict rejects a release**: codesign 1/3 and spctl 3 (measured: unsigned 1, ad-hoc 3,
+  another team 3; spctl ad-hoc/unsigned 3, missing path 1). A signal death (`run()` now -3), a
+  deadline or spctl 1 is transient.
+- **Helper**: refuses (no swap, no reopen, no note) when the old launcher was reopened meanwhile;
+  the previous-copy cleanup never deletes or nests into the app it just opened; a copy run from
+  the work dir never self-updates (`UpdateRules.isInside`).
+- **Helper environment**: started as `env -i PATH=… /bin/zsh -f` (osascript passes the
+  launcher's whole environment through, checked); test stubs only as a 6th argument; the work-dir
+  copy must match the bundled script's SHA-256.
+- **publish-release.sh**: a trailing `--notes`/`--legacy-dmg` exits 2 instead of looping; a
+  version that already has a release fails the dry run (`gh release view`).
+
+How it was verified: `swift build -c release` clean (same 2 capture warnings). All 15
+`--selftest-*` pass; `--selftest-updater` 79 checks (new: exit-status mapping and a real signal
+death, rejected-before-Download, still-latest table, failure count per tag and file parsing,
+work-dir prefix, a probe started through the real detached spawn with a hook and a marker in the
+launcher's environment: neither arrives). `scripts/tests/apply-update-test.sh` with DockFix.app:
+11 cases pass, all under `env -i` (new: refused rename via `chflags uchg`, environment hook
+ignored, reopened launcher, both work-dir cleanup cases; the last two fail against the previous
+helper). `--check` runs (BAD only for the missing Games drive and uninstalled worlds, as before).
+publish-release.sh: trailing flags exit 2; `gh release view` read-only (v3.9 has one, v3.10 not).
+Nothing launched, nothing published.
+
+Needs Daniel's live test: with a real 3.10, press Restart then PLAY at once (PLAY must be grey);
+Restart while "Set up server" runs (button grey, tooltip names it); quitting during setup asks.
