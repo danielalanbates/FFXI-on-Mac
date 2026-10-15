@@ -10,8 +10,9 @@ import Security
 /// downloading, staging, being offline and a failed check all show nothing. One line appears
 /// only when there is something to act on:
 ///   * `ready`         "Launcher X ready" + Restart: newer, downloaded, staged and verified;
-///   * `manual`        "Launcher X available" + Download: newer, but this copy cannot replace
-///                     itself (bundle or its folder not writable);
+///   * `manual`        "Launcher X available" + Download: newer, downloaded and verified the
+///                     same way, but this copy cannot replace itself (bundle or its folder not
+///                     writable);
 ///   * `restartFailed` one short reason, when a Restart the user pressed did not go through.
 ///
 /// When: once at launch, every 6 h, and on activation only if the last check is over an hour
@@ -38,7 +39,7 @@ final class Updater: ObservableObject {
     enum State: Equatable {
         case idle                                   // shows nothing
         case ready(UpdateRelease)                   // staged + verified; waiting for Restart
-        case manual(UpdateRelease)                  // newer, but this copy can't replace itself
+        case manual(UpdateRelease)                  // verified, but this copy can't replace itself
         case installing(UpdateRelease)              // Restart pressed; the helper is taking over
         case restartFailed(UpdateRelease, RestartFailure)
     }
@@ -154,6 +155,7 @@ final class Updater: ObservableObject {
         do {
             guard let r = try await UpdateWork.fetchLatest() else {
                 UpdateWork.note("no usable release")
+                if case .manual = state { state = .idle }
                 return
             }
             release = r
@@ -161,18 +163,20 @@ final class Updater: ObservableObject {
             UpdateWork.note("check failed: \(error.localizedDescription)")   // offline, rate limit
             return
         }
-        guard UpdateRules.isOffered(release.build, over: Self.local) else {
+        switch UpdateRules.step(for: release, over: Self.local, in: .standard) {
+        case .upToDate:
             UpdateWork.note("up to date (latest is \(release.tag) \(release.assetName))")
             UpdateWork.prune(keeping: nil)
             if case .manual = state { state = .idle }
             return
-        }
-        guard UpdateWork.canSelfUpdate else {
-            UpdateWork.note("\(release.tag) available; this copy can't replace itself")
-            state = .manual(release)
+        case .rejected:
+            if case .manual = state { state = .idle }
             return
+        case .stage:
+            break
         }
-        if UpdateRules.isRejected(release.tag, in: .standard) { return }
+        // A line for an older release goes; this one shows only once it has verified.
+        if case .manual(let shown) = state, shown != release { state = .idle }
         UpdateWork.prune(keeping: release.tag)
 
         do {
@@ -181,7 +185,7 @@ final class Updater: ObservableObject {
                 let good = await Task.detached(priority: .utility) {
                     (try? UpdateWork.verify(app: staged, release: release)) != nil
                 }.value
-                if good { return becomeReady(release) }
+                if good { return offer(release) }
                 try? FileManager.default.removeItem(at: staged.deletingLastPathComponent())
             }
             let dmg = try await UpdateWork.download(release)
@@ -190,14 +194,27 @@ final class Updater: ObservableObject {
                 try UpdateWork.stage(dmg: dmg, release: release)
             }.value
             try? FileManager.default.removeItem(at: dmg)
-            becomeReady(release)
+            offer(release)
         } catch UpdateFailure.rejected(let why) {
             UpdateWork.note("\(release.tag) rejected: \(why)")
             UpdateRules.reject(release.tag, in: .standard)
             UpdateWork.prune(keeping: nil)
+            if case .manual = state { state = .idle }
         } catch {
             UpdateWork.note("\(release.tag) not staged: \(error.localizedDescription)")
         }
+    }
+
+    /// Only a downloaded and verified copy is ever suggested. A copy that can't replace itself
+    /// gets the Download link; it still stages first (in the work dir, which is always
+    /// writable), so a release Gatekeeper would block is never offered there either.
+    private func offer(_ release: UpdateRelease) {
+        guard UpdateWork.canSelfUpdate else {
+            UpdateWork.note("\(release.tag) verified; this copy can't replace itself")
+            state = .manual(release)
+            return
+        }
+        becomeReady(release)
     }
 
     private func becomeReady(_ release: UpdateRelease) {
@@ -395,6 +412,17 @@ enum UpdateRules {
     /// spctl exits 3 when Gatekeeper says no (unsigned and ad-hoc apps measured 3) and 1 when the
     /// assessment itself failed (a missing path measured 1), which is no verdict at all.
     static func isRefusal(spctl status: Int32) -> Bool { status == 3 }
+
+    enum CheckStep: Equatable { case upToDate, rejected, stage }
+
+    /// What a check does with the latest release. A tag that failed verification is dropped
+    /// before anything else, so it is never suggested, not even as a Download link. Whether this
+    /// copy can replace itself plays no part: every offer, Restart or Download, waits for a
+    /// staged and verified copy.
+    static func step(for release: UpdateRelease, over local: Build, in defaults: UserDefaults) -> CheckStep {
+        guard isOffered(release.build, over: local) else { return .upToDate }
+        return isRejected(release.tag, in: defaults) ? .rejected : .stage
+    }
 
     static func isRejected(_ tag: String, in defaults: UserDefaults) -> Bool {
         defaults.string(forKey: rejectedKey) == tag

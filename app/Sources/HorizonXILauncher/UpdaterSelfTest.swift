@@ -116,12 +116,20 @@ extension Headless {
         // Rejected-tag memory, in a scratch domain so the real defaults are never touched. One
         // fixed name, emptied before and after (cfprefsd may leave its empty plist behind).
         let suite = "org.batesai.horizonxi-on-mac.selftest-updater"
-        if let d = UserDefaults(suiteName: suite) {
+        if let d = UserDefaults(suiteName: suite), let newer = parsed {
             d.removePersistentDomain(forName: suite)
+            let here = B(version: "3.9", build: 59)
             checks.append(("nothing rejected at first", UpdateRules.isRejected("v3.10", in: d), false))
+            // Every offer, Restart or Download, waits for a staged and verified copy.
+            checks.append(("a newer release is staged before any line shows",
+                           UpdateRules.step(for: newer, over: here, in: d) == .stage, true))
+            checks.append(("the same release is up to date",
+                           UpdateRules.step(for: newer, over: B(version: "3.10", build: 60), in: d) == .upToDate, true))
             UpdateRules.reject("v3.10", in: d)
             checks.append(("a rejected tag is remembered", UpdateRules.isRejected("v3.10", in: d), true))
             checks.append(("a different tag is not rejected", UpdateRules.isRejected("v3.11", in: d), false))
+            checks.append(("a rejected tag is dropped before the Download line could show",
+                           UpdateRules.step(for: newer, over: here, in: d) == .rejected, true))
             d.removePersistentDomain(forName: suite)
         } else {
             checks.append(("scratch defaults suite", false, true))
