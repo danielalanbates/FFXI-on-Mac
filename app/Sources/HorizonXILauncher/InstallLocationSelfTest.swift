@@ -358,7 +358,8 @@ extension Headless {
         mk("\(G)/Contents/SharedSupport/prefix10/drive_c/HorizonXI/Ashita-cli.exe")
         ln("\(G)/Contents/SharedSupport/prefix10/drive_c/HorizonXI/SquareEnix", "/Volumes/\(gone)/FFXI/SquareEnix")
         let ghost = Install(wrapper: F.appendingPathComponent(G), prefixName: "prefix10")
-        check("game files behind a drive that is gone read as elsewhere (Move is offered)", InstallMove.dataElsewhere(ghost))
+        check("game files behind a drive that is gone read as elsewhere, but Move… is not offered (it could only refuse)",
+              InstallMove.dataElsewhere(ghost) && !InstallMove.offered(ghost) && !InstallMove.offered(old))
         let destG = F.appendingPathComponent("DestG")
         do {
             _ = try InstallMove.plan(ghost, world: "HorizonXI")

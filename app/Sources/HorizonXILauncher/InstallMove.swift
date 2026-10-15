@@ -270,6 +270,17 @@ enum InstallMove {
         return !same(wrapperMount, Preflight.mountPoint(of: real))
     }
 
+    /// Move… is offered beside Setup's line: the game's files are on another drive than Wine, and
+    /// every drive a Move would read is there. With one gone a Move can only refuse, so it is not
+    /// shown at all (Daniel's screen, 2026-10-15: "Move…" beside "The 'Games' drive isn't
+    /// connected", where it could not work). Read-only.
+    static func offered(_ i: Install) -> Bool {
+        let reads = [i.wrapper.path, i.gameDir.path, i.squareEnix.appendingPathComponent("FINAL FANTASY XI").path]
+            + (i.dataRoot.map { [$0.path] } ?? [])
+        guard reads.allSatisfy({ Preflight.unavailableDrive(for: $0) == nil }) else { return false }
+        return dataElsewhere(i)
+    }
+
     // MARK: - Is it free to move?
 
     /// What is running that a Move must not copy underneath.

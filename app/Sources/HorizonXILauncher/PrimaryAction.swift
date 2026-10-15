@@ -386,7 +386,8 @@ enum Primary {
         var patchedWineMissing = false
         var rosettaMissing = false
         var profileHasAccount = false
-        /// The game's files are on (or link to) another drive than Wine: the Setup line offers Move.
+        /// The game's files are on (or link to) another drive than Wine, and every drive is there:
+        /// the Setup line offers Move… (InstallMove.offered).
         var dataElsewhere = false
     }
 
@@ -406,7 +407,7 @@ enum Primary {
         }
         p.patchedWineMissing = X87Sidecar.patchedWine() == nil
         p.rosettaMissing = Bootstrap.rosettaMissing()
-        p.dataElsewhere = InstallMove.dataElsewhere(i)
+        p.dataElsewhere = InstallMove.offered(i)
         return p
     }
 

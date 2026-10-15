@@ -1342,9 +1342,12 @@ struct ContentView: View {
                         Button("Install dependencies…") { Task { await installDependencies() } }
                             .disabled(setupRunning)
                             .help("Installs Rosetta 2 and Wine, and creates the Windows drive FFXI installs into, in a folder you choose")
-                        Button("Move…") { startMove() }
-                            .disabled(active == nil || runner.busy || setupRunning || moveChecking)
-                            .help("Copies Wine, its Windows drive and the game into one folder you choose. The old copy stays until you say otherwise.")
+                        // Not offered while a drive the game is on is gone: a Move could only refuse.
+                        if missingDrive == nil {
+                            Button("Move…") { startMove() }
+                                .disabled(active == nil || runner.busy || setupRunning || moveChecking)
+                                .help("Copies Wine, its Windows drive and the game into one folder you choose. The old copy stays until you say otherwise.")
+                        }
                     }
                     .padding(.top, 4)
                     // The full log: every line of every run, which the window no longer shows.
@@ -1595,7 +1598,8 @@ struct ContentView: View {
                         .lineLimit(2).truncationMode(.tail)
                         .fixedSize(horizontal: false, vertical: true)
                         .help(r)
-                    // The game's files on another drive than Wine: offer to bring them together.
+                    // The game's files on another drive than Wine, every drive there: offer to bring
+                    // them together (never beside a drive that is gone: InstallMove.offered).
                     if case .setup = d.action, probe.dataElsewhere, active != nil {
                         Spacer(minLength: 4)
                         Button("Move…") { startMove() }
