@@ -3,7 +3,9 @@
 Branch `beta-b60`, on top of `beta-b59` (8b000a1). Local beta: no GitHub release, nothing pushed.
 Part 1: the main button (never a greyed-out PLAY). Part 2: where things go — Setup asks for a
 folder before writing anything and puts everything in one "FFXI on Mac" folder there; Move…
-brings an existing install into one folder.
+brings an existing install into one folder. Part 3: the game's Wine — Setup downloads athei's
+pinned `wine-cx-26.3.0-1` (and installs Rosetta 2 when it is missing), so a fresh user reaches PLAY
+with Setup alone.
 
 Daniel's directives for this build, oldest first:
 
@@ -58,11 +60,12 @@ window, `--next-action` and `--selftest-primary-action` all use it. First match 
 | Game files' drive ghost / unplugged / unknown (incl. another drive answering at its /Volumes name) | `setup:data-drive` (`setup:wrapper-drive` for the wrapper's own drive) | Setup | The 'Games' drive isn't connected — reconnect it or press Setup. |
 | That drive merely unmounted | `repair:mount` | Repair | The 'Games' drive isn't mounted. |
 | Full Disk Access / Removable Volumes refused | `repair:access` | Repair | Allow FFXI on Mac in Full Disk Access. |
+| Rosetta 2 missing (`arch -x86_64 /usr/bin/true` fails) | `setup:rosetta` | Setup (macOS's administrator prompt) | Apple's Rosetta isn't installed yet. |
 | Wrapper's Wine missing | `setup:wine` | Setup | Wine isn't installed yet. |
+| Patched game Wine (wine-coop) missing | `setup:game-wine` | Setup (downloads it, part 3) | The game's Wine isn't installed yet. |
 | Game not downloaded | `setup:game` | Setup | HorizonXI isn't installed yet. |
 | Ashita or base files missing | `setup:game-files` | Setup | Some of HorizonXI's files are missing. |
 | No download route, no folder, or ambiguous folder | `setup:choose-folder` | Setup | Choose where X's game files are. |
-| Patched game Wine (wine-coop) missing | `setup:game-wine` | Setup | The game's Wine isn't installed yet. |
 | Wine's library links (rpath) | `repair:wine` | Repair | Wine needs a quick repair. |
 | Any other failing check | `repair:check-<id>` | Repair (install.sh, with the checks shown) | the check's own short line |
 | Local world: status loading / not built / below disk floor | `working:checking` / `setup:local-server` | Checking… / Setup (below the floor its click shows the numbers and asks "Set Up Anyway") | The local server isn't set up yet. / Not enough free space for the local server. |
@@ -132,7 +135,9 @@ press tries again):
 2. **Wine and the Windows drive** — `Bootstrap.run` inside the sheet, into `Bootstrap.target`
    only (there is no default location any more); on success the sheet closes itself and the chain
    rescans (`refreshAsync`).
-3. **Patched game Wine** — see "Game Wine" below; noted, and said at the end.
+3. **The game's Wine** — `setupGameWineStep`: athei's pinned wine-coop downloaded, verified and
+   unpacked into the same folder (see "Game Wine" below). Rosetta 2 comes before it, in the sheet,
+   or on its own (`setupRosettaStep`) when only Rosetta is missing.
 4. **The game** — HorizonXI (and the local world, which plays its client):
    `runner.installHorizon` → `update-client.sh install`, progress on the button (base 0–85 %,
    updates the rest). Other worlds: their own installer route (`downloadGameData`); a
@@ -144,18 +149,57 @@ press tries again):
 
 Every press is safe to repeat: each job only adds what is missing (torrents resume, a complete
 base is not fetched again, Bootstrap skips finished steps, Repair refuses before writing when the
-data is unreachable). Nothing is deleted without a click, with one exception noted below.
+data is unreachable). Nothing is deleted without a click, with two exceptions, both the launcher's
+own downloads: the 9.4 GB base zip once unpacked (below), and the game's Wine tarball once
+unpacked or when it does not match its pin.
 
-### Game Wine
+### Game Wine (part 3)
 
-No pinned, verified source for the patched wine exists in this repo: the playable
-`wine-cx-26.3.0-1` has no recorded hash, and `docs/MACOS-27-PERFORMANCE.md` records a SHA-256 for
-`wine-cx-26.3.0-7` but says it is not shown to play HorizonXI and must not replace the playable
-tree. So Setup does not download one. When it is missing the button is Setup ("The game's Wine
-isn't installed yet."); the chain still does every other step and ends with one line: "The game's
-Wine can't be installed from here yet." On Daniel's Mac it resolves to the x10 copy. This is a
-hard block for a fresh user, as the mapping asked; HANDOFF's #20 note recommended no hard block —
-Daniel's call (see pathways).
+The last thing a fresh user could not get by pressing Setup. HorizonXI plays only under athei's
+patched CrossOver wine, `wine-cx-26.3.0-1` ("wine-coop"); the wrapper's own Wine closes the client
+a second after login (docs/WINE-BUILD.md). Part 1 ended Setup with "The game's Wine can't be
+installed from here yet." That line, `Primary.gameWineUnavailable`, is gone.
+
+- **Source, pinned in `scripts/game-wine.sh` only**: athei/wine-build release `cx-26.3.0-1`,
+  `wine-cx-26.3.0-1-macos-x86_64.tar.xz`, 203,696,924 bytes, SHA-256
+  `ec2a9e4d438917a26e381c01367773df79c3b0d6f0504b8183464619cad7e661` (GitHub's asset digest; one
+  fresh download matched it). Fetched on the user's Mac, never shipped (LGPL; LICENSING.md, the
+  aria2 model).
+- **Same as the measured copy?** Every one of its 3,692 files was hashed against Daniel's working
+  `/Volumes/x10/Video Games/Mac/FFXI/wine-coop/wine` (read-only): 3,691 identical, including
+  `bin/wine` `a84a059a…`, `bin/wineserver` `395e30e7…`, every `x86_64-unix/*.so` and
+  `i386-windows/*.dll`, and the 4 symlinks. The one difference is `lib/external/libMoltenVK.dylib`:
+  Daniel's is MoltenVK 1.4.2 (`aef00b13…` = `vendor/libMoltenVK-1.4.2.dylib`), with the release's
+  original kept beside it as `.bak-pre-1.4.2` (`02adfe96…`, identical to the release). That is the
+  launcher's own `Renderer.upgradeCoopMoltenVK`, which Play on the default Metal renderer applies
+  to whichever wine-coop it finds. So a fresh download becomes Daniel's tree on its first Play.
+- **The step** (chain step 3, `setupGameWineStep` → `Runner.installGameWine` →
+  `game-wine.sh install "<chosen>/FFXI on Mac"`), after Wine and before the 9.4 GB game: free space
+  checked first (download + 1.13 GB unpacked, plus 8 GB on the Mac's own disk), nothing written on a
+  refusal; `/usr/bin/curl -fL -C -` with five attempts (a stall under 1 KB/s for a minute ends an
+  attempt, the next resumes; a Stop leaves the partial file for the next press); size and SHA-256
+  checked **before** extracting; `/usr/bin/tar` into `.wine-coop-unpack.XXXXXX` beside it, one
+  rename to `wine-coop`; the tarball deleted after. A mismatch deletes the download and changes
+  nothing else; a `wine-coop` without a Wine in it is set aside as `wine-coop.incomplete-<time>`,
+  never deleted. Progress on the button ("Setting up… N%", download 0–90 %, unpack 90 %), the
+  small Stop beside it. The launcher clears the script's test-only `HXI_GAME_WINE_*` overrides.
+- **Where**: the remembered "FFXI on Mac" folder (where Setup built Wine). An install made before
+  b60 has none (or its drive is gone, or it lacks room): the chooser asks once, "Where should the
+  game's Wine go?", and that folder is remembered.
+- **Found by** `X87Sidecar.patchedWine()`: the remembered folder's `wine-coop` first, then the
+  old fixed places (`/Volumes/Games/FFXI/wine-coop`, Application Support's `ffxi-runtime`, two x10
+  paths). Daniel's Mac still resolves to the x10 copy, so his Setup never downloads it again.
+  `OwnWine` follows the same list.
+- **Move…** copies a `wine-coop` that sits beside the wrapper (Setup's layout, and Daniel's x10
+  one) with the rest, verifies it, and lists the old one in the Trash question.
+- **Rosetta 2**: the build (and Sikarugir's, and aria2) is x86_64. `Bootstrap.rosettaMissing()`
+  runs `arch -x86_64 /usr/bin/true` (a yes is cached for the session); missing → Setup, "Apple's
+  Rosetta isn't installed yet.", ahead of everything but a missing drive and Full Disk Access.
+  The click runs `softwareupdate --install-rosetta --agree-to-license` through macOS's own
+  administrator prompt (`Bootstrap.ensureRosetta`, the same code the setup sheet runs), never
+  Terminal. `FFXI_ON_MAC_ROSETTA=missing|present` injects the answer for tests; `ensureRosetta`
+  still asks the Mac, so the flag can never run softwareupdate.
+- **Space**: a fresh install now needs about 28 GB (36 GB on the Mac's own disk).
 
 ### aria2 (the fresh-user download blocker)
 
@@ -212,6 +256,7 @@ drive ('Games') that later went missing.
     <chosen>/FFXI on Mac/
         FFXI on Mac Wine.app/                  Wine + its Windows drive (prefix10)
             Contents/SharedSupport/prefix10/drive_c/HorizonXI/    HorizonXI, SquareEnix included
+        wine-coop/wine/bin/wine                the game's Wine (part 3, scripts/game-wine.sh)
         Games/<world>/                         any other world's client
 
 Bootstrap's downloads and unpacking sit beside the wrapper (`.ffxi-on-mac-setup`, same drive) and
@@ -226,7 +271,7 @@ are still found as before. Other worlds with no folder get `Games/<world>` in th
 **The chooser** (`LocationPanel`): an open panel for folders ("New Folder" allowed), opening on
 the last choice, else the drive with the most room that would be accepted (home, or `~/Games` when
 it exists, if that is the Mac's own disk). One line under it follows the selection: "120.4 GB free
-here · about 27 GB needed", or why it can't be used. A folder that can't be used is refused in the
+here · about 28 GB needed", or why it can't be used. A folder that can't be used is refused in the
 panel (it stays open); Cancel returns nothing and nothing is written. Refusals, one plain line each:
 
 | Folder | Line |
@@ -238,12 +283,13 @@ panel (it stays open); Cancel returns nothing and nothing is written. Refusals, 
 | iCloud Drive / CloudStorage / ubiquitous | This folder syncs to iCloud or another cloud. Choose one that doesn't. |
 | Inside an .app | Choose a folder outside an app. |
 | Drive gone (ghost, impostor) | The 'X' drive isn't connected. Choose another place. |
-| Not enough space | Not enough space here: 19.2 GB free, about 35 GB needed. |
+| Not enough space | Not enough space here: 19.2 GB free, about 36 GB needed. |
 
 Space needed for a fresh HorizonXI install, from the measurements in this build's analysis: Wine
-and its Windows drive about 1.4 GB, the base zip 9,426,920,806 bytes, unpacked about 15.5 GB
-beside it until update-client.sh deletes the zip: about 27 GB at the peak. On the Mac's own disk
-8 GB more must stay free (35 GB). Another world's folder: about 25 GB (no Wine). A Move: exactly
+and its Windows drive about 1.4 GB, the game's Wine 1.33 GB (its 204 MB tarball and 1.13 GB
+unpacked, part 3), the base zip 9,426,920,806 bytes, unpacked about 15.5 GB beside it until
+update-client.sh deletes the zip: about 28 GB at the peak. On the Mac's own disk 8 GB more must
+stay free (36 GB). Another world's folder: about 25 GB (no Wine). A Move: exactly
 what it copies.
 
 **Move…** (`InstallMove`, `Runner.moveInstall`): in Setup & Diagnostics, and as a small "Move…"
@@ -253,7 +299,8 @@ Wine (`Primary.Probe.dataElsewhere`).
    job, the local server (its login port answers) or any wineserver runs.
 2. Measured, read-only: the wrapper with only the selected prefix (other prefixes and the
    installer prefix stay behind), and the selected world's own folder when it is outside the
-   wrapper. A source behind a drive that is gone: "The 'Games' drive isn't connected, so the game
+   wrapper, and the game's Wine when it sits beside the wrapper (`wine-coop`, part 3; copied as
+   its own part and listed with the old copy). A source behind a drive that is gone: "The 'Games' drive isn't connected, so the game
    can't be moved." and nothing else happens.
 3. The chooser, with the same refusals, the need being exactly what is copied, and never inside
    the install or the data its links reach.
@@ -325,6 +372,47 @@ Wine (`Primary.Probe.dataElsewhere`).
   "Restart" text is the launcher's own self-update button (restarts the launcher, not the Mac)
   and log-only lines about it; one code comment quotes Daniel.
 
+**Part 3 (the game's Wine), same day, same Mac:**
+
+- Release build clean (the same two pre-existing warnings).
+- `--selftest-primary-action`: 77/77. New: Rosetta missing → Setup with its line; Rosetta, Wine
+  and the game's Wine all missing → Rosetta first; a missing drive outranks Rosetta; nothing
+  installed + no Rosetta → plain Setup (the sheet installs it); game Wine missing → an enabled
+  Setup; game Wine and the game both missing → the game's Wine first; Wine and game Wine both
+  missing → Wine first; `--fix` never runs the Rosetta or game-Wine steps; the injected
+  `FFXI_ON_MAC_ROSETTA` flag read (missing, by the probe, present); this Mac's own answer
+  (x86_64 runs) agrees with `rosettaMissing()`.
+- `--selftest-install-location ~/Downloads/FFXI-on-Mac-build/fixture`: 67/67. New: 28 GB / 36 GB;
+  the game's Wine alone about 2 GB; `patchedWineCandidates` = the chosen folder's wine-coop, then
+  the fixed list; a fake wine-coop in the chosen folder is the one `patchedWine()` returns and
+  `OwnWine` owns; a Move carries the wine-coop beside the wrapper (its relative link a link,
+  counted, a key file, in the old-copy list) and the moved one is what `patchedWine()` returns.
+- Every other suite passes: addon-policy, addon-source, addon-installer, addon-profile,
+  addon-scrub, addon-install, cursor-fix, guide-disabled, narration-disabled, multiworld,
+  retroachievements (47), updater, perf, ui-text, single-instance.
+- `scripts/tests/setup-scripts-test.sh <aria2 archive>` with `HXI_LAUNCHER_BIN` and
+  `HXI_GAME_WINE_TARBALL` set: 94 checks, all pass. New game-wine.sh cases on a ~20 KB fake
+  tarball served through `file://` with its own pin: fresh install (in place, link kept, 755,
+  tarball and temp folders gone, verify before extract, progress line); already installed
+  (nothing fetched, nothing changed); bad SHA-256, size one byte over and one under (exit 1, the
+  checksum line, nothing extracted or set aside, the folder byte-for-byte as it was, an existing
+  incomplete `wine-coop` untouched); a good download over that incomplete folder (set aside, its
+  file kept, the wrapper untouched); a partial download resumed (`-C -`) and a stale unpack folder
+  cleared; offline (one line after five tries); a missing drive and no room (refused before
+  anything is written). The real release through `file://` against the script's own pin: 3,692
+  files, x86_64, `wineserver --version` runs under Rosetta. The launcher on the fixture:
+  `setup:game-wine | Setup | The game's Wine isn't installed yet.` (and `--fix` refuses it, runs
+  nothing), `setup:rosetta | Setup | Apple's Rosetta isn't installed yet.` with the flag, PLAY
+  with `present`. (game-wine.sh calls `/usr/bin/curl` by path, so the fixture serves its fake
+  tarball through `file://` to the real curl rather than through the PATH stub.)
+- The pin itself: one download from GitHub with curl, 203,696,924 bytes, SHA-256 `ec2a9e4d…e661`,
+  equal to the asset digest; the equivalence check against Daniel's x10 copy (above, "Game Wine").
+  The tarball and the extraction were deleted afterwards.
+- Real Mac, read-only, after part 3: `--next-action` for HorizonXI, Local server and CatsEyeXI →
+  `setup:data-drive | Setup | The 'Games' drive isn't connected — reconnect it or press Setup.`
+  (exit 10); `--check` the same line (exit 1). The game's Wine resolves to the x10 copy, so it is
+  not offered for download there.
+
 ## Not tested (rules for this build: no GUI, no game, no wine on the real install)
 
 - The window itself: SwiftUI layout of the button, its line, the small Stop and the "Move…" link;
@@ -343,15 +431,16 @@ Wine (`Primary.Probe.dataElsewhere`).
   (only `--version` ran). The fetch itself was tested through `file://` with the archive that was
   downloaded from aria2's GitHub release once to pin it.
 - `diskutil mount` (no unmounted volume to try); the ghost case from the GUI.
+- Part 3: the game's Wine downloaded by the launcher itself from GitHub (the script ran only on
+  `file://`; the one real download was a plain curl to pin it), Stop during that download from
+  the window, its chooser for an install made before b60, the button's "Setting up… N%" for it,
+  and `softwareupdate --install-rosetta` (Rosetta is installed here; only the detection ran, with
+  the injected flag). A launch on a freshly downloaded wine-coop (it is byte-identical to the
+  measured one apart from the MoltenVK swap Play makes itself, but no game ran on it).
 
 ## Possible next pathways
 
-- **Game Wine download** (Daniel's decision, HANDOFF #20): pin `wine-cx-26.3.0-1` (needs its
-  SHA-256 from a fresh, verified download) or adopt 26.3.0-7 (hash already recorded) after a
-  local-world launch test; install under Application Support, append to
-  `X87Sidecar.patchedWineCandidates`, add a chain step before the game download, free-space check.
-  Or, if Daniel prefers, drop the hard block and let Play fall back with a warning as in b59.
-- **Space estimate per world**: the chooser uses HorizonXI's 27 GB for everyone (25 GB for
+- **Space estimate per world**: the chooser uses HorizonXI's 28 GB for everyone (25 GB for
   another world's folder); CatsEyeXI and the retail-client worlds differ.
 - **Local server**: lsb-server.sh still builds where it always did, outside the chosen folder.
 - A SquareEnix symlink that dangles on a drive that *is* there (target folder deleted) reads as

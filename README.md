@@ -26,9 +26,9 @@ It can also run a server on your own Mac if you want to play offline.
    notarized; see its release notes if macOS blocks the first open.
 2. **Pick the world you want** from the **CHANGE WORLD** menu (HorizonXI is first).
 3. **Press *Setup*** — the big button. First it asks where to put everything: choose a folder on
-   any Mac-formatted drive with room (about 27 GB for HorizonXI). Wine, its Windows drive and the
-   game all go in one *FFXI on Mac* folder there. Then it installs Wine (it asks for your Mac
-   password once) and fetches that world's game files. This part is big and slow — leave it
+   any Mac-formatted drive with room (about 28 GB for HorizonXI). Wine, its Windows drive, the
+   game's Wine and the game all go in one *FFXI on Mac* folder there. Then it installs Wine (it
+   asks for your Mac password once), the game's Wine, and that world's game files. This part is big and slow — leave it
    running; you can close the lid.
 4. **Make an account** on that world's website — the launcher links you straight to it.
 5. **Type your account name and password, press PLAY.**

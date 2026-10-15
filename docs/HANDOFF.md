@@ -31,7 +31,7 @@ ends) are in `archive/docs-2026-08/`.
 | GitHub | `danielalanbates/FFXI-on-Mac`. v3.9 clients still ask for `HorizonXI-on-Mac` and arrive by GitHub's rename redirect: never create a repo with the old name. The local `origin` URL still uses the old name. |
 | Working copy | `~/Downloads/hxi-work/HorizonXI-on-Mac`; siblings `vanaguide` (e2c1609) and `vanavoice` (29a8ec9) are bundled as they sit on disk (revisions recorded in Info.plist `HXIAddonRevisions`) |
 | Test Mac | M1 MacBook Pro 8 GB, macOS 27.0.1 |
-| Play stack | athei `wine-cx-26.3.0-1` (`wine-coop`, found on the Mac, not shipped) + WINEMSYNC; d3d8to9 → patched DXVK 1.10.3 → MoltenVK 1.4.2; `x87sidecar-coop` on by default (b59); Ashita v4 |
+| Play stack | athei `wine-cx-26.3.0-1` (`wine-coop`, fetched by Setup via `scripts/game-wine.sh` (pinned) or found on the Mac, not shipped) + WINEMSYNC; d3d8to9 → patched DXVK 1.10.3 → MoltenVK 1.4.2; `x87sidecar-coop` on by default (b59); Ashita v4 |
 
 ## Release gates (for public 3.10)
 

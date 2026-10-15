@@ -9,9 +9,9 @@ tells you when there is something else to press.
    not notarized; its release notes explain the extra first-open step if macOS blocks it.
 2. **Pick your world** from the **CHANGE WORLD** menu.
 3. **Press *Setup*** — the big button where PLAY will be. It asks where to put everything first:
-   choose a folder on any Mac-formatted drive with room (about 27 GB for HorizonXI). Then it
+   choose a folder on any Mac-formatted drive with room (about 28 GB for HorizonXI). Then it
    installs Wine (it asks for your Mac password once — that's Rosetta, Apple's own translation
-   layer) and downloads the game. This takes a while — start it and go do something else. You can
+   layer), the game's Wine, and downloads the game. This takes a while — start it and go do something else. You can
    close the laptop lid.
 4. **Make an account** on that world's website. The launcher has a link straight to it.
 5. **Type your account name and password, press PLAY.**
@@ -70,6 +70,13 @@ finishes:
 
 If a step fails partway, press **Setup** again. Finished steps are skipped, so it picks up where it
 stopped rather than starting over.
+
+Next, **the game's Wine** — a 204 MB download of athei's patched CrossOver Wine build
+(`wine-cx-26.3.0-1`), the one Wine HorizonXI stays logged in under. It comes from that build's own
+GitHub release, is checked against a pinned size and SHA-256 before anything is unpacked, and goes
+in `wine-coop` beside the wrapper (1.1 GB). Progress shows on the button; Stop and press **Setup**
+again to resume. If Rosetta 2 is ever missing on its own (a new Mac set up from a backup), the
+button says so and **Setup** installs it with the normal password prompt.
 
 Then the game itself — whatever your world's own launcher does; the app just does it for you,
 inside the wrapper, into the folder you chose:
