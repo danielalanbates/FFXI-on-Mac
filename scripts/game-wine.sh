@@ -1,22 +1,3 @@
-have=$(size_of "$tarball")
-# Larger than the pin: not something a resume can fix (it is deleted below, once there is room).
-(( have > WINE_BYTES )) && have=0
-
-# The rest of the download plus the unpacked tree; on the Mac's own disk, 8 GB stay free as well.
-# Asked of the nearest folder that exists, so a refusal writes nothing.
-probe="$root"; while [[ ! -e "$probe" ]]; do probe="${probe:h}"; done
-need=$(( WINE_BYTES - have + WINE_UNPACKED ))
-m=$(mount_of "$probe")
-[[ "$m" == / || "$m" == /System/Volumes/Data ]] && need=$(( need + 8000000000 ))
-free=$(( $(/bin/df -k "$probe" | /usr/bin/awk 'NR==2 {print $4}') * 1024 ))
-
-mkdir -p "$dl" || die "Couldn't make a folder in $root. Nothing was changed."
-(( have == 0 )) && /bin/rm -f "$tarball"
-
-# A Stop during an unpack leaves its temp folder: ours, by name, and never complete.
-unpack=""
-trap '[[ -n "$unpack" ]] && /bin/rm -rf "$unpack"' EXIT
-for old in "$root"/.wine-coop-unpack.*(N/); do /bin/rm -rf "$old"; done
 #!/bin/zsh
 # Copyright (c) 2026 Bates LLC. All rights reserved.
 #
