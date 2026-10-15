@@ -715,9 +715,14 @@ final class Sessions: ObservableObject {
             let snap = LiveClients.snapshot()
             guard !prefix.isEmpty else { return (snap, boot, ([:], [:]), "", []) }
             let ev = Leftovers.evidence(snap, ownGroups: before.groups, ownHostsWithoutGroup: before.hostsWithoutGroup)
-            let left = Leftovers.serverless(snap, parentOf: Leftovers.parentPID,
-                                            prefixSocketExists: Leftovers.prefixSocketExists(prefix))
-            return (snap, boot, ev, OwnWine.resolve(prefix), left)
+            // The prefix is touched (realpath, stat; it may sit on a sleeping drive) only when
+            // there is something to decide: almost every refresh has nothing left over.
+            let left = snap.ownWineservers.isEmpty && !snap.ownSystemPrograms.isEmpty
+                ? Leftovers.serverless(snap, parentOf: Leftovers.parentPID,
+                                       prefixSocketExists: Leftovers.prefixSocketExists(prefix))
+                : []
+            let resolved = ev.groups.isEmpty && ev.servers.isEmpty ? prefix : OwnWine.resolve(prefix)
+            return (snap, boot, ev, resolved, left)
         }.value
         if boot != bootHosts { bootHosts = boot }
 
