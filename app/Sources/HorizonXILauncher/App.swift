@@ -249,6 +249,8 @@ struct ContentView: View {
     @State private var setupSheetWaiter = SheetWaiter()
     /// Worlds whose download page Setup opened this session: the next press runs the installer.
     @State private var websiteOpened: Set<String> = []
+    /// Move… is measuring what it would copy (the button says "Checking…").
+    @State private var moveChecking = false
     private var fdaBlocked: Bool { checks.contains(where: { $0.id == "fda" && $0.state == .bad }) }
 
     /// The drive the selected world's files are on (or link to), when it is not there.
@@ -279,7 +281,8 @@ struct ContentView: View {
         x.setupProgress = runner.updatingHorizon ? runner.updateProgress : setupProgress
         if runner.busy { x.ownJob = runner.busyReason.isEmpty ? "Working" : runner.busyReason }
         else if x.isLocal, local.busy { x.ownJob = local.activity.isEmpty ? "setting up" : local.activity }
-        x.ownProgress = runner.updatingHorizon ? runner.updateProgress : nil
+        else if moveChecking { x.ownJob = "Checking" }
+        x.ownProgress = runner.updatingHorizon ? runner.updateProgress : runner.moveProgress
         if !runner.busy, Runner.workInFlight { x.otherJob = Runner.workInFlightReason ?? "Another job is running" }
         x.runningHere = runner.running
         x.starting = runner.starting
@@ -1327,6 +1330,9 @@ struct ContentView: View {
                         Button("Install dependencies…") { Task { await installDependencies() } }
                             .disabled(setupRunning)
                             .help("Installs Rosetta 2 and Wine, and creates the Windows drive FFXI installs into, in a folder you choose")
+                        Button("Move…") { startMove() }
+                            .disabled(active == nil || runner.busy || setupRunning || moveChecking)
+                            .help("Copies Wine, its Windows drive and the game into one folder you choose. The old copy stays until you say otherwise.")
                     }
                     .padding(.top, 4)
                     // The full log: every line of every run, which the window no longer shows.
@@ -1577,6 +1583,13 @@ struct ContentView: View {
                         .lineLimit(2).truncationMode(.tail)
                         .fixedSize(horizontal: false, vertical: true)
                         .help(r)
+                    // The game's files on another drive than Wine: offer to bring them together.
+                    if case .setup = d.action, probe.dataElsewhere, active != nil {
+                        Spacer(minLength: 4)
+                        Button("Move…") { startMove() }
+                            .buttonStyle(.link).font(.system(size: 12))
+                            .help("Copy Wine and the game into one folder you choose.")
+                    }
                 }
             }
         }
@@ -1925,6 +1938,88 @@ struct ContentView: View {
               Preflight.unavailableDrive(for: i.wrapper.path) == nil,
               fm.fileExists(atPath: i.sharedSupport.path) else { return nil }
         return i.wrapper
+    }
+
+    // MARK: - Move…
+
+    /// Move…: from Setup & Diagnostics, and beside the main button's Setup line when the game's
+    /// files are on another drive than Wine. Refuses while anything runs; measures the install
+    /// (read-only; a drive that is gone is said in one line, and nothing happens); asks where,
+    /// with the same checks as Setup plus room for exactly what it copies; then copies, verifies
+    /// and switches (InstallMove, Runner.moveInstall), with "Moving… N%" on the button.
+    private func startMove() {
+        guard let i = active, let s = store.selected, !moveChecking else { return }
+        let jobs = runner.busy || Runner.workInFlight || setupRunning
+        let before = InstallMove.Activity(
+            clientsLive: !sessions.live.isEmpty || !sessions.elsewhere.isEmpty,
+            job: jobs ? (Runner.workInFlightReason ?? "a job") : nil,
+            localServer: local.busy || LocalServer.workInFlight || local.status?.running == true,
+            wineRunning: WineserverStopWait.anyStuck)
+        if let why = InstallMove.blocker(before) { notice = why; return }
+        notice = ""
+        moveChecking = true
+        Task {
+            let (planned, wine, clients) = await Task.detached(priority: .userInitiated) {
+                (Result { try InstallMove.plan(i, world: s.name) }, InstallMove.anyWineserver(), !LiveClients.scan().isEmpty)
+            }.value
+            moveChecking = false
+            if let why = InstallMove.blocker(.init(clientsLive: clients, wineRunning: wine)) { notice = why; return }
+            let plan: InstallMove.Plan
+            switch planned {
+            case .success(let p): plan = p
+            case .failure(let e): notice = (e as? InstallMove.Refusal)?.line ?? e.localizedDescription; return
+            }
+            guard let folder = LocationPanel.choose(
+                title: "Move FFXI on Mac",
+                message: "Wine, its Windows drive and the game are copied into one folder, “FFXI on Mac”, inside the folder you choose. The old copy stays until you say otherwise.",
+                prompt: "Move Here", need: plan.bytes,
+                extra: { InstallMove.destinationProblem($0, plan: plan) }) else { return }
+            runner.moveInstall(plan, into: folder) { moved in
+                guard let moved else { recheck(); return }
+                finishMove(plan, moved: moved, folder: folder)
+            }
+        }
+    }
+
+    /// The copy is verified and in place: use it, then ask once about the old copy. It goes to
+    /// the Trash only on a yes; nothing is ever removed outright.
+    private func finishMove(_ plan: InstallMove.Plan, moved: Install, folder: URL) {
+        for srv in store.servers {
+            if let p = InstallMove.rewrittenDataPath(srv.dataPath, world: srv.name, plan: plan, folder: folder) {
+                var c = srv; c.dataPath = p; store.update(c)
+            }
+        }
+        InstallLocation.remember(folder)
+        moved.remember()
+        installs = [moved] + installs.filter { $0.id != moved.id }
+        selected = moved
+        recheck()
+        // Never anything that holds the new copy.
+        let newPath = folder.standardizedFileURL.path
+        let old = plan.oldCopy.filter { u in
+            let p = u.standardizedFileURL.path
+            return p != newPath && !newPath.hasPrefix(p + "/") && !p.hasPrefix(newPath + "/")
+        }
+        guard !old.isEmpty else { return }
+        let alert = NSAlert()
+        alert.messageText = "The game now plays from “\(folder.path)”."
+        alert.informativeText = "The old copy is still here:\n\n" + old.map(\.path).joined(separator: "\n")
+            + "\n\nMove it to the Trash?"
+        alert.addButton(withTitle: "Keep It")
+        alert.addButton(withTitle: "Move to Trash")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        var failed: [String] = []
+        for u in old {
+            do {
+                try FileManager.default.trashItem(at: u, resultingItemURL: nil)
+                runner.logFileOnly("==> old copy moved to the Trash: \(u.path)")
+            } catch {
+                runner.logFileOnly("!! couldn't move \(u.path) to the Trash: \(error.localizedDescription)")
+                failed.append(u.lastPathComponent)
+            }
+        }
+        if !failed.isEmpty { notice = "Some of the old copy couldn't go to the Trash: \(failed.joined(separator: ", "))." }
+        refresh()
     }
 
     /// Every world playing right now, each with its own Stop. Stopping one never stops another.

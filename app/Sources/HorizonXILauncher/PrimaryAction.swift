@@ -375,6 +375,8 @@ enum Primary {
         var clientInstalled: String?
         var patchedWineMissing = false
         var profileHasAccount = false
+        /// The game's files are on (or link to) another drive than Wine: the Setup line offers Move.
+        var dataElsewhere = false
     }
 
     /// Everything the decision needs from disk. Read-only; may be slow on a sleeping drive.
@@ -392,6 +394,7 @@ enum Primary {
             p.profileHasAccount = profileHasAccount(i, profile: profile)
         }
         p.patchedWineMissing = X87Sidecar.patchedWine() == nil
+        p.dataElsewhere = InstallMove.dataElsewhere(i)
         return p
     }
 

@@ -28,6 +28,8 @@ final class Runner: ObservableObject {
     /// 0...1 across every pending update zip, and a short label ("2.0.4 · 1 of 2").
     @Published var updateProgress: Double = 0
     @Published var updateLabel = ""
+    /// 0...1 while Move… copies (InstallMove), for the main button's "Moving… 40%".
+    @Published var moveProgress: Double?
     private var updateStep = (n: 1, total: 1)
     /// A fresh install's base download and unzip (9.4 GB, nearly all of the time) fills the
     /// first 85% of the bar, its updates the rest; an update alone fills all of it. Setup's
@@ -470,6 +472,37 @@ final class Runner: ObservableObject {
             if code == 0, let self {
                 Task { await self.syncPrefixIfStale(install); done(true) }
             } else { done(false) }
+        }
+    }
+
+    /// Move…: copy the install into `folder` (InstallMove) as one job, under the same lock as
+    /// Repair, so no launch in any launcher starts against it. Nothing of the old install is
+    /// changed; `done` gets the new install once the copy is verified and in place.
+    func moveInstall(_ plan: InstallMove.Plan, into folder: URL, done: @escaping (Install?) -> Void) {
+        if refuseWhileBusy("Move") { done(nil); return }
+        guard claimForMaintenance("Move") else { done(nil); return }
+        beginBusy("Moving")
+        moveProgress = 0
+        appendLine("==> moving \(plan.install.wrapper.path) [\(plan.install.prefixName)] to \(folder.path): "
+                   + "\(plan.expected)")
+        let note: @Sendable (String) -> Void = { [weak self] line in Task { @MainActor in self?.logFileOnly(line) } }
+        let report: @Sendable (Double) -> Void = { [weak self] f in Task { @MainActor in self?.moveProgress = f } }
+        // The job holds its runner until it ends: the lock and `busy` must be released.
+        Task.detached(priority: .userInitiated) { [self] in
+            let result = Result { try InstallMove.copy(plan, into: folder, log: note, progress: report) }
+            await MainActor.run {
+                self.endMaintenance()
+                self.busy = false
+                self.moveProgress = nil
+                switch result {
+                case .success(let moved):
+                    self.appendLine("==> moved and verified: \(moved.wrapper.path) [\(moved.prefixName)]")
+                    done(moved)
+                case .failure(let e):
+                    self.appendLine("!! " + ((e as? InstallMove.Refusal)?.line ?? "Move didn't finish: \(e.localizedDescription)"))
+                    done(nil)
+                }
+            }
         }
     }
 
