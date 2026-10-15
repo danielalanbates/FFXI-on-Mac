@@ -1324,9 +1324,9 @@ struct ContentView: View {
                         // Also reachable when an install already exists: a wrapper can be
                         // broken past what Repair fixes, and rebuilding a fresh one beside it
                         // is faster than diagnosing wine by hand.
-                        Button("Install dependencies…") { prepareWineSetup(); showSetup = true }
+                        Button("Install dependencies…") { Task { await installDependencies() } }
                             .disabled(setupRunning)
-                            .help("Installs Rosetta 2 and Wine, and creates the Windows drive FFXI installs into")
+                            .help("Installs Rosetta 2 and Wine, and creates the Windows drive FFXI installs into, in a folder you choose")
                     }
                     .padding(.top, 4)
                     // The full log: every line of every run, which the window no longer shows.
@@ -1426,17 +1426,20 @@ struct ContentView: View {
                 }
     }
 
-    /// Ask where this world's files are (or should go). Defaults to ~/Games/FFXI/<world>, and
-    /// the user can pick any drive. The choice is stored on the server entry.
+    /// Ask where this world's files already are. Opens on the world's folder in the chosen
+    /// "FFXI on Mac" folder when there is one; nothing is created before the user picks. The
+    /// choice is stored on the server entry.
     private func chooseGameData(for s: Server) {
         let panel = NSOpenPanel()
         panel.title = "Game data for \(s.name)"
-        panel.message = "Choose the folder that holds (or will hold) \(s.name)'s game files. Any drive is fine; the launcher finds Ashita-cli.exe and SquareEnix inside it, however \(s.name)'s installer laid them out."
+        panel.message = "Choose the folder that holds \(s.name)'s game files. Any drive is fine; the launcher finds Ashita-cli.exe and SquareEnix inside it, however \(s.name)'s installer laid them out."
         panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
         panel.prompt = "Use this folder"
-        let def = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Games/FFXI/\(s.name)")
-        try? FileManager.default.createDirectory(at: def, withIntermediateDirectories: true)
-        panel.directoryURL = def
+        let fm = FileManager.default
+        let candidates = [InstallLocation.remembered.map { InstallLocation.worldData(s.name, in: $0) },
+                          InstallLocation.remembered,
+                          fm.homeDirectoryForCurrentUser.appendingPathComponent("Games/FFXI/\(s.name)")].compactMap { $0 }
+        panel.directoryURL = candidates.first { fm.fileExists(atPath: $0.path) } ?? fm.homeDirectoryForCurrentUser
         guard panel.runModal() == .OK, let url = panel.url else { return }
         var c = s; c.dataPath = url.path; store.update(c)
         recheck()
@@ -1472,8 +1475,9 @@ struct ContentView: View {
     /// Square Enix data: each route runs or opens the server's own installer.
     private func downloadGameData(for s: Server, install i: Install) {
         if s.dataPath.isEmpty && s.name != "HorizonXI" {
-            chooseGameData(for: s)
-            guard let again = store.servers.first(where: { $0.name == s.name }), !again.dataPath.isEmpty else { return }
+            // Into the "FFXI on Mac" folder the user chose; asked for here only when there is none.
+            guard placeWorldData(for: s),
+                  let again = store.servers.first(where: { $0.name == s.name }), !again.dataPath.isEmpty else { return }
             downloadGameData(for: again, install: i.forServer(again)); return
         }
         switch s.installKind {
@@ -1680,9 +1684,9 @@ struct ContentView: View {
     /// one, so pressing it again after a stop, a failure or a cancelled sheet carries on where
     /// it left off and never redoes finished work:
     ///
-    ///   1. location -- where Wine and its Windows drive go, and where the game files go when
-    ///      their drive is gone or the world has no folder yet (`setupLocationStep`);
-    ///   2. Wine and the Windows drive (Bootstrap, in the setup sheet);
+    ///   1. location -- the folder chooser, before anything is written: everything goes in
+    ///      "<chosen>/FFXI on Mac/" (`setupLocationStep`, InstallLocation);
+    ///   2. Wine and the Windows drive in that folder (Bootstrap, in the setup sheet);
     ///   3. the patched game Wine -- no pinned download yet, so it is said at the end;
     ///   4. the game: HorizonXI's base, Ashita and every update (update-client.sh install),
     ///      or the world's own installer;
@@ -1690,8 +1694,9 @@ struct ContentView: View {
     ///   6. the local server's build, for the local world;
     ///   7. the checks again, so the button becomes the next thing -- PLAY when all is done.
     ///
-    /// Nothing is deleted or overwritten without a click: the sheet and the folder panel are the
-    /// clicks, and every job here only adds what is missing.
+    /// Nothing is deleted or overwritten without a click: the folder chooser and the sheet are
+    /// the clicks (Cancel on either writes nothing and leaves SETUP), and every job here only adds
+    /// what is missing.
     private func runSetup() async {
         guard !setupRunning else { return }
         let world = store.selectedID
@@ -1765,21 +1770,37 @@ struct ContentView: View {
         for _ in 0..<100 where checksInFlight > 0 { try? await Task.sleep(nanoseconds: 100_000_000) }
     }
 
-    /// Setup step 1: where things go. The install-location chooser belongs here and only here:
-    /// it decides `Bootstrap.target` (the wrapper -- Wine plus its Windows drive -- to build, or
-    /// to repair in place) for `.install`, `.wrapperDrive` and `.wine`, and the world's
-    /// `dataPath` (where its game files go) for `.dataDrive` and `.chooseFolder`. Today the
-    /// wrapper goes where the setup sheet says before it builds anything (`Bootstrap.wrapperURL`,
-    /// or the selected wrapper when only its Wine is missing), and the game files go in a folder
-    /// the user picks. Returns false when the user cancelled; nothing has been written then.
+    /// Setup step 1: where things go, asked before anything is written (Daniel, 2026-10-15:
+    /// "i want to choose"). The one place a location is decided:
+    ///
+    /// - Nothing installed, the wrapper's drive gone, or HorizonXI's files on a drive that is gone
+    ///   (`.install`, `.wrapperDrive`, `.wine` without a wrapper to fix, `.dataDrive` for the
+    ///   worlds that play the wrapper's own client): the folder chooser, then the setup sheet
+    ///   builds Wine and its Windows drive in "<chosen>/FFXI on Mac/", and that install becomes
+    ///   the one used (the game downloads into it next). The old install is left as it is.
+    /// - Only the selected wrapper's Wine missing, its drive there: Wine is replaced in place.
+    /// - Another world's folder on a drive that is gone: the chooser, and its files go in
+    ///   "<chosen>/FFXI on Mac/Games/<world>"; with no download route, the folder that holds them.
+    /// - No folder chosen, or an ambiguous one: the folder that holds the world's files.
+    ///
+    /// Returns false when the user cancelled; nothing has been written then.
     private func setupLocationStep(_ need: PrimaryAction.SetupNeed) async -> Bool {
+        guard let s = store.selected else { return false }
         switch need {
+        case .wine where wineRepairTarget != nil:
+            Bootstrap.target = wineRepairTarget
+            return await runSetupSheet()
         case .install, .wrapperDrive, .wine:
-            prepareWineSetup()
-            showSetup = true
-            return await setupSheetWaiter.wait()
+            return await setupNewLocation()
+        case .dataDrive where s.local || s.name == "HorizonXI":
+            return await setupNewLocation()
+        case .dataDrive where s.installKind != .none:
+            guard let folder = LocationPanel.choose(
+                title: "Where should \(s.name) go?",
+                message: "\(s.name)'s game files go in “FFXI on Mac/Games/\(s.name)” inside the folder you choose. Any Mac-formatted drive works, external included.",
+                prompt: "Put It Here", need: InstallLocation.Need.gameZip + InstallLocation.Need.gameUnpacked) else { return false }
+            return setWorldData(s, in: folder)
         case .dataDrive, .chooseFolder:
-            guard let s = store.selected else { return false }
             let before = s.dataPath
             chooseGameData(for: s)
             guard let now = store.servers.first(where: { $0.name == s.name }) else { return false }
@@ -1787,6 +1808,72 @@ struct ContentView: View {
         default:
             return true
         }
+    }
+
+    /// The folder chooser, then Wine and its Windows drive built in "<chosen>/FFXI on Mac/", which
+    /// becomes the install in use. False when either was cancelled (nothing written by the
+    /// chooser; the sheet writes only after "Set it up").
+    private func setupNewLocation(adoptAlways: Bool = true) async -> Bool {
+        guard let folder = LocationPanel.choose(
+            title: "Where should FFXI on Mac go?",
+            message: "Everything goes in one folder, “FFXI on Mac”, inside the folder you choose: Wine, its Windows drive and the game. Any Mac-formatted drive works, external included.",
+            prompt: "Set Up Here", need: InstallLocation.Need.fresh) else { return false }
+        Bootstrap.target = InstallLocation.wrapper(in: folder)
+        guard await runSetupSheet() else { return false }
+        let built = InstallLocation.install(in: folder)
+        InstallLocation.remember(folder)
+        // Install dependencies… beside an install that already has the game keeps that one in
+        // use (G11); the new one is in the picker.
+        if adoptAlways || selected?.hasGame != true {
+            built.remember()
+            installs = [built] + installs.filter { $0.id != built.id }
+            selected = built
+        }
+        return true
+    }
+
+    private func runSetupSheet() async -> Bool {
+        showSetup = true
+        return await setupSheetWaiter.wait()
+    }
+
+    /// Setup & Diagnostics › Install dependencies…: Wine replaced in place when only the selected
+    /// wrapper's Wine is missing, else a new install where the user chooses.
+    private func installDependencies() async {
+        if let w = wineRepairTarget {
+            Bootstrap.target = w
+            guard await runSetupSheet() else { return }
+        } else {
+            guard await setupNewLocation(adoptAlways: false) else { return }
+        }
+        await refreshAsync()
+    }
+
+    /// A world other than HorizonXI with no folder yet: "<FFXI on Mac>/Games/<world>" in the
+    /// folder already chosen, or one the user chooses now. False when cancelled.
+    private func placeWorldData(for s: Server) -> Bool {
+        if let folder = InstallLocation.remembered,
+           FileManager.default.fileExists(atPath: folder.path),
+           InstallLocation.verdict(InstallLocation.facts(for: folder), need: 0).isOK {
+            return setWorldData(s, in: folder)
+        }
+        guard let folder = LocationPanel.choose(
+            title: "Where should \(s.name) go?",
+            message: "\(s.name)'s game files go in “FFXI on Mac/Games/\(s.name)” inside the folder you choose. Any Mac-formatted drive works, external included.",
+            prompt: "Put It Here", need: InstallLocation.Need.gameZip + InstallLocation.Need.gameUnpacked) else { return false }
+        if InstallLocation.remembered == nil { InstallLocation.remember(folder) }
+        return setWorldData(s, in: folder)
+    }
+
+    private func setWorldData(_ s: Server, in folder: URL) -> Bool {
+        let dir = InstallLocation.worldData(s.name, in: folder)
+        do { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
+        catch { notice = "Couldn't make a folder in \(folder.lastPathComponent)."; return false }
+        guard var c = store.servers.first(where: { $0.name == s.name }) else { return false }
+        c.dataPath = dir.path
+        store.update(c)
+        recheck()
+        return true
     }
 
     /// Setup step 4: the game files. HorizonXI's (and the local world's, which plays HorizonXI's
@@ -1831,16 +1918,13 @@ struct ContentView: View {
 
     /// Setup repairs the selected wrapper when that is the one whose wine is missing, instead
     /// of building a second, empty wrapper and switching to it (G11). A wrapper whose drive is
-    /// gone is never the target: a new one is built where the sheet says.
-    private func prepareWineSetup() {
+    /// gone is never the target: a new one is built where the user chooses.
+    private var wineRepairTarget: URL? {
         let fm = FileManager.default
-        if let i = selected, !fm.isExecutableFile(atPath: i.wine.path),
-           Preflight.unavailableDrive(for: i.wrapper.path) == nil,
-           fm.fileExists(atPath: i.sharedSupport.path) {
-            Bootstrap.target = i.wrapper
-        } else {
-            Bootstrap.target = nil
-        }
+        guard let i = selected, !fm.isExecutableFile(atPath: i.wine.path),
+              Preflight.unavailableDrive(for: i.wrapper.path) == nil,
+              fm.fileExists(atPath: i.sharedSupport.path) else { return nil }
+        return i.wrapper
     }
 
     /// Every world playing right now, each with its own Stop. Stopping one never stops another.

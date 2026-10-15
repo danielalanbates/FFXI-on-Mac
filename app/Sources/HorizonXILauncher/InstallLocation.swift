@@ -1,0 +1,271 @@
+// Copyright (c) 2026 Bates LLC. All rights reserved.
+
+import AppKit
+import Foundation
+
+/// Where FFXI on Mac keeps everything: one folder, "FFXI on Mac", inside a folder the user
+/// chooses. Daniel, 2026-10-15: "it shouldn't be on the games drive. the user should have the
+/// ability to choose where it goes. when i clicked set up ffxi on mac, it didn't let me choose
+/// where the windows drive would be located. i want to choose" -- the old setup had built
+/// `~/Applications/FFXI on Mac Wine.app` without asking, and the game's files were linked onto
+/// a third drive that later went missing.
+///
+///     <chosen>/FFXI on Mac/
+///         FFXI on Mac Wine.app/                    Wine and its Windows drive (prefix10)
+///             Contents/SharedSupport/prefix10/drive_c/HorizonXI/   HorizonXI, SquareEnix included
+///         Games/<world>/                           any other world's game files
+///
+/// Setup asks for the folder before it writes anything (`LocationPanel`), and refuses one it
+/// cannot work in: not Mac-formatted, on the network, read-only, synced to a cloud, or short of
+/// space. The choice is remembered (`remembered`), and discovery looks there first.
+enum InstallLocation {
+    static let folderName = "FFXI on Mac"
+    static let wrapperName = "FFXI on Mac Wine.app"
+    static let worldsFolder = "Games"
+
+    // MARK: - Layout
+
+    /// The "FFXI on Mac" folder for what the user chose. Choosing that folder itself (a second
+    /// Setup, or a Move back) uses it as it is rather than nesting another inside it.
+    static func folder(for chosen: URL) -> URL {
+        let c = chosen.standardizedFileURL
+        return c.lastPathComponent == folderName ? c : c.appendingPathComponent(folderName, isDirectory: true)
+    }
+
+    static func wrapper(in folder: URL) -> URL { folder.appendingPathComponent(wrapperName, isDirectory: true) }
+
+    /// A world other than HorizonXI keeps its own client here (HorizonXI's is inside the
+    /// wrapper's Windows drive, where its installer and the registry expect it).
+    static func worldData(_ world: String, in folder: URL) -> URL {
+        folder.appendingPathComponent(worldsFolder, isDirectory: true).appendingPathComponent(world, isDirectory: true)
+    }
+
+    /// The install Setup builds in `folder`.
+    static func install(in folder: URL) -> Install { Install(wrapper: wrapper(in: folder), prefixName: Bootstrap.prefixName) }
+
+    // MARK: - Remembered
+
+    /// Swapped by the self-test, so it never changes the real choice.
+    static var defaults: UserDefaults = .standard
+    private static let key = "install.location"
+
+    /// The "FFXI on Mac" folder chosen last, whether or not its drive is there right now.
+    static var remembered: URL? {
+        guard let p = defaults.string(forKey: key), !p.isEmpty else { return nil }
+        return URL(fileURLWithPath: p, isDirectory: true)
+    }
+
+    static func remember(_ folder: URL) { defaults.set(folder.standardizedFileURL.path, forKey: key) }
+
+    // MARK: - Space
+
+    /// What a fresh HorizonXI install takes at its peak, measured (docs/BETA-60.md): Wine and its
+    /// Windows drive about 1.4 GB; HorizonXI's base zip 9,426,920,806 bytes (manifest 2.0.2),
+    /// unpacked about 15.5 GB beside it until update-client.sh deletes the zip.
+    enum Need {
+        static let wine: Int64 = 1_400_000_000
+        static let gameZip: Int64 = 9_426_920_806
+        static let gameUnpacked: Int64 = 15_500_000_000
+        static let fresh: Int64 = wine + gameZip + gameUnpacked
+    }
+
+    /// What stays free on the Mac's own disk, for macOS (and swap on an 8 GB Mac).
+    static let bootFloor: Int64 = 8_000_000_000
+
+    // MARK: - Can it go here?
+
+    /// What decides whether a folder can hold the install. Read by `facts(for:)`; injected by the
+    /// self-test.
+    struct Facts: Equatable {
+        var fsType = "apfs"
+        var isLocal = true
+        var isReadOnly = false
+        var isWritable = true
+        var freeBytes: Int64 = 0
+        var isBootVolume = false
+        var isCloud = false
+        var insideApp = false
+        /// The `/Volumes/<name>` on the way there is not (or another drive answers for it).
+        var missingDrive: String? = nil
+    }
+
+    enum Verdict: Equatable {
+        case ok(free: Int64, need: Int64)
+        case refused(String)
+
+        var line: String {
+            switch self {
+            case .ok(let free, let need): return InstallLocation.spaceLine(free: free, need: need)
+            case .refused(let why): return why
+            }
+        }
+        var isOK: Bool { if case .ok = self { return true } else { return false } }
+    }
+
+    static let networkTypes: Set<String> = ["smbfs", "afpfs", "nfs", "webdav", "ftp", "cifs", "cd9660"]
+
+    /// One plain line for each refusal, the first that applies.
+    static func verdict(_ f: Facts, need: Int64) -> Verdict {
+        if let d = f.missingDrive { return .refused("The '\(d)' drive isn't connected. Choose another place.") }
+        if f.isCloud { return .refused("This folder syncs to iCloud or another cloud. Choose one that doesn't.") }
+        if f.insideApp { return .refused("Choose a folder outside an app.") }
+        let fs = f.fsType.lowercased()
+        if !f.isLocal || networkTypes.contains(fs) {
+            return .refused("This is a network drive. Choose a drive connected to this Mac.")
+        }
+        if fs != "apfs" && fs != "hfs" {
+            return .refused("This drive is \(formatName(fs)). Choose one formatted APFS or Mac OS Extended.")
+        }
+        if f.isReadOnly { return .refused("This drive is read-only. Choose another.") }
+        if !f.isWritable { return .refused("This folder can't be written to. Choose another.") }
+        let total = need + (f.isBootVolume ? bootFloor : 0)
+        if f.freeBytes < total {
+            return .refused("Not enough space here: \(gb(f.freeBytes)) free, about \(gbUp(total)) needed.")
+        }
+        return .ok(free: f.freeBytes, need: total)
+    }
+
+    static func formatName(_ fs: String) -> String {
+        switch fs {
+        case "exfat": return "exFAT"
+        case "msdos": return "FAT (MS-DOS)"
+        case "ntfs", "ufsd_ntfs", "tuxera_ntfs", "fusefs_ntfs": return "NTFS"
+        default: return fs.isEmpty ? "in an unknown format" : fs.uppercased()
+        }
+    }
+
+    /// "120.4 GB free here · about 27 GB needed".
+    static func spaceLine(free: Int64, need: Int64) -> String {
+        "\(gb(free)) free here · about \(gbUp(need)) needed"
+    }
+
+    static func gb(_ bytes: Int64) -> String { String(format: "%.1f GB", Double(bytes) / 1e9) }
+    static func gbUp(_ bytes: Int64) -> String { "\(Int((Double(bytes) / 1e9).rounded(.up))) GB" }
+
+    /// The real facts for an existing folder. Read-only: statfs, resource values, access(2).
+    static func facts(for url: URL) -> Facts {
+        var f = Facts()
+        let path = url.standardizedFileURL.path
+        f.missingDrive = Preflight.unavailableDrive(for: path)
+        if f.missingDrive != nil { return f }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        f.isCloud = path.hasPrefix(home + "/Library/Mobile Documents") || path.hasPrefix(home + "/Library/CloudStorage")
+            || (try? url.resourceValues(forKeys: [.isUbiquitousItemKey]).isUbiquitousItem) == true
+        f.insideApp = url.standardizedFileURL.pathComponents.contains { ($0 as NSString).pathExtension.lowercased() == "app" }
+        var st = statfs()
+        if statfs(path, &st) == 0 {
+            var t = st.f_fstypename
+            f.fsType = withUnsafePointer(to: &t) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(MFSTYPENAMELEN)) { String(cString: $0) }
+            }
+            f.isReadOnly = (st.f_flags & UInt32(MNT_RDONLY)) != 0
+            f.isLocal = (st.f_flags & UInt32(MNT_LOCAL)) != 0
+            let mp = Preflight.mountPoint(of: path) ?? "/"
+            f.isBootVolume = mp == "/" || mp == "/System/Volumes/Data"
+        }
+        let keys: Set<URLResourceKey> = [.volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey]
+        if let v = try? url.resourceValues(forKeys: keys) {
+            if f.isBootVolume, let important = v.volumeAvailableCapacityForImportantUsage, important > 0 {
+                f.freeBytes = important
+            } else if let avail = v.volumeAvailableCapacity {
+                f.freeBytes = Int64(avail)
+            }
+        }
+        f.isWritable = access(path, W_OK) == 0
+        return f
+    }
+
+    /// Where the chooser opens: the last choice, else the drive with the most room that would
+    /// be accepted (its top level; the home folder when that is the Mac's own disk), else home.
+    /// The user still decides; nothing is created.
+    static func defaultDirectory(need: Int64 = Need.fresh) -> URL {
+        let fm = FileManager.default
+        if let r = remembered?.deletingLastPathComponent(), fm.fileExists(atPath: r.path) { return r }
+        let home = fm.homeDirectoryForCurrentUser
+        let vols = fm.mountedVolumeURLs(includingResourceValuesForKeys: nil, options: [.skipHiddenVolumes]) ?? []
+        var best: (URL, Int64)?
+        for v in vols {
+            // The Mac's own disk is judged by the home folder: its top level is not writable.
+            let f = facts(for: v.path == "/" ? home : v)
+            guard verdict(f, need: need).isOK else { continue }
+            if best == nil || f.freeBytes > best!.1 { best = (f.isBootVolume ? home : v, f.freeBytes) }
+        }
+        guard let pick = best?.0 else { return home }
+        let games = home.appendingPathComponent("Games")
+        return pick == home && fm.fileExists(atPath: games.path) ? games : pick
+    }
+}
+
+/// The folder chooser for Setup and Move: an open panel for folders, with one line under it that
+/// says how much room the selected drive has against what is needed, or why it can't be used.
+/// Choosing a folder that can't be used is refused in the panel, which stays open; Cancel
+/// returns nil and nothing has been written.
+@MainActor final class LocationPanel: NSObject, NSOpenSavePanelDelegate {
+    private let need: Int64
+    private let extra: (URL) -> String?
+    private let label = NSTextField(labelWithString: "")
+
+    private init(need: Int64, extra: @escaping (URL) -> String?) {
+        self.need = need; self.extra = extra
+    }
+
+    /// The "FFXI on Mac" folder for the chosen place, or nil when cancelled. `extra` adds
+    /// refusals of its own (Move: not inside the install being moved).
+    static func choose(title: String, message: String, prompt: String, need: Int64,
+                       extra: @escaping (URL) -> String? = { _ in nil }) -> URL? {
+        let d = LocationPanel(need: need, extra: extra)
+        let panel = NSOpenPanel()
+        panel.title = title
+        panel.message = message
+        panel.prompt = prompt
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.treatsFilePackagesAsDirectories = false
+        panel.directoryURL = InstallLocation.defaultDirectory(need: need)
+        d.label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        d.label.lineBreakMode = .byTruncatingTail
+        d.label.frame = NSRect(x: 0, y: 0, width: 460, height: 22)
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 30))
+        d.label.frame.origin = NSPoint(x: 10, y: 4)
+        box.addSubview(d.label)
+        panel.accessoryView = box
+        panel.isAccessoryViewDisclosed = true
+        panel.delegate = d
+        d.show(panel.directoryURL)
+        let ok = panel.runModal() == .OK
+        panel.delegate = nil
+        guard ok, let url = panel.url else { return nil }
+        // The panel validated it; a drive that went away since is refused here.
+        guard d.verdict(url).isOK else { return nil }
+        return InstallLocation.folder(for: url)
+    }
+
+    private func verdict(_ url: URL) -> InstallLocation.Verdict {
+        if let why = extra(url) { return .refused(why) }
+        return InstallLocation.verdict(InstallLocation.facts(for: url), need: need)
+    }
+
+    private func show(_ url: URL?) {
+        guard let url else { label.stringValue = ""; return }
+        let v = verdict(url)
+        label.stringValue = v.line
+        label.textColor = v.isOK ? .secondaryLabelColor : .systemRed
+    }
+
+    func panelSelectionDidChange(_ sender: Any?) {
+        let p = sender as? NSOpenPanel
+        show(p?.url ?? p?.directoryURL)
+    }
+
+    func panel(_ sender: Any, didChangeToDirectoryURL url: URL?) {
+        if (sender as? NSOpenPanel)?.url == nil { show(url) }
+    }
+
+    func panel(_ sender: Any, validate url: URL) throws {
+        if case .refused(let why) = verdict(url) {
+            throw NSError(domain: "FFXIOnMac.location", code: 1, userInfo: [NSLocalizedDescriptionKey: why])
+        }
+    }
+}

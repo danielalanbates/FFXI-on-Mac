@@ -34,27 +34,35 @@ enum Bootstrap {
         )
     }
 
-    /// Where the wrapper is built. `~/Applications` rather than `/Applications` because it needs
-    /// no admin rights, and because `Install.discover()` already looks there.
-    static var wrapperURL: URL {
-        target ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Applications/FFXI on Mac Wine.app")
-    }
-
-    /// Set by the main button's Install Wine when the selected wrapper is the one whose wine is
-    /// missing: its wine is replaced in place, its prefix and game untouched (G11). nil: build
-    /// the default wrapper.
+    /// The wrapper to build, or whose Wine to replace. Setup decides it and nothing else does:
+    /// `<chosen>/FFXI on Mac/FFXI on Mac Wine.app` for a new install (the user picked the place
+    /// in `LocationPanel`; Daniel, 2026-10-15: "i want to choose"), or the selected wrapper when
+    /// only its Wine is missing (its prefix and game untouched, G11). nil: nothing has been
+    /// chosen, and `run` builds nothing. There is no default location any more: until b60 it was
+    /// `~/Applications/FFXI on Mac Wine.app`, made without asking (discovery still finds one).
     static var target: URL?
 
     static var prefixName: String { "prefix10" }
 
-    static var isBuilt: Bool {
+    /// The target already has a working Wine.
+    static func isBuilt(_ wrapper: URL) -> Bool {
         FileManager.default.isExecutableFile(
-            atPath: wrapperURL.appendingPathComponent("Contents/SharedSupport/wine/bin/wine").path)
+            atPath: wrapper.appendingPathComponent("Contents/SharedSupport/wine/bin/wine").path)
+    }
+
+    /// The target is an existing wrapper (it has its SharedSupport): only its Wine is replaced.
+    static var repairsInPlace: Bool {
+        target.map { FileManager.default.fileExists(atPath: $0.appendingPathComponent("Contents/SharedSupport").path) } ?? false
     }
 
     /// The install this bootstrap produces, whether or not the game is in it yet.
-    static var install: Install { Install(wrapper: wrapperURL, prefixName: prefixName) }
+    static var install: Install? { target.map { Install(wrapper: $0, prefixName: prefixName) } }
+
+    /// The downloads and the unpacking, beside the wrapper (same drive, so the last step is a
+    /// rename, and nothing lands anywhere the user did not choose). Removed once Wine is built.
+    static func workDir(for wrapper: URL) -> URL {
+        wrapper.deletingLastPathComponent().appendingPathComponent(".ffxi-on-mac-setup", isDirectory: true)
+    }
 
     // MARK: - Steps
 
@@ -74,7 +82,7 @@ enum Bootstrap {
             switch self {
             case .rosetta:  return "Apple's translation layer. FFXI is a 32-bit Intel game."
             case .download: return "Two files, about 250 MB, from Sikarugir's GitHub releases."
-            case .assemble: return "Unpacking them into ~/Applications, and fixing wine's dylib paths."
+            case .assemble: return "Unpacking them into the folder you chose, and fixing Wine's library links."
             case .prefix:   return "A blank C: drive for the game to install into."
             }
         }
@@ -88,19 +96,20 @@ enum Bootstrap {
     /// Throws on the first genuine failure with a message worth showing to a player.
     static func run(log: @escaping @Sendable (String) -> Void,
                     step: @escaping @Sendable (Step) -> Void) async throws {
+        guard let wrapperURL = target else {
+            throw Err("Choose where FFXI on Mac goes first: press Setup.")
+        }
 
         step(.rosetta)
         try await ensureRosetta(log: log)
 
         step(.download)
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ffxi-on-mac-setup", isDirectory: true)
-        try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let work = workDir(for: wrapperURL)
+        let templateTar = work.appendingPathComponent("template.tar.xz")
+        let engineTar   = work.appendingPathComponent("engine.tar.xz")
 
-        let templateTar = tmp.appendingPathComponent("template.tar.xz")
-        let engineTar   = tmp.appendingPathComponent("engine.tar.xz")
-
-        if !isBuilt {
+        if !isBuilt(wrapperURL) {
+            try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
             try await download(Asset.template.url, to: templateTar,
                                expecting: Asset.template.bytes, label: "wrapper template", log: log)
             try await download(Asset.engine.url, to: engineTar,
@@ -115,13 +124,15 @@ enum Bootstrap {
             }
 
             step(.assemble)
-            try assemble(template: templateTar, engine: engineTar, log: log)
+            try assemble(template: templateTar, engine: engineTar, into: wrapperURL, work: work, log: log)
+            // Our own downloads, now unpacked: kept on a failure above so a second press resumes.
+            try? FileManager.default.removeItem(at: work)
         } else {
             log("wine is already installed at \(wrapperURL.path)")
         }
 
         step(.prefix)
-        try await bootPrefix(log: log)
+        try await bootPrefix(Install(wrapper: wrapperURL, prefixName: prefixName), log: log)
         log("")
         log("Wine is ready. Close this; the main button shows the next step.")
     }
@@ -201,11 +212,10 @@ enum Bootstrap {
 
     // MARK: - Step 3: assemble
 
-    private static func assemble(template: URL, engine: URL,
+    private static func assemble(template: URL, engine: URL, into wrapperURL: URL, work: URL,
                                  log: @escaping @Sendable (String) -> Void) throws {
         let fm = FileManager.default
-        let staging = fm.temporaryDirectory.appendingPathComponent("ffxi-on-mac-staging",
-                                                                   isDirectory: true)
+        let staging = work.appendingPathComponent("staging", isDirectory: true)
         try? fm.removeItem(at: staging)
         try fm.createDirectory(at: staging, withIntermediateDirectories: true)
 
@@ -284,8 +294,7 @@ enum Bootstrap {
 
     // MARK: - Step 4: the prefix
 
-    private static func bootPrefix(log: @escaping @Sendable (String) -> Void) async throws {
-        let i = install
+    private static func bootPrefix(_ i: Install, log: @escaping @Sendable (String) -> Void) async throws {
         // system.reg, not drive_c: a wineboot that was killed half way leaves drive_c without it.
         if FileManager.default.fileExists(atPath: i.systemReg.path) {
             log("the Windows drive already exists")

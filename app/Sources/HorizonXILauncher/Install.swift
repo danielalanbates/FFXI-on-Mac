@@ -298,13 +298,15 @@ struct Install: Identifiable, Hashable {
     private static let key = "install.last"
 
     /// The install used last time, if it is still on disk. Lets the UI be usable before the
-    /// volume scan finishes.
-    static func remembered() -> Install? {
-        guard let s = UserDefaults.standard.string(forKey: key) else { return nil }
+    /// volume scan finishes. Its prefix is what must be there, not the game: right after Setup
+    /// builds Wine in the chosen folder the game is not downloaded yet, and that install (not
+    /// an older one with a game elsewhere) is the one being set up.
+    static func remembered(_ defaults: UserDefaults = .standard) -> Install? {
+        guard let s = defaults.string(forKey: key) else { return nil }
         let parts = s.components(separatedBy: "#")
         guard parts.count == 2 else { return nil }
         let i = Install(wrapper: URL(fileURLWithPath: parts[0]), prefixName: parts[1])
-        return FileManager.default.fileExists(atPath: i.gameDir.path) ? i : nil
+        return FileManager.default.fileExists(atPath: i.prefix.path) ? i : nil
     }
 
     /// The remembered install's wrapper, from defaults alone: nothing on disk is checked, so
@@ -325,25 +327,10 @@ struct Install: Identifiable, Hashable {
     /// Deliberately shallow: a full-disk crawl on an 8GB machine is not worth it.
     static func discover() -> [Install] {
         let fm = FileManager.default
-        var roots: [URL] = [
-            URL(fileURLWithPath: "/Applications"),
-            fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications"),
-            // Wrapper apps are large, so people keep them with their games rather than in
-            // /Applications. Missing this one is why the launcher was running the copy on an
-            // external drive while an identical install sat on the internal SSD.
-            fm.homeDirectoryForCurrentUser.appendingPathComponent("Games"),
-            // Downloads is deliberately *not* scanned -- see `tccGatedNames`. An install that
-            // really is in Downloads is reached by the "Choose install…" button instead.
-        ]
-        if let vols = try? fm.contentsOfDirectory(at: URL(fileURLWithPath: "/Volumes"),
-                                                  includingPropertiesForKeys: nil) {
-            roots.append(contentsOf: vols)
-        }
-
         var found: [Install] = []
         var seen = Set<String>()
 
-        for root in roots {
+        for root in discoveryRoots() {
             // depth 4: "Video Games/Mac/FFXI/siku.app" on an external drive is four deep.
             for app in appsUnder(root, depth: 4) {
                 guard seen.insert(app.path).inserted else { continue }
@@ -382,6 +369,29 @@ struct Install: Identifiable, Hashable {
             if ea != eb { return !ea }
             return a.prefixName < b.prefixName
         }
+    }
+
+    /// Where `discover()` looks, in order. The folder Setup was told to use comes first: it
+    /// can be anywhere the user chose, deeper than the shallow scan below reaches.
+    static func discoveryRoots(location: URL? = InstallLocation.remembered) -> [URL] {
+        let fm = FileManager.default
+        var roots: [URL] = []
+        if let l = location, fm.fileExists(atPath: l.path) { roots.append(l) }
+        roots += [
+            URL(fileURLWithPath: "/Applications"),
+            fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications"),
+            // Wrapper apps are large, so people keep them with their games rather than in
+            // /Applications. Missing this one is why the launcher was running the copy on an
+            // external drive while an identical install sat on the internal SSD.
+            fm.homeDirectoryForCurrentUser.appendingPathComponent("Games"),
+            // Downloads is deliberately *not* scanned -- see `tccGatedNames`. An install that
+            // really is in Downloads is reached by the "Choose install…" button instead.
+        ]
+        if let vols = try? fm.contentsOfDirectory(at: URL(fileURLWithPath: "/Volumes"),
+                                                  includingPropertiesForKeys: nil) {
+            roots.append(contentsOf: vols)
+        }
+        return roots
     }
 
     /// Every install a given wrapper .app holds, whether or not it sits anywhere `discover()`
