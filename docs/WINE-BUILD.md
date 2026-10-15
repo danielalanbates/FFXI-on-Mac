@@ -26,7 +26,43 @@ strip, because a silent one-second exit after login is the least debuggable fail
 has produced twice now.
 
 **So wine-coop is no longer optional.** It arrived as an x87 experiment; it is now the only wine
-that plays. `/Volumes/Games/FFXI/wine-coop/` — 700 MB, per machine, not in the app bundle.
+that plays. 1.1 GB unpacked, per machine, not in the app bundle.
+
+## Where Setup gets it (b60)
+
+The main button's Setup installs it, after Wine and before the game download, with
+`scripts/game-wine.sh install "<chosen>/FFXI on Mac"` → `<chosen>/FFXI on Mac/wine-coop/wine/bin/wine`.
+The pin lives in that script and nowhere else:
+
+| | |
+| --- | --- |
+| release | athei/wine-build `cx-26.3.0-1` |
+| URL | `https://github.com/athei/wine-build/releases/download/cx-26.3.0-1/wine-cx-26.3.0-1-macos-x86_64.tar.xz` |
+| size | 203,696,924 bytes |
+| SHA-256 | `ec2a9e4d438917a26e381c01367773df79c3b0d6f0504b8183464619cad7e661` (GitHub's asset digest; a fresh download matched it) |
+| layout | top level `wine/` (`wine/bin/wine`, `wine/bin/wineserver`, …): 3,692 files, 1.13 GB |
+
+curl, resumable (`-C -`, five attempts, a stalled minute ends an attempt); size and SHA-256 are
+checked **before** anything is unpacked; `/usr/bin/tar` unpacks into a temp folder beside
+`wine-coop` and one rename puts it in place; the tarball is deleted once unpacked. A download that
+does not match is deleted and nothing else changes. Its progress is the main button's
+"Setting up… N%". It is x86_64 and unsigned, so it needs Rosetta 2, which Setup installs first
+(macOS's administrator prompt) when `arch -x86_64 /usr/bin/true` fails.
+
+**Is it the wine that was measured?** Checked 2026-10-15: every one of its 3,692 files was hashed
+against the copy HorizonXI was measured on (`/Volumes/x10/Video Games/Mac/FFXI/wine-coop/wine`,
+read-only). 3,691 are identical, `bin/wine` (`a84a059a…`), `bin/wineserver` (`395e30e7…`),
+`lib/wine/x86_64-unix/*.so` and `lib/wine/i386-windows/*.dll` included, and so are its 4 symlinks.
+The one difference is `lib/external/libMoltenVK.dylib`: that copy holds MoltenVK 1.4.2
+(`aef00b13…`, the same file as `vendor/libMoltenVK-1.4.2.dylib`) with the release's own kept
+beside it as `libMoltenVK.dylib.bak-pre-1.4.2` (`02adfe96…`, identical to the release). That swap
+is the launcher's own `Renderer.upgradeCoopMoltenVK`, which Play on the default Metal renderer
+(DXVK) applies to whichever wine-coop it finds, so a fresh download becomes the same tree on its
+first Play.
+
+`X87Sidecar.patchedWine()` looks in the remembered "FFXI on Mac" folder first, then the places it
+was installed by hand before b60 (`/Volumes/Games/FFXI/wine-coop`, Application Support's
+`ffxi-runtime/wine-coop`, and two x10 paths), so existing installs keep the copy they have.
 
 ## `--play` works again, with one condition
 

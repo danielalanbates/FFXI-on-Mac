@@ -140,7 +140,7 @@ for required in \
   "$VANAVOICE_SOURCE/vanavoice.lua" "$VANAVOICE_LICENSE" \
   "$WINECURSOR_SOURCE/winecursor.lua" \
   "$REPO/scripts/install.sh" "$REPO/scripts/fix-wine-rpath.sh" \
-  "$REPO/scripts/lsb-server.sh" "$REPO/scripts/update-client.sh" \
+  "$REPO/scripts/lsb-server.sh" "$REPO/scripts/update-client.sh" "$REPO/scripts/game-wine.sh" \
   "$REPO/scripts/catseye-launcher.sh" "$REPO/scripts/retail-client.sh" \
   "$REPO/vendor/dxvk.conf" "$REPO/LICENSE" \
   "$REPO/vendor/licenses/README.txt" "$REPO/vendor/licenses/d3d8to9-BSD-3-Clause.txt" \
@@ -167,6 +167,7 @@ cp "$REPO/scripts/install.sh"        "$APP/Contents/Resources/install.sh"
 cp "$REPO/scripts/fix-wine-rpath.sh" "$APP/Contents/Resources/fix-wine-rpath.sh"
 cp "$REPO/scripts/lsb-server.sh"     "$APP/Contents/Resources/lsb-server.sh"
 cp "$REPO/scripts/update-client.sh"  "$APP/Contents/Resources/update-client.sh"
+cp "$REPO/scripts/game-wine.sh"      "$APP/Contents/Resources/game-wine.sh"
 cp "$HERE/Resources/apply-update.sh" "$APP/Contents/Resources/apply-update.sh"
 cp "$REPO/scripts/catseye-launcher.sh" "$APP/Contents/Resources/catseye-launcher.sh"
 cp "$REPO/scripts/retail-client.sh"    "$APP/Contents/Resources/retail-client.sh"

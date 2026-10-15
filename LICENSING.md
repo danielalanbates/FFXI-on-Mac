@@ -35,7 +35,8 @@ neither can anyone else who republishes it. Full texts of everything the app bun
 | `addons/gmtools` (SQLCommit) | MIT | in the repo only, **not bundled** |
 | `patches/lsb-linkshell-zone-backlog.patch` | GPL-3.0 (LandSandBoat derivative) | in the repo only |
 | Ashita v4 + server plugins | GPL-3.0 / each server's terms | **no** — comes with the server's client install |
-| wine: Sikarugir 10.0 (*Install wine…*), athei `wine-cx` (Play's patched wine) | LGPL 2.1 | **no** — fetched from the upstream release or already on the Mac |
+| wine: Sikarugir 10.0 (*Install wine…*) | LGPL 2.1 | **no** — fetched by Setup from Sikarugir's own GitHub releases on the user's Mac |
+| wine: athei `wine-cx-26.3.0-1` ("wine-coop", the game's Wine) | LGPL 2.1 | **no** — fetched by `scripts/game-wine.sh` from athei/wine-build's own GitHub release on the user's Mac (pinned size and SHA-256), or already on the Mac |
 | aria2 1.35.0 (`aria2c`, HorizonXI's torrents) | GPL-2.0-or-later | **no** — Homebrew's if installed, else fetched by `update-client.sh` from aria2's own GitHub release on the user's Mac (pinned SHA-256; its `COPYING` kept beside it) |
 | CrossOver itself (the app, its proprietary add-ons) | proprietary, commercial | **no** — never used or shipped |
 | FFXI game data | Square Enix, all rights reserved | **no** — never |
@@ -50,8 +51,12 @@ because the wrapper's own wine drops the client a second after login (`docs/WINE
 built from that published source, so it is LGPL like any other wine. What is proprietary is
 CrossOver the product, not the wine source. This project redistributes no wine binary at all:
 *Install wine…* downloads Sikarugir's LGPL build from Sikarugir's own GitHub releases on the user's
-Mac, and the patched wine is looked for where it is already installed. Shipping either one inside
-our image would bring the LGPL's source/relink obligations with it.
+Mac, and since b60 Setup fetches the patched wine the same way: `scripts/game-wine.sh` downloads
+`wine-cx-26.3.0-1-macos-x86_64.tar.xz` from athei/wine-build's own release (pinned there by size and
+SHA-256, the aria2 model) into the folder the user chose, or it is found where it is already
+installed. Its source is CodeWeavers' published LGPL source and athei/wine-build's build scripts,
+both public. Shipping either wine inside our image would bring the LGPL's source/relink
+obligations with it.
 
 ## On "it's on GitHub with an open licence, so it's safe"
 
