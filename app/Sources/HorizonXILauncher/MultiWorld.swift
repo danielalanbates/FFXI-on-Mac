@@ -525,29 +525,41 @@ enum MultiWorld {
 
     /// 8 GB Mac: two clients plus LSB took HorizonXI to 0.4 fps on 2026-09-25/26. A warning,
     /// never a block.
-    static func memoryWarning(swapUsedFraction: Double, freePercent: Int) -> String? {
-        guard swapUsedFraction > 0.6 || freePercent < 20 else { return nil }
-        return "Memory is short (swap \(Int((swapUsedFraction * 100).rounded()))% used, "
-             + "\(freePercent)% free). A second client on this Mac may run at a few fps or slow "
-             + "down the one already playing. Starting anyway."
+    ///
+    /// With no other client running the same thresholds apply, plus a floor on the swap clause:
+    /// macOS grows swap a gigabyte at a time to fit what is in it, so the used fraction sits
+    /// above 60% whenever anything is swapped (2.5 of 3 GB, 53% free, on an idle 2026-10-14
+    /// launcher). The single-client collapses on record were at 4.6-6.7 GB of swap
+    /// (CHECKPOINT-2026-09-26, MACOS-27-PERFORMANCE), so below 4 GB the line would be noise.
+    static func memoryWarning(swapUsedFraction: Double, freePercent: Int,
+                              swapUsedBytes: UInt64 = .max, othersRunning: Bool = true) -> String? {
+        let swapHeavy = swapUsedFraction > 0.6 && (othersRunning || swapUsedBytes >= 4 << 30)
+        guard swapHeavy || freePercent < 20 else { return nil }
+        if othersRunning {
+            return "Memory is low (swap \(Int((swapUsedFraction * 100).rounded()))% used) — "
+                 + "a second client may run at a few fps."
+        }
+        let gb = swapUsedBytes == .max ? "" : String(format: " (%.1f GB in swap)", Double(swapUsedBytes) / Double(1 << 30))
+        return "Memory is low\(gb) — the game may stutter."
     }
 
-    /// Swap used as a fraction of swap in use, and the kernel's free-memory percentage (what
-    /// `memory_pressure` prints as "System-wide memory free percentage").
-    static func memorySnapshot() -> (swapUsedFraction: Double, freePercent: Int) {
+    /// Swap used as a fraction of swap in use, swap used in bytes, and the kernel's free-memory
+    /// percentage (what `memory_pressure` prints as "System-wide memory free percentage").
+    static func memorySnapshot() -> (swapUsedFraction: Double, swapUsedBytes: UInt64, freePercent: Int) {
         var swap = xsw_usage()
         var size = MemoryLayout<xsw_usage>.size
-        let swapFraction = sysctlbyname("vm.swapusage", &swap, &size, nil, 0) == 0 && swap.xsu_total > 0
-            ? Double(swap.xsu_used) / Double(swap.xsu_total) : 0
+        let ok = sysctlbyname("vm.swapusage", &swap, &size, nil, 0) == 0
+        let swapFraction = ok && swap.xsu_total > 0 ? Double(swap.xsu_used) / Double(swap.xsu_total) : 0
         var level: Int32 = 100
         var lsize = MemoryLayout<Int32>.size
         if sysctlbyname("kern.memorystatus_level", &level, &lsize, nil, 0) != 0 { level = 100 }
-        return (swapFraction, Int(level))
+        return (swapFraction, ok ? swap.xsu_used : 0, Int(level))
     }
 
-    static func currentMemoryWarning() -> String? {
+    static func currentMemoryWarning(othersRunning: Bool = true) -> String? {
         let m = memorySnapshot()
-        return memoryWarning(swapUsedFraction: m.swapUsedFraction, freePercent: m.freePercent)
+        return memoryWarning(swapUsedFraction: m.swapUsedFraction, freePercent: m.freePercent,
+                             swapUsedBytes: m.swapUsedBytes, othersRunning: othersRunning)
     }
 }
 

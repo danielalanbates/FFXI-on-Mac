@@ -126,7 +126,8 @@ final class LocalServer: ObservableObject {
         self.refreshing = false
     }
 
-    private static func localLoginPortResponds() async -> Bool {
+    /// Is the local login server accepting connections? A loopback connect: instant either way.
+    static func localLoginPortResponds() async -> Bool {
         await Task.detached(priority: .utility) {
             let fd = Darwin.socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
             guard fd >= 0 else { return false }

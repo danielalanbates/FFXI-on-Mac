@@ -1,8 +1,9 @@
 import Foundation
 
 /// `--selftest-perf`: the play-time performance rules, headless. The x87 guard's decision and
-/// failure markers, sidecar detection in a process scan, dxvk.conf placement, the registry
-/// values pre-launch setup skips. Nothing is
+/// failure markers, sidecar detection in a process scan, dxvk.conf placement, the play-time
+/// warnings, the local world's graphics seed, the registry values pre-launch setup skips.
+/// Nothing is
 /// launched; files go to a temporary folder and defaults writes to a scratch domain, both deleted
 /// afterwards, never the launcher's own.
 extension Headless {
@@ -110,6 +111,30 @@ extension Headless {
                        env["DXVK_CONFIG_FILE"] == #"C:\dxvk-cache\dxvk.conf"#
                            && env["DXVK_STATE_CACHE_PATH"] == #"C:\dxvk-cache"#))
 
+        // Play-time checks: nothing when fine, one short line when real.
+        checks.append(("Low Power Mode: one line when on, nothing when off",
+                       PlayCheck.lowPower(true) == PlayCheck.lowPowerLine && PlayCheck.lowPower(false) == nil))
+        checks.append(("heat: a line only when macOS throttles (serious/critical)",
+                       PlayCheck.thermal(.nominal) == nil && PlayCheck.thermal(.fair) == nil
+                           && PlayCheck.thermal(.serious) != nil && PlayCheck.thermal(.critical) != nil))
+        let gb: UInt64 = 1 << 30
+        checks.append(("memory, single client: silent at 2.5 GB swap (81% of 3 GB) with 53% free",
+                       MultiWorld.memoryWarning(swapUsedFraction: 0.81, freePercent: 53,
+                                                swapUsedBytes: gb * 5 / 2, othersRunning: false) == nil))
+        checks.append(("memory, single client: a line at 4.6 GB swap, or under 20% free",
+                       MultiWorld.memoryWarning(swapUsedFraction: 0.9, freePercent: 40,
+                                                swapUsedBytes: gb * 46 / 10, othersRunning: false)
+                           == "Memory is low (4.6 GB in swap) — the game may stutter."
+                           && MultiWorld.memoryWarning(swapUsedFraction: 0.1, freePercent: 15,
+                                                       swapUsedBytes: 0, othersRunning: false) != nil))
+        checks.append(("memory, second client: the existing thresholds, second-client wording",
+                       MultiWorld.memoryWarning(swapUsedFraction: 0.64, freePercent: 46)?.contains("second client") == true
+                           && MultiWorld.memoryWarning(swapUsedFraction: 0.6, freePercent: 20) == nil))
+        checks.append(("every play-time line is one short line",
+                       [PlayCheck.lowPowerLine, PlayCheck.thermalLine, PlayCheck.localServerLine,
+                        MultiWorld.memoryWarning(swapUsedFraction: 0.9, freePercent: 10) ?? ""]
+                           .allSatisfy { !$0.contains("\n") && $0.count <= 80 }))
+
         // Graphics: the local world's small default is a window size, never lower quality.
         var lowQuality = GraphicsSettings.lowSpec
         lowQuality.width = GraphicsSettings.max4K.width
@@ -169,6 +194,8 @@ extension Headless {
             print("  i    this Mac's prefix (\(i.prefixName)): Metal setup would write "
                   + (missing.isEmpty ? "no registry values" : missing.map(\.1).joined(separator: ", ")))
         }
+        let now = PlayCheck.current(othersRunning: false)
+        print("  i    play-time lines on this Mac right now: \(now.isEmpty ? "none" : now.joined(separator: " | "))")
         print(failures == 0 ? "all checks passed" : "\(failures) FAILED")
         exit(failures == 0 ? 0 : 1)
     }

@@ -162,6 +162,8 @@ struct ContentView: View {
     @State private var installingExtra = ""
     @State private var addonWarning = ""
     @State private var notice = ""
+    /// Play was pressed on a hosted world while the local server runs: one line and a button.
+    @State private var localServerSlowing = false
     /// One update attempt per Play press chain; a second Play retries.
     @State private var updateChecked = false
     @State private var scanning = false
@@ -224,6 +226,7 @@ struct ContentView: View {
                 + (f.contains("Invalid") ? " Check the account name and password — accounts are created on the server's own site or through its loader, not here." : "")
         }
         .onChange(of: store.selectedID) { _ in
+            localServerSlowing = false
             if store.selected?.local == true { local.refresh() }
             // Recall the account last used on this world — accounts are per server, so the
             // HorizonXI login is wrong the moment CatsEye (or any other world) is picked.
@@ -1302,6 +1305,16 @@ struct ContentView: View {
             if !notice.isEmpty {
                 Text(notice).font(.system(size: 12)).foregroundStyle(Vana.gold)
             }
+            if localServerSlowing {
+                HStack(spacing: 8) {
+                    Text(PlayCheck.localServerLine).font(.system(size: 12)).foregroundStyle(Vana.gold)
+                    Button("Stop local server") {
+                        local.stop(log: { runner.appendLine($0) }) { ok in if ok { localServerSlowing = false } }
+                    }
+                    .font(.system(size: 12))
+                    .disabled(local.busy)
+                }
+            }
 
             Rectangle().fill(Vana.stroke).frame(height: 1)
 
@@ -1782,6 +1795,7 @@ struct ContentView: View {
             return
         }
         notice = ""
+        localServerSlowing = false
         updateChecked = false
         Credentials.setUsername(user, forWorld: store.selected?.name ?? "")
         Credentials.remember = remember
@@ -1925,10 +1939,13 @@ struct ContentView: View {
                 }
             }
         }
-        // Two clients plus LSB on this 8 GB Mac is where frame rates collapse; say so, then go.
-        if !LiveClients.scan().isEmpty, let w = MultiWorld.currentMemoryWarning() {
-            notice = w
-            r.appendLine("!! " + w)
+        // What about the Mac will slow the game: Low Power Mode, memory (two clients plus LSB on
+        // this 8 GB Mac is where frame rates collapse), heat. One line each, only when real, and
+        // never a reason not to play.
+        let warnings = PlayCheck.current(othersRunning: !LiveClients.scan().isEmpty)
+        if !warnings.isEmpty {
+            notice = warnings.joined(separator: "\n")
+            for w in warnings { r.logFileOnly("!! " + w) }
         }
         if let why = r.launch(i, perf: effective, profile: server.bootProfile, useX87: server.x87,
                               world: server.name, host: server.host,
@@ -1938,6 +1955,23 @@ struct ContentView: View {
         } else {
             // Fresh progress for this session, fetched by the launcher, never by the game.
             ra.refresh(.play, gameDir: i.gameDir, log: { r.appendLine($0) })
+            if !server.local { checkLocalServerBeside(r) }
+        }
+    }
+
+    /// A hosted world was just started while the local server (about 1 GB, and the measured cause
+    /// of hosted stutter) is still up. Offer to stop it, unless a local client is playing on it.
+    /// After the launch, off the main actor: a loopback connect and one process scan.
+    private func checkLocalServerBeside(_ r: Runner) {
+        let localWorlds = Set(store.servers.filter(\.local).map(\.name))
+        Task {
+            guard await LocalServer.localLoginPortResponds() else { return }
+            let localClient = await Task.detached {
+                LiveClients.snapshot().clients.contains { $0.host == "127.0.0.1" }
+            }.value
+            guard !localClient, !sessions.live.contains(where: { localWorlds.contains($0.world) }) else { return }
+            localServerSlowing = true
+            r.logFileOnly("!! " + PlayCheck.localServerLine)
         }
     }
 
