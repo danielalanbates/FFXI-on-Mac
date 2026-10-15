@@ -74,6 +74,9 @@ end_session() {
   while kill -0 $pid 2>/dev/null && (( n < 60 )); do sleep 0.5; n=$((n + 1)); done
   kill $pid 2>/dev/null || true
 }
+# Stop or Quit in the launcher (SIGTERM): this prefix's session ends too, so nothing this script
+# started -- a regsvr32 waiting on explorer -- is left running. Silent: nobody may be reading.
+trap 'end_session; exit 143' TERM INT HUP
 
 [[ -x "$WINE" ]] || die "Wine isn't installed in $APP — press Setup."
 [[ -d "$GAME_DIR" ]] || die "The game isn't installed yet (no $GAME_DIR) — press Setup."

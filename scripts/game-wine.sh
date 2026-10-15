@@ -75,6 +75,8 @@ mkdir -p "$dl" || die "Couldn't make a folder in $root. Nothing was changed."
 # A Stop during an unpack leaves its temp folder: ours, by name, and never complete.
 unpack=""
 trap '[[ -n "$unpack" ]] && /bin/rm -rf "$unpack"' EXIT
+# Without a trap of its own, a Stop (SIGTERM) would skip the EXIT trap and leave the folder.
+trap 'exit 143' TERM INT HUP
 for old in "$root"/.wine-coop-unpack.*(N/); do /bin/rm -rf "$old"; done
 
 if (( have < WINE_BYTES )); then

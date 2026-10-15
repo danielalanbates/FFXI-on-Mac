@@ -39,6 +39,8 @@ LOG="$F/calls.log"
 cat > "$stubs/wine" <<'EOF'
 #!/bin/zsh
 print -r -- "wine $*" >> "$STUB_LOG"
+# STUB_WINE_HANG: regsvr32 never answers, like the one that waited on a crash-looping explorer.
+[[ -n "${STUB_WINE_HANG:-}" && "${1:-}" == regsvr32 ]] && { /bin/sleep 60; exit 0; }
 if [[ "${1:-}" == regsvr32 ]]; then
   dll="${3##*\\}"
   for spec in ${=STUB_REGSVR32_FAIL:-}; do
@@ -121,7 +123,7 @@ export STUB_LOG="$LOG" STUB_API="$F/api" STUB_SEED="$F/seed"
 SAFE_PATH="$stubs:/usr/bin:/bin:/usr/sbin:/sbin"
 run() { env -i HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" PATH="${RUN_PATH:-$SAFE_PATH}" STUB_LOG="$STUB_LOG" STUB_API="$STUB_API" \
           STUB_SEED="$STUB_SEED" STUB_REGSVR32_FAIL="${STUB_REGSVR32_FAIL:-}" STUB_OFFLINE="${STUB_OFFLINE:-}" \
-          STUB_ARIA2_FAIL="${STUB_ARIA2_FAIL:-}" STUB_SLOW_UNZIP="${STUB_SLOW_UNZIP:-}" HXI_WINE="${HXI_WINE:-}" HXI_ARIA2C="${HXI_ARIA2C:-}" \
+          STUB_ARIA2_FAIL="${STUB_ARIA2_FAIL:-}" STUB_SLOW_UNZIP="${STUB_SLOW_UNZIP:-}" STUB_WINE_HANG="${STUB_WINE_HANG:-}" HXI_WINE="${HXI_WINE:-}" HXI_ARIA2C="${HXI_ARIA2C:-}" \
           HXI_TOOLS="${HXI_TOOLS:-$F/tools}" HXI_ARIA2_URL="${HXI_ARIA2_URL:-}" HXI_GAME_WINE_URL="${HXI_GAME_WINE_URL:-}" \
           HXI_GAME_WINE_BYTES="${HXI_GAME_WINE_BYTES:-}" HXI_GAME_WINE_SHA256="${HXI_GAME_WINE_SHA256:-}" "$@"; }
 
@@ -487,6 +489,37 @@ if [[ -x "${HXI_LAUNCHER_BIN:-}" ]]; then
 else
   print "  skip (set HXI_LAUNCHER_BIN to a built HorizonXILauncher)"
 fi
+
+print "31. Stop and Quit (SIGTERM to what the job started, then to the job, as JobKill sends it)"
+# Only this test's own processes: the background job started here and what it started.
+kill_tree() {
+  local root=$1 i k; local -a q=($1) all=()
+  while (( ${#q} )); do
+    for k in $(/usr/bin/pgrep -P ${q[1]}); do all+=($k); q+=($k); done
+    shift q
+  done
+  for (( i = ${#all}; i > 0; i-- )); do kill -TERM ${all[i]} 2>/dev/null; done
+  kill -TERM $root 2>/dev/null
+}
+wait_for() { local n=0; until eval "$1" || (( n++ >= 100 )); do sleep 0.1; done; }
+make_wrapper; : > "$LOG"; make_client "$GAME" 2.0.4
+STUB_WINE_HANG=1 run /bin/zsh "$INSTALL" "$APP" prefix10 > "$F/stop-install.txt" 2>&1 &
+job=$!
+wait_for "grep -q '^wine regsvr32' '$LOG'"
+kill_tree $job; wait $job; rc=$?
+sleep 0.5
+check "install.sh stopped at a hung regsvr32: ends (rc $rc) with a 'wineserver -k' after it" \
+  "(( rc != 0 )) && sed -n '/^wine regsvr32/,\$p' '$LOG' | grep -q '^wineserver -k'"
+check "... nothing of it left running" "! /usr/bin/pgrep -f 'stop-install|$INSTALL' >/dev/null && [[ ! -e '$MARKER' ]]"
+make_wrapper; : > "$LOG"
+STUB_SLOW_UNZIP=1 run /bin/zsh "$UPDATE" install "$GAME" > "$F/stop-update.txt" 2>&1 &
+job=$!
+wait_for "[[ -e '$GAME/updates/.base-extract/.stub-half' ]]"
+kill_tree $job; wait $job; rc=$?
+sleep 0.5
+check "update-client.sh stopped mid-unzip (rc $rc): its half-unpacked folder is gone" \
+  "(( rc != 0 )) && [[ ! -e '$GAME/updates/.base-extract' && -f '$GAME/updates/HorizonXI.zip' ]]"
+check "... the next press carries on from the zip" "out=\$(run /bin/zsh '$UPDATE' install '$GAME' 2>&1) && [[ -f '$GAME/Ashita-cli.exe' ]]"
 
 print "20. the scripts' user-facing lines never say restart"
 check "no 'restart' in install.sh, update-client.sh or game-wine.sh messages" "! grep -niE '(die|print|info|say)[^#]*restart' '$INSTALL' '$UPDATE' '$GAMEWINE'"

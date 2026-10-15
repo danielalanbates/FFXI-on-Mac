@@ -186,6 +186,9 @@ tmpd=$(mktemp -d "${TMPDIR:-/tmp}/ffxi-update.XXXXXX")
 # A Stop during an unzip leaves its half-unpacked folder (up to 15 GB): ours, and never complete.
 tmpx=""
 trap 'rm -rf "$tmpd"; [[ -n "$tmpx" ]] && rm -rf "$tmpx"' EXIT
+# zsh runs the EXIT trap on a signal only when that signal has a trap of its own: without this,
+# the launcher's Stop (SIGTERM) left the half-unpacked folder behind.
+trap 'exit 143' TERM INT HUP
 
 case "${1:-}" in
   check)
