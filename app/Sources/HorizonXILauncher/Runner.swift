@@ -1086,6 +1086,7 @@ final class Runner: ObservableObject {
             self?.appendLine("==> injector exited \(code)")
             self?.watchGameProcess()
         }
+        if spawned == nil { x87Settled = true }
         // Keep other launches out until a scan can see this one.
         if let pid = spawned {
             lockHandedOff = true
@@ -1216,6 +1217,8 @@ final class Runner: ObservableObject {
             self.lastWindowSize = nil
             self.firstWindowSize = nil
             self.running = false
+            // No verdict once the client is gone: a later Repair's output is not the sidecar's.
+            self.x87Settled = true
             self.tailGameGone?.raise()
             self.appendLine("==> game exited")
             if let line = remembered {
