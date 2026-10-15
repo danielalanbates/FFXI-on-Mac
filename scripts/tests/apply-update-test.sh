@@ -143,6 +143,44 @@ check "failure note says why" "grep -qx 'reason=could not move the current app a
 check "marked as recurring" "grep -qx 'lasting=1' '$work/last-failure'"
 check "no leftovers beside the app" "[[ -z \$(ls '$apps' | grep -v '^FFXI-on-Mac.app\$') ]]"
 
+print "9. the old launcher was reopened meanwhile: nothing touched, nothing reopened, no note"
+setup
+# A stand-in running from the bundle's MacOS folder, as a launcher reopened from the Dock would.
+mkdir -p "$current/Contents/MacOS"
+printf '#!/bin/sh\nwhile [ ! -e "%s/stand-in.stop" ]; do /bin/sleep 0.2; done\n' "$T" > "$current/Contents/MacOS/stand-in"
+chmod +x "$current/Contents/MacOS/stand-in"
+rm -f "$T/stand-in.stop"
+"$current/Contents/MacOS/stand-in" &
+standin=$!
+helper "$(dead_pid)" "$staged" "$current" "$work" "$TEAM_REQ"; rc=$?
+: > "$T/stand-in.stop"; wait $standin 2>/dev/null
+check "exit non-zero" "(( rc != 0 ))"
+check "old app untouched" "[[ -f '$current/Contents/marker' ]]"
+check "nothing opened (it is running)" "[[ ! -e '$T/open.calls' ]]"
+check "no failure note (it offers Restart again)" "[[ ! -e '$work/last-failure' ]]"
+check "logged why" "grep -q 'the launcher was reopened during the update' '$work/apply-update.log'"
+check "no leftovers beside the app" "[[ -z \$(ls '$apps' | grep -v '^FFXI-on-Mac.app\$') ]]"
+check "staged copy kept" "[[ -d '$staged' ]]"
+check "lock released" "[[ ! -e '$work/apply.lock' ]]"
+
+print "10. launcher running from a previous copy in the work dir: the cleanup spares it"
+saved="$current"
+current="$work/previous-0.9-b3.app"
+setup
+helper "$(dead_pid)" "$staged" "$current" "$work" "$TEAM_REQ"; rc=$?
+check "exit 0" "(( rc == 0 ))"
+check "the app just opened is still there, updated" "[[ -d '$current/Contents/MacOS' && ! -e '$current/Contents/marker' ]]"
+check "previous kept as previous-1.0-b7.app" "[[ -f '$work/previous-1.0-b7.app/Contents/marker' ]]"
+print "    same, where the previous copy's name is the app's own"
+current="$work/previous-1.0-b7.app"
+setup
+helper "$(dead_pid)" "$staged" "$current" "$work" "$TEAM_REQ"; rc=$?
+check "exit 0" "(( rc == 0 ))"
+check "the app just opened is still there, updated" "[[ -d '$current/Contents/MacOS' && ! -e '$current/Contents/marker' ]]"
+check "nothing moved into the new app" "[[ \$(ls '$current') == Contents ]]"
+check "the previous app left beside it" "[[ -f \$(print -r -- '$current'.previous-*(N[1]))/Contents/marker ]]"
+current="$saved"
+
 print
 if (( fails == 0 )); then print "all checks passed"; else print "$fails FAILED"; fi
 (( fails == 0 ))

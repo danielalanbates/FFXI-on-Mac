@@ -167,6 +167,18 @@ extension Headless {
         } else {
             checks.append(("scratch defaults suite", false, true))
         }
+        // A copy run from the work dir (a kept previous copy) never replaces itself.
+        let updates = "/Users/x/Library/Application Support/HorizonXI-on-Mac/updates"
+        checks += [
+            ("a previous copy in the work dir is inside it",
+             UpdateRules.isInside(updates + "/previous-3.9-b59.app", dir: updates), true),
+            ("the installed app is not", UpdateRules.isInside("/Applications/FFXI-on-Mac.app", dir: updates), false),
+            ("a folder that merely starts the same is not",
+             UpdateRules.isInside(updates + "-old/FFXI-on-Mac.app", dir: updates), false),
+            ("a path with .. is resolved first",
+             UpdateRules.isInside(updates + "/../updates/previous-3.9-b59.app", dir: updates), true),
+        ]
+
         // What apply-update.sh leaves in last-failure.
         let lasting = UpdateRules.helperFailure(from: "reason=could not move the current app aside\ntag=v3.10\nlasting=1\n")
         let once = UpdateRules.helperFailure(from: "reason=the launcher did not quit within 60 s\ntag=v3.10\nlasting=0\n")

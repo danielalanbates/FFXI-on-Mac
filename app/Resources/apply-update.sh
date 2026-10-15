@@ -118,6 +118,13 @@ launcher_gone=1
 /usr/sbin/spctl -a -t execute "$candidate" || fail "Gatekeeper rejected the update"
 say "candidate verified"
 
+# The old launcher may have been reopened (from the Dock, say) while the update was copied and
+# checked. Renaming its bundle under it would leave it running from the previous copy, so nothing
+# is touched. Nothing is reopened either, since it is running, and it offers Restart again.
+if /usr/bin/pgrep -qf -U "$UID" "$current/Contents/MacOS/"; then
+  launcher_gone=0
+  fail "the launcher was reopened during the update"
+fi
 /bin/mv "$current" "$backup" || fail_lasting "could not move the current app aside"
 moved_current=1
 [[ ! -e "$current" ]] || fail "$current reappeared during the swap"
@@ -134,12 +141,17 @@ say "swapped in the update"
 ok=1
 say "opened $current"
 
-# Keep exactly one previous copy, outside Applications.
-for old in "$workdir"/previous*.app(N); do /bin/rm -rf "$old"; done
+# Keep exactly one previous copy, outside Applications. Never the app just opened, should the
+# launcher have been running from a previous copy in the work dir.
+for old in "$workdir"/previous*.app(N); do [[ "${old:A}" == "${current:A}" ]] || /bin/rm -rf "$old"; done
 old_version="$(/usr/bin/plutil -extract CFBundleShortVersionString raw "$backup/Contents/Info.plist" 2>/dev/null || echo unknown)"
 old_build="$(/usr/bin/plutil -extract CFBundleVersion raw "$backup/Contents/Info.plist" 2>/dev/null || echo 0)"
-if /bin/mv "$backup" "$workdir/previous-${old_version}-b${old_build}.app"; then
-  say "kept the previous app as previous-${old_version}-b${old_build}.app"
+keep="$workdir/previous-${old_version}-b${old_build}.app"
+# mv onto an existing folder would move the backup *into* it (here: into the new app).
+if [[ -e "$keep" ]]; then
+  say "${keep:t} is in the way; left the previous app at $backup"
+elif /bin/mv "$backup" "$keep"; then
+  say "kept the previous app as ${keep:t}"
 else
   say "could not move $backup out of the way; remove it by hand"
 fi

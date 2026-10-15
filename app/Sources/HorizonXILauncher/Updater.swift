@@ -500,6 +500,12 @@ enum UpdateRules {
         defaults.set(tag, forKey: rejectedKey)
     }
 
+    /// `path` is `dir` or anywhere under it (not merely a name that starts the same).
+    static func isInside(_ path: String, dir: String) -> Bool {
+        let p = (path as NSString).standardizingPath, d = (dir as NSString).standardizingPath
+        return p == d || p.hasPrefix(d.hasSuffix("/") ? d : d + "/")
+    }
+
     /// What apply-update.sh left in `last-failure` after putting the old app back.
     struct HelperFailure: Equatable {
         let reason: String
@@ -544,11 +550,14 @@ enum UpdateWork {
         return dir
     }
 
-    /// The bundle and the folder it sits in must both be writable: the helper renames it.
+    /// The bundle and the folder it sits in must both be writable: the helper renames it. A copy
+    /// run from the work dir (a kept previous copy) never replaces itself: the helper prunes
+    /// the previous copies there.
     static var canSelfUpdate: Bool {
         let p = Bundle.main.bundlePath
         let fm = FileManager.default
-        return p.hasSuffix(".app") && fm.isWritableFile(atPath: p)
+        return p.hasSuffix(".app") && !UpdateRules.isInside(p, dir: workDir().path)
+            && fm.isWritableFile(atPath: p)
             && fm.isWritableFile(atPath: (p as NSString).deletingLastPathComponent)
     }
 
