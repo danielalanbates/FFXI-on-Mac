@@ -8,6 +8,18 @@ struct Check: Identifiable {
     let title: String
     let state: State
     let detail: String
+    /// One line for the footer when this is what keeps Play grey. Empty: the title, pointing at
+    /// Setup & Diagnostics, where `detail` is.
+    var short: String = ""
+    /// Name of the drive (`/Volumes/<name>`) the failing path lives on, or passes through by a
+    /// symlink, when that drive is not there. Its own line says everything; `detail` adds paths.
+    var drive: String? = nil
+
+    /// The footer's line for a failing check.
+    var footer: String {
+        if let d = drive { return Preflight.driveMessage(d) }
+        return short.isEmpty ? "\(title) — see Setup & Diagnostics" : short
+    }
 }
 
 enum Preflight {
@@ -17,15 +29,21 @@ enum Preflight {
         var out: [Check] = []
 
         func add(_ id: String, _ title: String, _ ok: Bool, _ okText: String, _ badText: String,
-                 warnOnly: Bool = false) {
+                 warnOnly: Bool = false, short: String = "", path: String? = nil) {
+            // A missing file on a drive that is not there is the drive's problem, not the
+            // install's: say which drive, not "missing <path>" (2026-10-14: HorizonXI's SquareEnix
+            // links to /Volumes/Games, which was listed as mounted but did not resolve).
+            let drive = ok ? nil : path.flatMap { unavailableDrive(for: $0) }
             out.append(Check(id: id, title: title,
                              state: ok ? .ok : (warnOnly ? .warn : .bad),
-                             detail: ok ? okText : badText))
+                             detail: ok ? okText : drive.map { driveMessage($0) + " (\(badText))" } ?? badText,
+                             short: short, drive: drive))
         }
 
         add("volume", "Volume mounted", install.isMounted,
             install.volume?.path ?? "/",
-            "\(install.volume?.path ?? "?") is not mounted — plug the drive in")
+            "\(install.volume?.path ?? "?") is not mounted",
+            path: install.wrapper.path)
 
         guard install.isMounted else { return out }
 
@@ -43,24 +61,30 @@ enum Preflight {
                 add("fda", "Drive readable by this app", false, "",
                     "macOS is refusing to let this app read \(vol.path)"
                     + (Self.isTimeMachineDestination(vol) ? " — it is your Time Machine backup drive, which only apps with Full Disk Access may read." : ".")
-                    + " Give FFXI on Mac Full Disk Access (System Settings › Privacy & Security › Full Disk Access), then press ↻ — or keep the game on a different drive.")
+                    + " Give FFXI on Mac Full Disk Access (System Settings › Privacy & Security › Full Disk Access), then press ↻ — or keep the game on a different drive.",
+                    short: "Needs Full Disk Access to read \(vol.lastPathComponent)")
                 return out
             }
         }
 
         add("wine", "Wine binary", fm.isExecutableFile(atPath: install.wine.path),
-            install.wine.path, "missing \(install.wine.path)")
+            install.wine.path, "missing \(install.wine.path)",
+            short: "Wine is missing — see Setup & Diagnostics", path: install.wine.path)
 
         add("client", "Game folder", fm.fileExists(atPath: install.gameDir.path),
-            install.gameDir.path, "no client at \(install.gameDir.path)")
+            install.gameDir.path, "no client at \(install.gameDir.path)",
+            short: "Game folder not found — see Setup & Diagnostics", path: install.gameDir.path)
 
         let se = install.squareEnix
-        add("squareenix", "FINAL FANTASY XI data", fm.fileExists(atPath: se.appendingPathComponent("FINAL FANTASY XI").path),
-            se.path, "no SquareEnix/FINAL FANTASY XI under \(se.deletingLastPathComponent().path)")
+        let ffxi = se.appendingPathComponent("FINAL FANTASY XI")
+        add("squareenix", "FINAL FANTASY XI data", fm.fileExists(atPath: ffxi.path),
+            se.path, "no SquareEnix/FINAL FANTASY XI under \(se.deletingLastPathComponent().path)",
+            short: "FINAL FANTASY XI data not found — see Setup & Diagnostics", path: ffxi.path)
 
         add("ashita", "Ashita-cli.exe", fm.fileExists(atPath: install.ashitaCLI.path),
             "present — launch must go through Ashita, not xiloader",
-            "missing \(install.ashitaCLI.path)")
+            "missing \(install.ashitaCLI.path)",
+            short: "Ashita-cli.exe missing — see Setup & Diagnostics", path: install.ashitaCLI.path)
 
         // The wrong-client trap. A world pointed at a folder that holds several clients gets
         // whichever one the search reached first, and every downstream step then succeeds --
@@ -68,7 +92,8 @@ enum Preflight {
         // another world's game data. It cost this project a full "Eden doesn't work" cycle in
         // August 2026. Blocking, not a warning: there is no safe guess to fall back to.
         if let why = install.clientAmbiguity {
-            add("worldclient", "Client belongs to this world", false, "", why)
+            add("worldclient", "Client belongs to this world", false, "", why,
+                short: "This world's client folder is ambiguous — see Setup & Diagnostics")
         } else if let w = install.worldName, install.dataRoot != nil || !install.ownsWrapperClient {
             add("worldclient", "Client belongs to this world", true, install.gameDir.path,
                 "not \(w)'s own client")
@@ -83,7 +108,8 @@ enum Preflight {
         catch { linked = 0; libErr = " (\(error.localizedDescription))" }
         add("rpath", "dylib rpath fix", linked > 0,
             "\(linked) dylibs linked into wine/lib",
-            "no dylibs in wine/lib\(libErr) — wineserver will fail to load (run Repair)")
+            "no dylibs in wine/lib\(libErr) — wineserver will fail to load (run Repair)",
+            short: "Wine needs Repair — see Setup & Diagnostics", path: libDir.path)
 
         // FINDINGS #3: must exist in the 32-bit (Wow6432Node) view or the game reads nothing.
         var regErr = ""
@@ -95,19 +121,22 @@ enum Preflight {
             || reg.range(of: "Wow6432Node\\\\+PlayOnlineUS", options: .regularExpression) != nil
         add("reg32", "PlayOnline registry (32-bit view)", hasWow,
             "Wow6432Node\\PlayOnlineUS present",
-            "missing from the 32-bit view\(regErr) — the game will exit silently (run Repair)")
+            "missing from the 32-bit view\(regErr) — the game will exit silently (run Repair)",
+            short: "Game registry needs Repair — see Setup & Diagnostics", path: install.systemReg.path)
 
         // The layout itself: 0001 must be the FINAL FANTASY XI dir, not PlayOnlineViewer.
         let layoutOK = reg.range(of: #""0001"=".*FINAL FANTASY XI""#, options: .regularExpression) != nil
         add("reglayout", "InstallFolder layout", layoutOK,
             "0001 = FINAL FANTASY XI (correct)",
-            "0001 does not point at the FINAL FANTASY XI dir — FFXiMain.dll will not load")
+            "0001 does not point at the FINAL FANTASY XI dir — FFXiMain.dll will not load",
+            short: "Game registry needs Repair — see Setup & Diagnostics", path: install.systemReg.path)
 
         // FINDINGS #4: three in-proc COM servers, all required.
         let comOK = reg.contains("FFXi.FFXiEntry") && reg.contains("FFXiMain.GameMain")
         add("com", "FFXI COM servers registered", comOK,
             "FFXi.FFXiEntry + FFXiMain.GameMain registered",
-            "COM servers not registered (run Repair)")
+            "COM servers not registered (run Repair)",
+            short: "Game registry needs Repair — see Setup & Diagnostics", path: install.systemReg.path)
 
         let polcore = install.squareEnix
             .appendingPathComponent("PlayOnlineViewer/viewer/com/polcore.dll")
@@ -124,7 +153,8 @@ enum Preflight {
                 sbBypass == nil ? "not set — Ashita's default (on) applies" : "on",
                 "off, while the Sandbox POL plugin is loaded — the game will log in and then "
                 + "exit about two seconds later with no error. Run Repair, or set "
-                + "use_interface_bypass = 1 in config/sandbox/sandbox.ini.")
+                + "use_interface_bypass = 1 in config/sandbox/sandbox.ini.",
+                short: "Sandbox setting needs Repair — see Setup & Diagnostics")
         }
 
         add("d3dmetal", "D3DMetal renderer", fm.fileExists(atPath: install.d3dMetal.path),
@@ -135,6 +165,42 @@ enum Preflight {
     }
 
     static var blocking: (([Check]) -> Bool) = { $0.contains { $0.state == .bad } }
+
+    static func driveMessage(_ name: String) -> String {
+        "The '\(name)' drive isn't available — reconnect it or restart the Mac."
+    }
+
+    /// The `/Volumes/<name>` that `path` lives on, or reaches through a symlink anywhere along
+    /// it, when that volume does not resolve. nil when every drive on the way is there (the
+    /// file itself may still be missing; that is the caller's to say).
+    ///
+    /// Both cases are real on this Mac: a path under `/Volumes/<name>` whose drive is unplugged,
+    /// and a folder on one drive that is a symlink into another (`drive_c/HorizonXI/SquareEnix`
+    /// -> `/Volumes/Games/FFXI/SquareEnix`). The mount table is not asked: on 2026-10-14 it
+    /// listed `/Volumes/Games` while the path itself did not exist (a ghost mount), so only
+    /// resolving the path tells the truth. lstat/readlink only; nothing is followed twice.
+    static func unavailableDrive(for path: String, hops: Int = 0) -> String? {
+        let fm = FileManager.default
+        let parts = (path as NSString).standardizingPath.split(separator: "/").map(String.init)
+        var cur = ""
+        for (n, part) in parts.enumerated() {
+            if cur.isEmpty, part == "Volumes", n + 1 < parts.count {
+                let vol = "/Volumes/" + parts[n + 1]
+                if !fm.fileExists(atPath: vol) { return parts[n + 1] }
+            }
+            let next = cur + "/" + part
+            var st = stat()
+            guard lstat(next, &st) == 0 else { return nil }   // simply missing
+            if st.st_mode & S_IFMT == S_IFLNK {
+                guard hops < 16, let dest = try? fm.destinationOfSymbolicLink(atPath: next) else { return nil }
+                let base = dest.hasPrefix("/") ? dest : (cur.isEmpty ? "/" : cur) + "/" + dest
+                let rest = parts[(n + 1)...].joined(separator: "/")
+                return unavailableDrive(for: rest.isEmpty ? base : base + "/" + rest, hops: hops + 1)
+            }
+            cur = next
+        }
+        return nil
+    }
 
     /// `tmutil destinationinfo` lists the mount points Time Machine backs up to.
     static func isTimeMachineDestination(_ vol: URL) -> Bool {
