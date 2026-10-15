@@ -158,3 +158,95 @@ Low Power Mode first; `FFXI_ON_MAC_FPSLOG=1`, compare rows with >800 draws, same
   source or patch in the repo, so it cannot be rebuilt after the next macOS update; vendor/NOTICE.md
   has no row for it. Under `swift run` the sidecar dev fallback looks in `app/vendor/`, which does
   not exist (bundled app unaffected).
+
+## Window text, Play-disabled reason, responsiveness
+
+What changed
+- **Why PLAY is grey, in one line** (footer, `PlayStatus.footer`): the missing drive by name, else
+  "<world> not installed", else the first failing check ("… — see Setup & Diagnostics" only where
+  the detail is there); "Updating Wine…" / "Updating HorizonXI…" / "Downloading <world>…" while the
+  session is busy (`Runner.busyReason`); "Starting…" until the game window first appears (90 s
+  fallback). Nothing when ready or playing: "ready to play", "game running", "setup incomplete"
+  and the long starting text are gone.
+- **Missing drive** (`Preflight.unavailableDrive`): a failing path that lives on, or passes through
+  a symlink into, a `/Volumes/<Name>` that does not resolve gives "The '<Name>' drive isn't
+  available — reconnect it or restart the Mac." The mount table is not consulted (today it lists
+  `/Volumes/Games` while the path does not exist). The game-data card stays away then (Download
+  would be the wrong answer).
+- **Log strip**: only "!!" lines (refused login included), only while there are any, dismissible,
+  cleared on Play. Everything else is launcher.log only: Setup & Diagnostics › **Open log**.
+  Refusals the notice under PLAY already shows go to the file, not the strip.
+- **Removed**: dead news banner and renderer banner; notes card ("Vana'diel on Apple Silicon",
+  "Measured on this Mac…"; Wine prefix / Client rows moved into Setup & Diagnostics); "every other
+  world" signup list; the 45-word "You do not need to do anything…" line on every HorizonXI Play;
+  "Addon list saved" / "Graphics written" notices; local-server free-space line once built.
+- **Moved / shortened**: account card only while no account is saved for the world (never local);
+  Renderer picker + blurb into Setup & Diagnostics, Metal titled "Metal (DXVK)"; "N online"; era
+  is a tooltip on the world row; status list in Setup & Diagnostics shows only non-OK checks
+  ("All checks passed" otherwise); notices shortened per the review, non-error ones clear after
+  5 s; long help texts shortened or made tooltips (Update HorizonXI… → "Downloads and applies the
+  HorizonXI patch.", VanaVoice, Vanaguide, sound output, addons sheet, RetroAchievements, local
+  server setup, choose wrapper, other launchers' pids).
+- **HorizonXI update banner**: "HorizonXI <latest> available" + Update, only when the installed
+  version (version.json) is known and older; unknown → nothing. Installed version read off the
+  main actor in `recheckAsync`, not in `body`; the window's duplicate API fetch is gone
+  (`ServerFeeds.horizonLatest`). Running-update line with Stop unchanged.
+- **Era**: HorizonXI is "Treasures of Aht Urhgan · 75 cap" (was Chains of Promathia). Evidence,
+  2026-10-14: horizonxi.com's bundle (`/assets/index-DnbLEafN.js`) has "Treasures of Aht Urhgan is
+  live on HorizonXI", badge "Now Live", "Three new jobs, Assault, and the Near East are open",
+  launch `2026-08-07T09:00:00-05:00`; 35 "Treasures of Aht Urhgan" vs 15 "Chains of Promathia"
+  mentions. Contributor PR #24 said the same.
+- **Responsiveness (#25)**: Stop's whole-Mac `ps` at the press runs detached (pids still decided on
+  main); `wineserver -k`/`-w` runs detached while the launch lock is held, released when done, so a
+  Play meanwhile gets "Busy — try Play again in a few seconds" instead of a beach-ball. Installer
+  zip unpack (ditto) off main. `launch()` itself is unchanged and synchronous.
+- **#27**: `applicationDidFinishLaunching`: policy `.regular`; 1 s after launch with no visible
+  window, activate and send ourselves the reopen event a second `open -a` sends (bundle only);
+  windows framed on no connected display are centred.
+- **Quit alert** names the work: "Quit while updating Wine?" etc.; resume hint only for downloads.
+- **Narrator** (from PR #32, narrowed): `Narration.terminateNarrator()` when the last client is gone,
+  on Stop or natural exit, only if a launch this run started it. Never at launcher start.
+- Tagline "FINAL FANTASY XI ON APPLE SILICON" kept: with the cards gone the hero column is title +
+  "N online" over the backdrop; without the tagline it would be a lone title (not judged on
+  screen, so kept as branding).
+
+How it was verified
+- `swift build -c release` before each of the 6 commits: clean, same 2 pre-existing capture
+  warnings.
+- New `--selftest-ui-text` (21 checks, all pass): drive detection (symlink, relative chain, plain
+  `/Volumes` path, existing folder, missing file, loop), Preflight on a fake wrapper whose
+  SquareEnix links to a missing drive, footer order/texts, error-only strip filter, quit question.
+  Read-only on this Mac: HorizonXI's `…/SquareEnix/FINAL FANTASY XI` → "The 'Games' drive isn't
+  available — reconnect it or restart the Mac."
+- `--check` on this Mac: HorizonXI and Local server report the Games drive line; CatsEyeXI
+  (`/Volumes/Games/FFXI/CatsEyeXI`) too; Gaia XI ok. All 15 `--selftest-*` pass.
+- Nothing was launched: the window itself (layout, footer, strip, #27) is unverified on screen.
+
+Needs Daniel's live test
+- Open the launcher with the Games drive ghost-mounted: footer must read the Games-drive line;
+  after reconnecting (or restart) and ↻, nothing in the footer and PLAY enabled.
+- Window look: hero column with the cards gone (tagline kept?), Setup & Diagnostics with the
+  renderer picker, Wine prefix/Client rows and Open log; account card absent for HorizonXI.
+- #27 (local world only, no `--play` against a hosted world): quit the launcher, then
+  `open -a /Applications/FFXI-on-Mac.app --args --world 'Local server'`; a window must appear within
+  ~1 s. Then check `launcher.log` rotated.
+- Stop on the local world: no beach-ball; Play pressed within a few seconds of Stop shows "Busy —
+  try Play again in a few seconds", then works. VanaVoice (if narration was on) quits with the
+  game, and does not quit while another client still plays.
+- A refused login (wrong password, local world) appears once, in the strip, not twice.
+
+Deferred, and why
+- `launch()` async (#25 Play beach-ball): needs the in-game run to verify; the ordering inside
+  launch is load-bearing. Pathway: on main keep `LaunchLock.acquire`, `running = true`, the
+  `Runner.playing` entry and `loginFailure`/`current*`; then `await Task.detached { … }` for
+  relinkStrayDylibs → RendererSetup.apply/GameRegistry.point → cleanStaleWineSockets → ini/Sandbox/
+  Narration/Guide/CursorFix/AddonSuite/LuaJITGuard → stopWineserver → Detach.spawn +
+  writePrivateDiagnostic, in the same order, collecting log lines; pass the lock fd through and
+  keep it held; back on main set sessionGroup, the tail timer, gamePID and
+  `LaunchLock.release(_:whenVisible:)`. Make `gate`/snapshot nonisolated; callers become
+  `Task { if let why = await r.launch(…) { notice = why } }`. The previous commit's idempotent
+  setup already removes most of that work on a normal Play.
+- Auto-continue Play after the start-up Wine update (instead of "Updating Wine first — press Play
+  again when it finishes"): touches the Play path; the footer now says "Updating Wine…" and PLAY
+  re-enables when done.
+- `ServerFeeds.bannerItems`/`items` are now unused (kept, no warning); delete when convenient.

@@ -33,10 +33,10 @@ a secondary link, never as the account route.
 - `Server.accountURL` / `accountHow` / `discordURL` — `app/Sources/HorizonXILauncher/Servers.swift`.
   All three are decoded with `decodeIfPresent` and back-filled from `builtins` for any world the
   user has not renamed, so an older `servers.json` picks them up without a reset.
-- `accountCard`, `signupRow`, `signupVerb` — `App.swift`. `signupVerb` names what the link
-  actually is ("Create account" only for a real registration form).
-- `FFXI_ON_MAC_SHOW_SIGNUPS=1` starts the launcher with the list expanded, for screenshots
-  without driving synthetic clicks into the window.
+- `accountCard`, `signupVerb` — `App.swift`. `signupVerb` names what the link actually is
+  ("Create account" only for a real registration form). Since beta 59 the card shows only while
+  no account is saved for the selected world (`Credentials.hasSavedAccount`), never for the local
+  world, and the "every other world" list (`signupRow`, `FFXI_ON_MAC_SHOW_SIGNUPS`) is gone.
 
 ## Notes for whoever picks this up
 
