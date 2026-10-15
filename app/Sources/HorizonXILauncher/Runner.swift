@@ -1397,10 +1397,21 @@ final class Runner: ObservableObject {
                     // `wineserver -w` waits for the registry flush, seconds on the x10: wait off
                     // the main actor (#25), holding the launch lock until it is done, so a Play
                     // pressed meanwhile is refused rather than started against a dying server.
+                    // At most 30 s: a flush stuck on a dropped drive never ends, and the lock
+                    // held for it would refuse every Play until the launcher quit.
                     lockHandedOff = true
+                    let owner = self
                     Task.detached(priority: .userInitiated) {
-                        RendererSetup.stopWineserver(install)
+                        let done = Runner.finishes(within: Runner.wineserverStopLimit) {
+                            _ = RendererSetup.stopWineserver(install)
+                        }
                         if let lock { LaunchLock.release(lock) }
+                        guard !done else { return }
+                        await MainActor.run {
+                            owner?.logFileOnly("wineserver -k/-w still running after "
+                                               + "\(Int(Runner.wineserverStopLimit)) s; launch lock released")
+                            owner?.appendLine("!! Wine didn't shut down — if the game won't start, restart the Mac.")
+                        }
                     }
                 } else if !left.isEmpty {
                     self?.appendLine("==> wineserver left up: still running \(Runner.describe(LiveClients.byHost(left)))")
@@ -1409,6 +1420,20 @@ final class Runner: ObservableObject {
                 }
             }
         }
+    }
+
+    /// How long Stop waits for the wineserver before letting go of the launch lock.
+    nonisolated static let wineserverStopLimit: Double = 30
+
+    /// Runs `work` on its own thread and waits at most `seconds`: false when it had not returned
+    /// by then (it is left to finish, or hang, on that thread).
+    nonisolated static func finishes(within seconds: Double, _ work: @escaping @Sendable () -> Void) -> Bool {
+        let done = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            work()
+            done.signal()
+        }
+        return done.wait(timeout: .now() + seconds) == .success
     }
 
     /// See the call site in `launch`: the game must be started the way a shell starts it.

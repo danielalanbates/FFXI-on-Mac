@@ -125,6 +125,11 @@ extension Headless {
                        env["DXVK_CONFIG_FILE"] == #"C:\dxvk-cache\dxvk.conf"#
                            && env["DXVK_STATE_CACHE_PATH"] == #"C:\dxvk-cache"#))
 
+        // Stop's wineserver wait is bounded, so the launch lock it holds is always let go.
+        checks.append(("Stop's wineserver wait: done at once when quick, gives up at its limit",
+                       Runner.finishes(within: 2) {}
+                           && !Runner.finishes(within: 0.1) { Thread.sleep(forTimeInterval: 1) }))
+
         // Play-time checks: nothing when fine, one short line when real.
         checks.append(("Low Power Mode: one line when on, nothing when off",
                        PlayCheck.lowPower(true) == PlayCheck.lowPowerLine && PlayCheck.lowPower(false) == nil))
