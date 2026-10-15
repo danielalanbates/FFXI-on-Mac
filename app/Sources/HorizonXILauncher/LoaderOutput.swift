@@ -24,7 +24,10 @@ enum LoaderOutput {
 
     /// The refusal `chunk` shows, if any. A loader's own refusal line wins over its menu, which
     /// follows it. `menu`: whether the menu counts (the game's output; a job's never did).
-    static func refusal(in chunk: String, world: String, menu: Bool = true) -> Refusal? {
+    /// `account`: the boot command carried an account name and password. Without them the loader
+    /// opens at its menu having tried nothing (a world whose card says the loader window makes the
+    /// account, Play pressed with the fields empty), and "didn't accept the login" would be wrong.
+    static func refusal(in chunk: String, world: String, menu: Bool = true, account: Bool = true) -> Refusal? {
         if let hit = refusalMarkers.first(where: { chunk.contains($0) }), let r = chunk.range(of: hit) {
             let raw = String(chunk[r.lowerBound...]).split(whereSeparator: { $0.isNewline }).first.map(String.init) ?? hit
             let clean = raw.trimmingCharacters(in: CharacterSet(charactersIn: " \u{1b}[m")).trimmingCharacters(in: .whitespaces)
@@ -35,7 +38,9 @@ enum LoaderOutput {
         }
         if menu, menuMarkers.contains(where: { chunk.contains($0) }) {
             let who = world.isEmpty ? "The server" : world
-            return Refusal(message: "\(who) didn't accept the login — check the account name and password.",
+            return Refusal(message: account
+                               ? "\(who) didn't accept the login — check the account name and password."
+                               : "\(who) needs an account — enter its name and password, then press Play.",
                            atMenu: true)
         }
         return nil

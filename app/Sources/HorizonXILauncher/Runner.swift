@@ -284,7 +284,8 @@ final class Runner: ObservableObject {
         if !x87Settled { checkX87Output(s) }
         // Every xiloader fork prints its refusal and drops to an interactive menu no window shows;
         // a loader that never logged in (b60: Ashita's pol.exe on HorizonXI) shows only the menu.
-        if loginFailure.isEmpty, let refusal = LoaderOutput.refusal(in: s, world: currentWorld, menu: capped) {
+        if loginFailure.isEmpty, let refusal = LoaderOutput.refusal(in: s, world: currentWorld, menu: capped,
+                                                                     account: launchHasAccount) {
             loginFailure = refusal.message
             if refusal.atMenu {
                 logFileOnly("i  the loader is at its account menu, which nothing can answer — stopping it")
@@ -307,6 +308,9 @@ final class Runner: ObservableObject {
     /// How this launch ended is already said or asked for: a Stop (the player's, or a refused
     /// login's), or a spawn that failed.
     private var sessionExplained = false
+    /// The boot command this launch handed the loader had an account in it (`launch` reads it
+    /// after `beforeLaunch` wrote it), which is what its menu means (LoaderOutput.refusal).
+    private var launchHasAccount = true
 
     /// Every line goes to launcher.log; only errors ("!! …", the login refusal among them) reach
     /// the window. Progress, wine and Ashita output there was text nobody had to act on.
@@ -1217,6 +1221,7 @@ final class Runner: ObservableObject {
         launchGeneration += 1
         // What the loader will really be given, for the fallback in `sessionPIDs`.
         hostKey = LiveClients.normalize(Credentials.bootServer(in: install, profile: profile) ?? host)
+        launchHasAccount = Credentials.bootHasAccount(in: install, profile: profile)
         Runner.playing[ObjectIdentifier(self)] = Playing(world: worldName, host: hostKey)
         loginFailure = ""
         currentInstall = install

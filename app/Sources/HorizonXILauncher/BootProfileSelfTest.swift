@@ -181,9 +181,12 @@ extension Headless {
                        made && BootProfile.value("name", section: "ashita.launcher", in: fresh) == "HorizonXI"
                            && BootProfile.loaderName(in: fresh) == "horizon-loader.exe"
                            && BootProfile.value("command", section: "ashita.boot", in: fresh) == "--server play.horizonxi.com"))
+        checks.append(("a profile without an account is one the loader opens at its menu",
+                       !Credentials.bootHasAccount(in: f, profile: profile)))
         _ = Credentials.apply(user: "fixtureuser", password: "fixturepass", to: f, profile: profile, server: horizon.host)
         checks.append(("the account is written into it, and Play then has nothing to add",
                        read(profileURL(f)).contains("--user fixtureuser --pass fixturepass")
+                           && Credentials.bootHasAccount(in: f, profile: profile)
                            && Credentials.prepareProfile(for: horizon, in: f).count == 1   // pivot.ini only
                            && BootProfile.missing(in: read(profileURL(f)), template: T, host: horizon.host, install: f).isEmpty))
         let l = client("fresh-local", loaders: all3)
@@ -238,6 +241,15 @@ extension Headless {
         checks.append(("the account menu is a refused login, said in one plain line",
                        LoaderOutput.refusal(in: menu, world: "HorizonXI")
                            == LoaderOutput.Refusal(message: "HorizonXI didn't accept the login — check the account name and password.", atMenu: true)))
+        checks.append(("the menu with no account in the boot command asks for one instead",
+                       LoaderOutput.refusal(in: menu, world: "Local server", account: false)
+                           == LoaderOutput.Refusal(message: "Local server needs an account — enter its name and password, then press Play.", atMenu: true)))
+        checks.append(("an account is a non-empty --user and --pass in the command",
+                       Credentials.option("--user", in: "--server h --user u --pass p") == "u"
+                           && Credentials.option("--pass", in: "--server h --user u --pass=p") == "p"
+                           && Credentials.option("--user", in: "--server h --user --pass p") == nil
+                           && Credentials.option("--pass", in: "--server h --user u --pass") == nil
+                           && Credentials.option("--server", in: "--server=play.horizonxi.com") == "play.horizonxi.com"))
         checks.append(("the loader's own refusal before the menu is what is shown",
                        LoaderOutput.refusal(in: "[x] Failed to login. Invalid username or password.\n" + menu, world: "HorizonXI")
                            == LoaderOutput.Refusal(message: "Failed to login. Invalid username or password.", atMenu: false)))

@@ -367,23 +367,36 @@ enum Credentials {
     /// running client is filed under. `apply` rewrites it only when a user and password are set,
     /// so it can differ from the world's Host field.
     static func bootServer(in install: Install, profile: String) -> String? {
+        option("--server", in: bootCommand(in: install, profile: profile))
+    }
+
+    /// The boot command carries both an account name and a password, so the loader logs in by
+    /// itself. Without them it goes straight to its account menu, which nothing here can answer.
+    static func bootHasAccount(in install: Install, profile: String) -> Bool {
+        let command = bootCommand(in: install, profile: profile)
+        return option("--user", in: command) != nil && option("--pass", in: command) != nil
+    }
+
+    /// The boot profile's live command line (v4 `command`, v3 `boot_command`), or "".
+    private static func bootCommand(in install: Install, profile: String) -> String {
         let name = install.bootProfileName(profile)
         guard let text = readFile(at: install.gameDir.appendingPathComponent("config/boot/\(name)"))
-        else { return nil }
-        var command: String?
-        if name.hasSuffix(".xml") {
-            command = xmlSetting("boot_command", in: text)
-        } else {
-            for raw in TextFile.lines(of: text) {
-                let t = raw.trimmingCharacters(in: .whitespaces)
-                guard !t.hasPrefix(";"), t.hasPrefix("command"), let eq = t.firstIndex(of: "=") else { continue }
-                command = String(t[t.index(after: eq)...]); break
-            }
+        else { return "" }
+        if name.hasSuffix(".xml") { return xmlSetting("boot_command", in: text) ?? "" }
+        for raw in TextFile.lines(of: text) {
+            let t = raw.trimmingCharacters(in: .whitespaces)
+            guard !t.hasPrefix(";"), t.hasPrefix("command"), let eq = t.firstIndex(of: "=") else { continue }
+            return String(t[t.index(after: eq)...])
         }
-        let tokens = (command ?? "").split(separator: " ").map(String.init)
+        return ""
+    }
+
+    /// The value `--key value` or `--key=value` gives in `command`, when it is not empty.
+    static func option(_ key: String, in command: String) -> String? {
+        let tokens = command.split(separator: " ").map(String.init)
         for (n, t) in tokens.enumerated() {
-            if t == "--server", n + 1 < tokens.count { return tokens[n + 1] }
-            if t.hasPrefix("--server=") { return String(t.dropFirst("--server=".count)) }
+            if t == key, n + 1 < tokens.count, !tokens[n + 1].hasPrefix("--") { return tokens[n + 1] }
+            if t.hasPrefix(key + "="), t.count > key.count + 1 { return String(t.dropFirst(key.count + 1)) }
         }
         return nil
     }
