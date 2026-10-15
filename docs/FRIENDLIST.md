@@ -146,7 +146,8 @@ Each client needs its own command channel or they both eat the same file. `mouse
 reads `cmd<FLCLIENT>.txt` and logs to `mousediag<FLCLIENT>.log`, so launching the second
 client with `FLCLIENT=2` in the environment keeps them independent. Boot config for the
 second account is `config/boot/lsb2.ini` in the game folder; the repo keeps a template at
-`addons/lsb2.ini.example` (set the password there; `addons/*.ini` is gitignored).
+`addons/lsb2.ini.example`. Copy it to `config/boot/lsb2.ini` in the game folder and set the
+password only in that copy, never in the `.example`, which is tracked.
 
 A second character was made by cloning the first in SQL. Note `chars` has a BEFORE INSERT
 trigger that auto-creates the child rows (`char_equip`, `char_exp`, `char_jobs`, ...), so
