@@ -36,6 +36,7 @@ neither can anyone else who republishes it. Full texts of everything the app bun
 | `patches/lsb-linkshell-zone-backlog.patch` | GPL-3.0 (LandSandBoat derivative) | in the repo only |
 | Ashita v4 + server plugins | GPL-3.0 / each server's terms | **no** — comes with the server's client install |
 | wine: Sikarugir 10.0 (*Install wine…*), athei `wine-cx` (Play's patched wine) | LGPL 2.1 | **no** — fetched from the upstream release or already on the Mac |
+| aria2 1.35.0 (`aria2c`, HorizonXI's torrents) | GPL-2.0-or-later | **no** — Homebrew's if installed, else fetched by `update-client.sh` from aria2's own GitHub release on the user's Mac (pinned SHA-256; its `COPYING` kept beside it) |
 | CrossOver itself (the app, its proprietary add-ons) | proprietary, commercial | **no** — never used or shipped |
 | FFXI game data | Square Enix, all rights reserved | **no** — never |
 
