@@ -135,6 +135,20 @@ extension Headless {
                         MultiWorld.memoryWarning(swapUsedFraction: 0.9, freePercent: 10) ?? ""]
                            .allSatisfy { !$0.contains("\n") && $0.count <= 80 }))
 
+        // Log strip: a bounded tail, starting on a line.
+        let many = (1...300).map { "line \($0)" }.joined(separator: "\n") + "\n"
+        let tail = Runner.uiTail(many, maxBytes: Runner.uiLogMaxBytes, maxLines: Runner.uiLogMaxLines)
+        checks.append(("log strip keeps the last 200 lines",
+                       Runner.lineBreaks(in: tail) == 200 && tail.hasPrefix("line 101\n") && tail.hasSuffix("line 300\n")))
+        let wide = (1...100).map { "\($0) " + String(repeating: "é", count: 150) }.joined(separator: "\n")
+        let wideTail = Runner.uiTail(wide, maxBytes: Runner.uiLogMaxBytes, maxLines: Runner.uiLogMaxLines)
+        checks.append(("log strip keeps at most 16 KB, cut at a line start, multi-byte text intact",
+                       wideTail.utf8.count <= Runner.uiLogMaxBytes && wideTail.hasSuffix(String(repeating: "é", count: 150))
+                           && wideTail.split(separator: "\n").allSatisfy { $0.hasSuffix(String(repeating: "é", count: 150)) }
+                           && !wideTail.contains("\u{FFFD}")))
+        checks.append(("log strip leaves short text alone",
+                       Runner.uiTail("a\nb\n", maxBytes: 100, maxLines: 10) == "a\nb\n"))
+
         // Graphics: the local world's small default is a window size, never lower quality.
         var lowQuality = GraphicsSettings.lowSpec
         lowQuality.width = GraphicsSettings.max4K.width

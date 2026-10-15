@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import UniformTypeIdentifiers
 
 /// Quitting the launcher kills every download and install it started, because they are its child
@@ -143,6 +144,12 @@ struct ContentView: View {
     /// refresh, changing world) restarted the 7-second countdown and the banner could sit on one
     /// item indefinitely -- watched it stay frozen for 28 seconds straight after a world change.
     private let bannerTick = Timer.publish(every: 7, on: .main, in: .common).autoconnect()
+    /// Same reason, and these were inline in `body`, which re-evaluates on every runner change:
+    /// game output could keep restarting them.
+    private let populationTick = Timer.publish(every: 120, on: .main, in: .common).autoconnect()
+    /// Clients started by another launcher. Every 15 s, and only while the window can be seen:
+    /// each refresh is a whole-Mac `ps`, CPU taken from a running game on an 8 GB M1.
+    private let elsewhereTick = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
     @State private var worldHover = false
     @State private var forceSetup = false
     @State private var newServer = false
@@ -242,7 +249,7 @@ struct ContentView: View {
         // every two minutes while the window is open. The fetch is three tiny GETs and silent
         // on failure, so this costs nothing when offline.
         .task { await feeds.refreshPopulations() }
-        .onReceive(Timer.publish(every: 120, on: .main, in: .common).autoconnect()) { _ in
+        .onReceive(populationTick) { _ in
             Task { await feeds.refreshPopulations() }
             // RetroAchievements: gated to once per 10 minutes inside; a no-op until set up.
             ra.refresh(.automatic, gameDir: active?.gameDir, log: { runner.appendLine($0) })
@@ -254,7 +261,13 @@ struct ContentView: View {
         }
         // Clients started by another launcher are only visible to a process scan. One `ps`.
         .task { await sessions.refreshElsewhere(install: active, profiles: bootProfiles) }
-        .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
+        .onReceive(elsewhereTick) { _ in
+            guard NSApplication.shared.occlusionState.contains(.visible) else { return }
+            Task { await sessions.refreshElsewhere(install: active, profiles: bootProfiles) }
+        }
+        // And at once when the window comes back into view, so the list is never 15 s stale.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeOcclusionStateNotification)) { _ in
+            guard NSApplication.shared.occlusionState.contains(.visible) else { return }
             Task { await sessions.refreshElsewhere(install: active, profiles: bootProfiles) }
         }
         // Discovery walks /Volumes, and an external drive can make that take tens of seconds.

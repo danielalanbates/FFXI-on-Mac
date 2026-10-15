@@ -253,14 +253,81 @@ final class Runner: ObservableObject {
             appendLine("!! login refused: \(loginFailure) — stopping the loader")
             if let i = currentInstall { stop(i) }
         }
-        log += s
-        if log.count > 200_000 { log = String(log.suffix(150_000)) }
+        uiAppend(s)
     }
 
     func appendLine(_ s: String) {
-        tee(s.hasSuffix("\n") ? s : s + "\n")
-        log += s.hasSuffix("\n") ? s : s + "\n"
-        if log.count > 200_000 { log = String(log.suffix(150_000)) }
+        let line = s.hasSuffix("\n") ? s : s + "\n"
+        tee(line)
+        uiAppend(line)
+    }
+
+    // MARK: - Log strip
+
+    /// What the log strip shows: the last 200 lines, at most 16 KB, published at most four
+    /// times a second. launcher.log keeps every byte (`tee`). The strip used to hold up to
+    /// 200 KB, recounted with String.count and re-laid out by SwiftUI on every 0.3 s chunk of
+    /// game output, on the main thread, for the whole session.
+    static let uiLogMaxBytes = 16 * 1024
+    static let uiLogMaxLines = 200
+    private var pendingLog = ""
+    private var logFlushScheduled = false
+    /// Line breaks in `log`, kept as text is added rather than recounted.
+    private var uiLogLines = 0
+
+    private func uiAppend(_ s: String) {
+        pendingLog += s
+        // A burst (an update's progress, a chatty client) is cut down before it waits.
+        if pendingLog.utf8.count > 4 * Self.uiLogMaxBytes {
+            pendingLog = Self.uiTail(pendingLog, maxBytes: Self.uiLogMaxBytes, maxLines: Self.uiLogMaxLines)
+        }
+        guard !logFlushScheduled else { return }
+        logFlushScheduled = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            self?.flushUILog()
+        }
+    }
+
+    private func flushUILog() {
+        logFlushScheduled = false
+        guard !pendingLog.isEmpty else { return }
+        let chunk = pendingLog
+        pendingLog = ""
+        uiLogLines += Self.lineBreaks(in: chunk)
+        var next = log + chunk
+        if next.utf8.count > Self.uiLogMaxBytes || uiLogLines > Self.uiLogMaxLines {
+            next = Self.uiTail(next, maxBytes: Self.uiLogMaxBytes, maxLines: Self.uiLogMaxLines)
+            uiLogLines = Self.lineBreaks(in: next)
+        }
+        log = next
+    }
+
+    nonisolated static func lineBreaks(in s: String) -> Int {
+        s.utf8.reduce(0) { $1 == 0x0A ? $0 + 1 : $0 }
+    }
+
+    /// The end of `s`: its last `maxLines` lines and at most `maxBytes` UTF-8 bytes, starting at
+    /// the beginning of a line whenever one is in range.
+    nonisolated static func uiTail(_ s: String, maxBytes: Int, maxLines: Int) -> String {
+        let u = Array(s.utf8)
+        var start = max(0, u.count - maxBytes)
+        // Walk back over line breaks; a break at the very end closes the last line.
+        var seen = 0
+        var i = u.count - 1
+        if i >= 0, u[i] == 0x0A { i -= 1 }
+        while i >= start {
+            if u[i] == 0x0A {
+                seen += 1
+                if seen == maxLines { start = i + 1; break }
+            }
+            i -= 1
+        }
+        // The byte limit can land mid-line: begin at the next line instead, if there is one.
+        if start > 0, u[start - 1] != 0x0A, let nl = u[start...].firstIndex(of: 0x0A), nl + 1 < u.count {
+            start = nl + 1
+        }
+        return start == 0 ? s : String(decoding: u[start...], as: UTF8.self)
     }
 
     /// Working directory for bundled scripts. Never the bundle itself: wine tools (regsvr32)
@@ -1107,39 +1174,53 @@ final class Runner: ObservableObject {
 
     /// Poll for the client itself. Ashita-cli.exe exits seconds after a successful injection
     /// while the game carries on in horizon-loader.exe, so the injector's exit is not the game's.
+    ///
+    /// This runs for the whole session, on a Mac where the game is CPU-bound, so it is kept
+    /// cheap: one whole-Mac `ps` every 5 s (was 2 s), run off the main actor, as are the
+    /// user.reg read and the boot-profile write. An exit is noticed within about 7 s.
     private func watchGameProcess() {
+        let install = currentInstall
         Task { [weak self] in
+            // Wine's Retina factor, from the prefix's user.reg on the game drive.
+            let scale = await Task.detached(priority: .utility) { install.map(WindowMemory.scale(for:)) ?? 1 }.value
             // Give the injector's child a moment to appear before deciding it never did.
             // Sample the window on the way: the last size seen is what the next launch opens
             // at (WindowMemory). Sampled on the main actor, since it reads the window server.
-            let scale = self?.currentInstall.map(WindowMemory.scale(for:)) ?? 1
-            for _ in 0..<300 {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                let snap = LiveClients.snapshot()
-                let pids = self?.sessionPIDs(in: snap) ?? []
+            for _ in 0..<120 {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                let snap = await Task.detached(priority: .utility) { LiveClients.snapshot() }.value
+                guard let self else { return }
+                let pids = self.sessionPIDs(in: snap)
                 if pids.isEmpty { break }
-                if self?.x87Settled == false { self?.checkX87Alive(snap: snap, pids: pids) }
-                if let s = await MainActor.run(body: { WindowMemory.currentSize(pids: pids, scale: scale) }) {
-                    if self?.firstWindowSize == nil { self?.firstWindowSize = s }
-                    self?.lastWindowSize = s
+                if !self.x87Settled { self.checkX87Alive(snap: snap, pids: pids) }
+                if let s = WindowMemory.currentSize(pids: pids, scale: scale) {
+                    if self.firstWindowSize == nil { self.firstWindowSize = s }
+                    self.lastWindowSize = s
                 }
             }
             // Two consecutive misses, because pgrep can miss the process for a beat while wine
             // re-execs it during start-up.
             try? await Task.sleep(nanoseconds: 2_000_000_000)
-            if !(self?.sessionPIDs() ?? []).isEmpty { self?.watchGameProcess(); return }
-            await MainActor.run {
-                guard let self else { return }
-                self.running = false
-                self.appendLine("==> game exited")
-                if let f = self.firstWindowSize, let s = self.lastWindowSize, let i = self.currentInstall,
-                   let line = WindowMemory.remember(first: f, last: s, install: i,
-                                                    profile: self.currentProfile, world: self.currentWorld) {
-                    self.appendLine(line)
-                    self.windowSizeRemembered += 1
-                }
-                self.lastWindowSize = nil
-                self.firstWindowSize = nil
+            let again = await Task.detached(priority: .utility) { LiveClients.snapshot() }.value
+            guard let self else { return }
+            if !self.sessionPIDs(in: again).isEmpty { self.watchGameProcess(); return }
+            // The size goes into the boot profile before `running` drops, so a Play pressed the
+            // moment the game is gone cannot start against a half-written profile.
+            var remembered: String?
+            if let f = self.firstWindowSize, let s = self.lastWindowSize, let i = self.currentInstall {
+                let profile = self.currentProfile, world = self.currentWorld
+                remembered = await Task.detached(priority: .utility) {
+                    WindowMemory.remember(first: f, last: s, install: i, profile: profile, world: world)
+                }.value
+            }
+            self.lastWindowSize = nil
+            self.firstWindowSize = nil
+            self.running = false
+            self.tailGameGone?.raise()
+            self.appendLine("==> game exited")
+            if let line = remembered {
+                self.appendLine(line)
+                self.windowSizeRemembered += 1
             }
         }
     }
@@ -1308,18 +1389,24 @@ final class Runner: ObservableObject {
             }
         }
         // Tail the file: poll is plenty (the pane is human-read), and unlike a pipe it cannot
-        // block the writer.
+        // block the writer. Stopped once the game has exited and the file has stopped growing,
+        // rather than ticking until the next launch.
         let handle = try? FileHandle(forReadingFrom: out)
+        let gameGone = TailStop()
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
         timer.schedule(deadline: .now() + 0.3, repeating: 0.3)
         timer.setEventHandler { [weak self] in
-            guard let d = try? handle?.read(upToCount: 1 << 16), !d.isEmpty,
-                  let s = String(data: d, encoding: .utf8) else { return }
+            guard let d = try? handle?.read(upToCount: 1 << 16), !d.isEmpty else {
+                if gameGone.claimEnd() { Task { @MainActor in self?.endTail(gameGone) } }
+                return
+            }
+            guard let s = String(data: d, encoding: .utf8) else { return }
             Task { @MainActor in self?.appendChunk(s) }
         }
         timer.resume()
         tailTimer?.cancel()
         tailTimer = timer
+        tailGameGone = gameGone
         // The game was already started above, detached. Nothing to run here any more; the
         // detached pid is remembered so `stop` can still end the session on request.
         gamePID = pid
@@ -1364,6 +1451,15 @@ final class Runner: ObservableObject {
     private var gamePID: pid_t?
 
     private var tailTimer: DispatchSourceTimer?
+    /// Raised by the watch loop when the game has exited; see spawnViaShell's tail.
+    private var tailGameGone: TailStop?
+
+    private func endTail(_ which: TailStop) {
+        guard tailGameGone === which else { return }
+        tailTimer?.cancel()
+        tailTimer = nil
+        tailGameGone = nil
+    }
 
     private func spawn(_ exe: URL, args: [String], env: [String: String], cwd: URL,
                        done: @escaping (Int32) -> Void) {
@@ -1402,5 +1498,23 @@ final class Runner: ObservableObject {
             appendLine("!! failed to start \(exe.path): \(error.localizedDescription)")
             done(-1)
         }
+    }
+}
+
+/// Shared between the main actor (which knows when the game has exited) and the log tail's
+/// timer queue (which knows when the output file has stopped growing).
+final class TailStop: @unchecked Sendable {
+    private let lock = NSLock()
+    private var gone = false
+    private var ended = false
+
+    func raise() { lock.lock(); gone = true; lock.unlock() }
+
+    /// True exactly once, the first time it is asked after `raise`.
+    func claimEnd() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard gone, !ended else { return false }
+        ended = true
+        return true
     }
 }
