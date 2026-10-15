@@ -222,8 +222,9 @@ extension Headless {
             let oldNames = plan.oldCopy.map { String($0.path.dropFirst(F.path.count)) }
             check("plan: the old copy is this prefix (the wrapper holds another) and the data it linked to: \(oldNames)",
                   oldNames == ["/\(P)", "/Other Drive/FFXI/SquareEnix"])
-            check("Move refuses a folder inside the install it moves",
+            check("Move refuses a folder inside the install it moves, or inside the data it links to",
                   InstallMove.destinationProblem(F.appendingPathComponent("\(W)/Contents"), plan: plan) != nil
+                    && InstallMove.destinationProblem(F.appendingPathComponent("Other Drive/FFXI/SquareEnix/FINAL FANTASY XI"), plan: plan) != nil
                     && InstallMove.destinationProblem(dest, plan: plan) == nil)
             var shown: [Double] = []
             let moved = try InstallMove.copy(plan, into: destFolder, progress: { shown.append($0) })
@@ -297,6 +298,26 @@ extension Headless {
             check("... and the source is as it was", snapshot() == before)
         } catch {
             check("Move of the fixture: \(error.localizedDescription)", false)
+        }
+
+        // HorizonXI's whole folder a link to another place: copied as real files too.
+        let H = "Linked Place/siku.app", HP = "\(H)/Contents/SharedSupport/prefix10"
+        mk("\(H)/Contents/SharedSupport/wine/bin/wine", exec: true)
+        mk("\(HP)/system.reg")
+        mk("Linked Data/HorizonXI/Ashita-cli.exe", 30)
+        mk("Linked Data/HorizonXI/SquareEnix/FINAL FANTASY XI/FFXiMain.dll", 40)
+        ln("\(HP)/drive_c/HorizonXI", F.appendingPathComponent("Linked Data/HorizonXI").path)
+        do {
+            let linked = Install(wrapper: F.appendingPathComponent(H), prefixName: "prefix10")
+            let lp = try InstallMove.plan(linked, world: "HorizonXI")
+            let lm = try InstallMove.copy(lp, into: InstallLocation.folder(for: F.appendingPathComponent("DestL")))
+            var st = stat()
+            let isDir = lstat(lm.gameDir.path, &st) == 0 && st.st_mode & S_IFMT == S_IFDIR
+            check("a HorizonXI folder that is itself a link is copied as real files",
+                  isDir && fm.fileExists(atPath: lm.gameDir.appendingPathComponent("SquareEnix/FINAL FANTASY XI/FFXiMain.dll").path)
+                    && InstallMove.tally(lm.wrapper.path) == lp.expected)
+        } catch {
+            check("a HorizonXI folder that is itself a link: \(error.localizedDescription)", false)
         }
 
         // A source behind a drive that is gone: one line, nothing written.

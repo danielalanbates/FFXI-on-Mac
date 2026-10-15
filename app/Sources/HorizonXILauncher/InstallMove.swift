@@ -185,7 +185,7 @@ enum InstallMove {
                     p.expected.links += 1
                     continue
                 }
-                let underData = part.resolveUnder.contains { logical.hasPrefix($0 + "/") }
+                let underData = part.resolveUnder.contains { logical == $0 || logical.hasPrefix($0 + "/") }
                 guard underData else { p.expected.links += 1; continue }   // Wine's own map of the Mac
                 // Game data on another drive: copied as what it is, if it is there.
                 let physAbs = dest.hasPrefix("/") ? normalize(dest) : normalize((phys as NSString).deletingLastPathComponent + "/" + dest)
@@ -275,7 +275,9 @@ enum InstallMove {
     /// or where an install already is.
     static func destinationProblem(_ chosen: URL, plan p: Plan) -> String? {
         let folder = InstallLocation.folder(for: chosen).standardizedFileURL.path
-        for part in p.parts where folder == part.source.path || folder.hasPrefix(part.source.path + "/") {
+        // Nor inside the data its links reach: that is part of the old copy the Trash may take.
+        let sources = p.parts.map(\.source.path) + p.fixes.filter(\.resolve).map(\.target)
+        for src in sources where folder == src || folder.hasPrefix(src + "/") {
             return "Choose a folder outside the install you're moving."
         }
         let fm = FileManager.default

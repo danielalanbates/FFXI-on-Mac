@@ -1962,8 +1962,12 @@ struct ContentView: View {
             let (planned, wine, clients) = await Task.detached(priority: .userInitiated) {
                 (Result { try InstallMove.plan(i, world: s.name) }, InstallMove.anyWineserver(), !LiveClients.scan().isEmpty)
             }.value
+            // The local server answers on its login port while it runs, whichever world is picked.
+            let server = await LocalServer.localLoginPortResponds()
             moveChecking = false
-            if let why = InstallMove.blocker(.init(clientsLive: clients, wineRunning: wine)) { notice = why; return }
+            if let why = InstallMove.blocker(.init(clientsLive: clients, localServer: server, wineRunning: wine)) {
+                notice = why; return
+            }
             let plan: InstallMove.Plan
             switch planned {
             case .success(let p): plan = p
