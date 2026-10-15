@@ -1578,16 +1578,9 @@ struct ContentView: View {
         store.servers.map { ($0.name, $0.bootProfile) }
     }
 
-    /// The worlds a client left running by an earlier launcher may be adopted into.
-    private var adoptWorlds: [Sessions.World] {
-        guard let i = selected else { return [] }
-        return store.servers.map { Sessions.World(name: $0.name, host: LiveClients.normalize($0.host),
-                                                  profile: $0.bootProfile, install: i.forServer($0)) }
-    }
-
     /// Clients elsewhere, and what an earlier launcher left behind (Sessions.refreshElsewhere).
     private func refreshElsewhere() async {
-        await sessions.refreshElsewhere(install: active, profiles: bootProfiles, worlds: adoptWorlds)
+        await sessions.refreshElsewhere(install: active, profiles: bootProfiles, servers: store.servers)
     }
 
     /// Clients this window did not start, named by the world whose host (or boot profile's

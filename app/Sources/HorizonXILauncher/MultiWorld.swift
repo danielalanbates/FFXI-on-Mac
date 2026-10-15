@@ -677,18 +677,6 @@ final class Sessions: ObservableObject {
     /// duplicate refusal checks it as well as the Host field, so PLAY/RUNNING must too.
     @Published private(set) var bootHosts: [String: String] = [:]
 
-    /// A world a leftover client may belong to: the session it is adopted into (`Leftovers`).
-    struct World {
-        let name: String
-        /// The Host field, normalised.
-        let host: String
-        let profile: String
-        /// The selected install, pointed at this world's game folder.
-        let install: Install
-    }
-
-    /// Sessions this refresh adopted (newest last), for the window to log or show.
-    @Published private(set) var adoptedCount = 0
     private var cleaning = false
 
     /// The scan and the boot-profile reads (which may sit on an external volume) run off the
@@ -699,7 +687,7 @@ final class Sessions: ObservableObject {
     /// with no wineserver are ended quietly. Neither happens while another launcher is alive, a
     /// launch or job of this one is under way, or without `install`.
     func refreshElsewhere(install: Install? = nil, profiles: [(world: String, profile: String)] = [],
-                          worlds: [World] = []) async {
+                          servers: [Server] = []) async {
         let before = Runner.playingGroups
         let prefix = install.map { $0.prefix.path } ?? ""
         let (snap, boot, evidence, prefixPath, serverless) = await Task.detached {
@@ -733,16 +721,19 @@ final class Sessions: ObservableObject {
                                               prefix: prefixPath, prefixOfGroup: evidence.groups,
                                               serverPrefixes: evidence.servers, otherLauncherAlive: false)
             for o in orphans {
-                let hostKeys = { (w: World) in Set([w.host, self.bootHosts[w.name] ?? ""]).subtracting([""]) }
-                let w = worlds.first { hostKeys($0).contains(o.host) }
+                // The world whose Host field or boot profile's --server the loader was given.
+                let w = servers.first { s in
+                    Set([LiveClients.normalize(s.host), self.bootHosts[s.name] ?? ""]).subtracting([""]).contains(o.host)
+                }
                 let name = w?.name ?? (o.host.isEmpty ? "Unknown world" : o.host)
                 // The world's own session when it is idle, else a further one (a world that
                 // allows several clients, one of them running here already).
                 let idle = runner(for: name)
                 let r = !idle.running && !idle.busy ? idle : newSession(for: name)
-                r.adopt(group: o.group, host: o.host, world: name, install: w?.install ?? install,
-                        profile: w?.profile ?? "horizonxi.ini", pids: o.pids)
-                if r.running { adoptedCount += 1 }
+                // Pointed at that world's folder only now, for the one world adopted: finding a
+                // world's client can walk its drive, which no refresh should do for every world.
+                r.adopt(group: o.group, host: o.host, world: name, install: w.map(install.forServer) ?? install,
+                        profile: w?.bootProfile ?? "horizonxi.ini", pids: o.pids)
             }
             if !serverless.isEmpty, !cleaning, !Runner.anyPlaying, !Runner.workInFlight {
                 cleaning = true
