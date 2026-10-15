@@ -170,6 +170,15 @@ enum Narration {
         return true
     }
 
+    /// Quit the narrator if it is running (from PR #32). Called only once the last game client
+    /// is gone (`Runner.stopNarrator`): VanaVoice is there to read a game's dialogue.
+    static func terminateNarrator() {
+        for app in NSWorkspace.shared.runningApplications
+        where app.bundleIdentifier == "org.batesai.vanavoice" {
+            app.terminate()
+        }
+    }
+
     /// Start the narrator if it is not already up. VanaVoice refuses to run twice itself, but
     /// asking for a second copy would still steal focus, so check first.
     private static func launchNarrator(log: (String) -> Void) {

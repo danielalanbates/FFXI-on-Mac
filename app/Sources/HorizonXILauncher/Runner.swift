@@ -656,21 +656,30 @@ final class Runner: ObservableObject {
 
     /// Unpack a zip if it is one, find the installer .exe, run it.
     private func runDownloadedInstaller(_ file: URL, in install: Install, name nm: String) {
-        var exe = file
         let isZip = file.pathExtension.lowercased() == "zip" || Self.looksLikeZip(file)
         if isZip {
             let out = file.deletingLastPathComponent().appendingPathComponent(file.deletingPathExtension().lastPathComponent + "-unpacked", isDirectory: true)
             appendLine("==> unpacking \(file.lastPathComponent)")
-            try? FileManager.default.removeItem(at: out)
-            let d = Process(); d.executableURL = URL(fileURLWithPath: "/usr/bin/ditto"); d.arguments = ["-x", "-k", file.path, out.path]
-            d.standardOutput = Pipe(); d.standardError = Pipe()
-            try? d.run(); d.waitUntilExit()
-            guard d.terminationStatus == 0, let found = Self.firstExe(under: out) else {
-                appendLine("!! could not unpack \(file.lastPathComponent) or no .exe inside it"); busy = false; return
+            // Off the main actor: a client-sized zip (Eden's is 5.8 GB) is minutes of ditto, and
+            // the window froze for all of it.
+            Task { [weak self] in
+                let found = await Task.detached(priority: .userInitiated) { () -> URL? in
+                    try? FileManager.default.removeItem(at: out)
+                    let d = Process(); d.executableURL = URL(fileURLWithPath: "/usr/bin/ditto"); d.arguments = ["-x", "-k", file.path, out.path]
+                    d.standardOutput = FileHandle.nullDevice; d.standardError = FileHandle.nullDevice
+                    guard (try? d.run()) != nil else { return nil }
+                    d.waitUntilExit()
+                    return d.terminationStatus == 0 ? Runner.firstExe(under: out) : nil
+                }.value
+                guard let self else { return }
+                guard let found else {
+                    self.appendLine("!! could not unpack \(file.lastPathComponent) or no .exe inside it"); self.busy = false; return
+                }
+                self.launchInstaller(exe: found, in: install, name: nm)
             }
-            exe = found
+            return
         }
-        launchInstaller(exe: exe, in: install, name: nm)
+        launchInstaller(exe: file, in: install, name: nm)
     }
 
     static func looksLikeZip(_ file: URL) -> Bool {
@@ -693,7 +702,7 @@ final class Runner: ObservableObject {
         }
     }
 
-    static func firstExe(under dir: URL) -> URL? {
+    nonisolated static func firstExe(under dir: URL) -> URL? {
         guard let e = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil) else { return nil }
         var hits: [URL] = []
         for case let u as URL in e where u.pathExtension.lowercased() == "exe" { hits.append(u) }
@@ -1001,6 +1010,9 @@ final class Runner: ObservableObject {
         // narrator. Never fatal -- a failure here leaves the game exactly as silent as before.
         Narration.prepare(install, enabled: perf.narrateCutscenes, policy: addonPolicy,
                           profile: profile, othersLive: clientsLive) { [weak self] in self?.appendLine($0) }
+        if perf.narrateCutscenes, Narration.allowed(by: addonPolicy), Narration.narratorAvailable {
+            Runner.narratorStarted = true
+        }
         // Quest guide, same policy gate as narration: LSB / unrestricted only; scrubbed on
         // allowlist worlds. Never fatal.
         Guide.prepare(install, enabled: perf.enableVanaguide, policy: addonPolicy,
@@ -1258,6 +1270,7 @@ final class Runner: ObservableObject {
             self.x87Settled = true
             self.tailGameGone?.raise()
             self.appendLine("==> game exited")
+            if again.clients.isEmpty, self.othersPlaying() == 0 { Runner.stopNarrator() }
             if let line = remembered {
                 self.appendLine(line)
                 self.windowSizeRemembered += 1
@@ -1295,6 +1308,17 @@ final class Runner: ObservableObject {
         }
     }
 
+    /// A launch this run started VanaVoice's narrator (see `launch`).
+    private static var narratorStarted = false
+
+    /// The narrator runs only alongside a game: closed once the last client is gone, on Stop or
+    /// when the game exits by itself. Never at launcher start, when a game may still be playing.
+    static func stopNarrator() {
+        guard narratorStarted else { return }
+        narratorStarted = false
+        Narration.terminateNarrator()
+    }
+
     /// Stop this session's own client, in the prefix it was launched in.
     func stop() {
         if let i = currentInstall { stop(i) }
@@ -1303,19 +1327,29 @@ final class Runner: ObservableObject {
     /// Ends this session's client only. The wineserver is shared by every world in the prefix,
     /// so it is stopped only once no client at all is left.
     func stop(_ install: Install) {
-        let snap = LiveClients.snapshot()
-        var pids = running ? sessionPIDs(in: snap) : []
-        // The injector: it exits seconds after launch and its pid is cleared then, but until
-        // that is noticed it may already belong to somebody else. `signalable` checks.
-        if let pid = gamePID { pids.append(pid) }
-        // Only what is provably still this session's: a wine process in its group (or, with no
-        // group, a loader of its host in no other session's group). pid -> group.
-        let mine = MultiWorld.signalable(pids, group: sessionGroup, host: hostKey,
-                                         otherGroups: otherGroups, in: snap)
-        for pid in mine.keys { kill(pid, SIGTERM) }
         proc?.terminate()
-        if !mine.isEmpty { appendLine("==> stopping \(currentWorld) (pid \(mine.keys.sorted().map(String.init).joined(separator: ",")))") }
         let generation = launchGeneration
+        Task { [weak self] in
+            // The whole-Mac `ps` off the main actor (#25); which pids are this session's is
+            // still decided here, against this session's state as it is now.
+            let snap = await Task.detached(priority: .userInitiated) { LiveClients.snapshot() }.value
+            guard let self, self.launchGeneration == generation else { return }
+            var pids = self.running ? self.sessionPIDs(in: snap) : []
+            // The injector: it exits seconds after launch and its pid is cleared then, but until
+            // that is noticed it may already belong to somebody else. `signalable` checks.
+            if let pid = self.gamePID { pids.append(pid) }
+            // Only what is provably still this session's: a wine process in its group (or, with
+            // no group, a loader of its host in no other session's group). pid -> group.
+            let mine = MultiWorld.signalable(pids, group: self.sessionGroup, host: self.hostKey,
+                                             otherGroups: self.otherGroups, in: snap)
+            for pid in mine.keys { kill(pid, SIGTERM) }
+            if !mine.isEmpty { self.appendLine("==> stopping \(self.currentWorld) (pid \(mine.keys.sorted().map(String.init).joined(separator: ",")))") }
+            self.finishStop(install, mine: mine, generation: generation)
+        }
+    }
+
+    /// After the SIGTERM: SIGKILL what ignored it, then stop the wineserver if no client is left.
+    private func finishStop(_ install: Install, mine: [pid_t: pid_t], generation: Int) {
         Task.detached {
             // wine usually honours SIGTERM within a second or two; a client wedged in a
             // cutscene or a dead socket may not, and a Stop that does nothing is worse.
@@ -1340,13 +1374,22 @@ final class Runner: ObservableObject {
                 // could finish a launch and let go of the lock in between, and its client would
                 // be neither in the scan nor under way.
                 let lock = LaunchLock.acquire()
-                defer { if let lock { LaunchLock.release(lock) } }
+                var lockHandedOff = false
+                defer { if let lock, !lockHandedOff { LaunchLock.release(lock) } }
                 let left = LiveClients.snapshot().clients
                 let relaunched = self.map { $0.launchGeneration != generation } ?? false
                 let others = self?.othersPlaying() ?? Runner.playing.count
                 if !relaunched, MultiWorld.mayStopWineserver(left, otherSessionsPlaying: others,
                                                              launchUnderWay: lock == nil) {
-                    RendererSetup.stopWineserver(install)
+                    Runner.stopNarrator()
+                    // `wineserver -w` waits for the registry flush, seconds on the x10: wait off
+                    // the main actor (#25), holding the launch lock until it is done, so a Play
+                    // pressed meanwhile is refused rather than started against a dying server.
+                    lockHandedOff = true
+                    Task.detached(priority: .userInitiated) {
+                        RendererSetup.stopWineserver(install)
+                        if let lock { LaunchLock.release(lock) }
+                    }
                 } else if !left.isEmpty {
                     self?.appendLine("==> wineserver left up: still running \(Runner.describe(LiveClients.byHost(left)))")
                 } else {
