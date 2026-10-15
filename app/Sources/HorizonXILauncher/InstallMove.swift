@@ -75,10 +75,18 @@ enum InstallMove {
 
     /// Measures what a Move of `i` would copy. Read-only. Refuses, in one line, when anything
     /// the copy needs is behind a drive that is not there.
-    static func plan(_ i: Install, world: String) throws -> Plan {
+    static func plan(_ install: Install, world: String) throws -> Plan {
         let fm = FileManager.default
+        if let d = Preflight.unavailableDrive(for: install.wrapper.path) { throw Refusal(unreachable(d)) }
+        // A wrapper reached through a link (~/Applications/X.app -> a drive) is measured where it
+        // really is, or every path below would compare as outside it.
+        var i = install
+        if let real = canonical(install.wrapper.path), real != install.wrapper.standardizedFileURL.path {
+            i = Install(wrapper: URL(fileURLWithPath: real, isDirectory: true), prefixName: install.prefixName,
+                        gameDirOverride: install.gameDirOverride)
+            i.dataRoot = install.dataRoot; i.worldName = install.worldName; i.ownsWrapperClient = install.ownsWrapperClient
+        }
         let w = i.wrapper.standardizedFileURL
-        if let d = Preflight.unavailableDrive(for: w.path) { throw Refusal(unreachable(d)) }
         guard fm.fileExists(atPath: i.prefix.path) else {
             throw Refusal("There's no install at \(w.path) to move.")
         }
@@ -96,8 +104,11 @@ enum InstallMove {
         p.parts.append(Part(source: w, rel: InstallLocation.wrapperName, resolveUnder: resolveIn))
 
         // The world's own folder, when it is outside the wrapper: copied to Games/<world>.
-        if let root = i.dataRoot?.standardizedFileURL, !root.path.hasPrefix(w.path + "/") {
-            if let d = Preflight.unavailableDrive(for: root.path) { throw Refusal(unreachable(d)) }
+        if let chosen = i.dataRoot?.standardizedFileURL {
+            if let d = Preflight.unavailableDrive(for: chosen.path) { throw Refusal(unreachable(d)) }
+        }
+        if let chosen = i.dataRoot, let real = canonical(chosen.path), !real.hasPrefix(w.path + "/") {
+            let root = URL(fileURLWithPath: real, isDirectory: true)
             if fm.fileExists(atPath: root.path) {
                 p.parts.append(Part(source: root, rel: InstallLocation.worldsFolder + "/" + world, resolveUnder: [root.path]))
             }
@@ -467,7 +478,7 @@ enum InstallMove {
     /// world's own folder at its copy. Pure: the caller stores the result.
     static func rewrittenDataPath(_ dataPath: String, world: String, plan p: Plan, folder: URL) -> String? {
         guard !dataPath.isEmpty else { return nil }
-        let path = URL(fileURLWithPath: dataPath).standardizedFileURL.path
+        let path = canonical(dataPath) ?? URL(fileURLWithPath: dataPath).standardizedFileURL.path
         for (k, part) in p.parts.enumerated() where path == part.source.path || path.hasPrefix(part.source.path + "/") {
             if k > 0 && world != p.world { continue }
             return folder.standardizedFileURL.appendingPathComponent(part.rel).path + String(path.dropFirst(part.source.path.count))
