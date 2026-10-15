@@ -412,14 +412,20 @@ final class Runner: ObservableObject {
     }
 
     /// install.sh ships inside the app bundle; fall back to the repo copy when running from
-    /// `swift run`.
+    /// `swift run` (or `--fix` from a `swift build` binary).
     static func repairScript() -> URL? {
         if let u = Bundle.main.url(forResource: "install", withExtension: "sh") { return u }
+        return devScript("install.sh")
+    }
+
+    /// `<repo>/scripts/<name>`, from this source file's own path.
+    nonisolated static func devScript(_ name: String) -> URL? {
         let dev = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // HorizonXILauncher
             .deletingLastPathComponent()   // Sources
             .deletingLastPathComponent()   // app
-            .appendingPathComponent("scripts/install.sh")
+            .deletingLastPathComponent()   // the repo
+            .appendingPathComponent("scripts/\(name)")
         return FileManager.default.isExecutableFile(atPath: dev.path) ? dev : nil
     }
 
@@ -470,10 +476,7 @@ final class Runner: ObservableObject {
     /// `scripts/update-client.sh` ships next to install.sh in the bundle.
     static func updateScript() -> URL? {
         if let u = Bundle.main.url(forResource: "update-client", withExtension: "sh") { return u }
-        let dev = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("scripts/update-client.sh")
-        return FileManager.default.isExecutableFile(atPath: dev.path) ? dev : nil
+        return devScript("update-client.sh")
     }
 
     /// Apply every pending HorizonXI game update (torrent, so it can take a while), then report.
