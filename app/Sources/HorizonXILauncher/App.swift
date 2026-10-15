@@ -203,8 +203,17 @@ struct ContentView: View {
     @State private var installingExtra = ""
     @State private var addonWarning = ""
     @State private var notice = ""
+    /// What about the Mac slows the game just started (PlayCheck), one line each. Shown only while
+    /// true: cleared when that game exits, on a world change, and when Low Power Mode or the heat
+    /// ends; memory stays until the game exits (re-measuring it is a scan, not a property read).
+    @State private var playWarnings: [String] = []
     /// Play was pressed on a hosted world while the local server runs: one line and a button.
     @State private var localServerSlowing = false
+    /// Bumped by every recheck, so a slow Preflight (a world on a spinning or missing drive)
+    /// that finishes after a newer one cannot put the previous world's verdict on screen.
+    @State private var checksGeneration = 0
+    /// When switching back to the launcher last re-ran the checks; see `.didBecomeActive`.
+    @State private var lastActivationRecheck = Date.distantPast
     /// One update attempt per Play press chain; a second Play retries.
     @State private var updateChecked = false
     @State private var scanning = false
@@ -271,6 +280,9 @@ struct ContentView: View {
             }
         }
         .onChange(of: store.selectedID) { _ in
+            // Notices and play-time lines belong to the world they were said about.
+            notice = ""
+            playWarnings = []
             localServerSlowing = false
             if store.selected?.local == true { local.refresh() }
             // Recall the account last used on this world — accounts are per server, so the
@@ -281,6 +293,32 @@ struct ContentView: View {
             }
             // The preflight checks are per world now (each has its own game folder): CatsEye's
             // "no client" verdict must not keep Play grey after switching back to HorizonXI.
+            recheck()
+        }
+        // The selected world's game has exited: what was said about it is over.
+        .onChange(of: runner.running) { running in
+            guard !running else { return }
+            playWarnings = []
+            localServerSlowing = false
+        }
+        .onChange(of: local.status?.running) { running in
+            if running == false { localServerSlowing = false }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)
+                    .receive(on: DispatchQueue.main)) { _ in prunePlayWarnings() }
+        .onReceive(NotificationCenter.default.publisher(for: ProcessInfo.thermalStateDidChangeNotification)
+                    .receive(on: DispatchQueue.main)) { _ in prunePlayWarnings() }
+        // A drive coming back (or going) changes the checks; "reconnect it" must not stay on
+        // screen, PLAY grey, until somebody thinks of ↻.
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didMountNotification)
+                    .receive(on: DispatchQueue.main)) { _ in recheck() }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didUnmountNotification)
+                    .receive(on: DispatchQueue.main)) { _ in recheck() }
+        // Coming back to the launcher, too, at most every 5 s and never while a game is starting
+        // (Preflight reads the game drive, which the starting client is busy with).
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            guard !launchUnderWay, Date().timeIntervalSince(lastActivationRecheck) >= 5 else { return }
+            lastActivationRecheck = Date()
             recheck()
         }
         // Keep the players-online line current: on launch, whenever the world changes, and
@@ -1185,6 +1223,10 @@ struct ContentView: View {
                 Text(notice).font(.system(size: 12)).foregroundStyle(Vana.gold)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            ForEach(playWarnings, id: \.self) { line in
+                Text(line).font(.system(size: 12)).foregroundStyle(Vana.gold)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if localServerSlowing {
                 HStack(spacing: 8) {
                     Text(PlayCheck.localServerLine).font(.system(size: 12)).foregroundStyle(Vana.gold)
@@ -1661,11 +1703,13 @@ struct ContentView: View {
     private func play() {
         guard let i = active else { return }
         if runner.busy {
-            notice = "Wait for the install/update to finish"
+            // Only a forwarded --play gets here (PLAY is grey while busy); not an error to keep.
+            info("Wait for the install/update to finish")
             runner.logFileOnly("!! " + notice)
             return
         }
         notice = ""
+        playWarnings = []
         runner.clearLog()
         localServerSlowing = false
         updateChecked = false
@@ -1798,16 +1842,15 @@ struct ContentView: View {
         // this 8 GB Mac is where frame rates collapse), heat. One line each, only when real, and
         // never a reason not to play.
         let warnings = PlayCheck.current(othersRunning: !LiveClients.scan().isEmpty)
-        if !warnings.isEmpty {
-            notice = warnings.joined(separator: "\n")
-            for w in warnings { r.logFileOnly("!! " + w) }
-        }
         if let why = r.launch(i, perf: effective, profile: server.bootProfile, useX87: server.x87,
                               world: server.name, host: server.host,
                               maxClients: server.maxClients, msyncAllowed: server.msync,
                               addonPolicy: addonPolicy, beforeLaunch: writeShared) {
             notice = why
         } else {
+            // Said about the game that is starting, so only once it is.
+            playWarnings = warnings
+            for w in warnings { r.logFileOnly("!! " + w) }
             // Fresh progress for this session, fetched by the launcher, never by the game.
             ra.refresh(.play, gameDir: i.gameDir, log: { r.appendLine($0) })
             if !server.local { checkLocalServerBeside(r) }
@@ -1825,6 +1868,8 @@ struct ContentView: View {
                 LiveClients.snapshot().clients.contains { $0.host == "127.0.0.1" }
             }.value
             guard !localClient, !sessions.live.contains(where: { localWorlds.contains($0.world) }) else { return }
+            // The game may already be gone (a client that died at start-up): nothing to slow.
+            guard r.running else { return }
             localServerSlowing = true
             r.logFileOnly("!! " + PlayCheck.localServerLine)
         }
@@ -1882,14 +1927,31 @@ struct ContentView: View {
     private func recheck() { Task { await recheckAsync() } }
 
     private func recheckAsync() async {
+        checksGeneration += 1
+        let generation = checksGeneration
         guard let i = active else { checks = []; horizonInstalled = nil; return }
         let profile = store.selected?.bootProfile ?? "horizonxi.ini"
         let horizon = store.selected?.name == "HorizonXI"
         let (c, v) = await Task.detached(priority: .userInitiated) {
             (Preflight.run(i, profile: profile), horizon ? ClientVersion.horizonVersion(in: i) : nil)
         }.value
+        // A newer recheck started meanwhile (world switched, drive mounted): its answer stands.
+        guard generation == checksGeneration else { return }
         checks = c
         horizonInstalled = v
+    }
+
+    /// A Play is between its press and the game window (or the 90 s fallback).
+    private var launchUnderWay: Bool {
+        forwardRunning || sessions.live.contains { $0.runner.starting }
+    }
+
+    /// Drop the play-time lines whose condition has ended.
+    private func prunePlayWarnings() {
+        guard !playWarnings.isEmpty else { return }
+        let p = ProcessInfo.processInfo
+        let left = PlayCheck.stillTrue(playWarnings, lowPower: p.isLowPowerModeEnabled, thermal: p.thermalState)
+        if left != playWarnings { playWarnings = left }
     }
 
     /// Open the panel on whatever the profile actually says, not on this app's last write —

@@ -19,6 +19,16 @@ enum PlayCheck {
         state == .serious || state == .critical ? thermalLine : nil
     }
 
+    /// `lines` without the ones whose condition has ended: Low Power Mode off, heat back to
+    /// normal. Memory and the local server are left to their own triggers.
+    static func stillTrue(_ lines: [String], lowPower: Bool, thermal state: ProcessInfo.ThermalState) -> [String] {
+        lines.filter { line in
+            if line == lowPowerLine { return lowPower }
+            if line == thermalLine { return thermal(state) != nil }
+            return true
+        }
+    }
+
     /// This moment's lines, in the order they matter. `othersRunning`: another client is live.
     static func current(othersRunning: Bool) -> [String] {
         let p = ProcessInfo.processInfo

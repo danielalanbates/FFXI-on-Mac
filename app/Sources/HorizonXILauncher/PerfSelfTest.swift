@@ -149,6 +149,12 @@ extension Headless {
         checks.append(("memory, second client: the existing thresholds, second-client wording",
                        MultiWorld.memoryWarning(swapUsedFraction: 0.64, freePercent: 46)?.contains("second client") == true
                            && MultiWorld.memoryWarning(swapUsedFraction: 0.6, freePercent: 20) == nil))
+        let memoryLine = "Memory is low (4.6 GB in swap) — the game may stutter."
+        checks.append(("play-time lines clear when Low Power Mode or the heat ends, memory stays",
+                       PlayCheck.stillTrue([PlayCheck.lowPowerLine, memoryLine, PlayCheck.thermalLine],
+                                           lowPower: false, thermal: .fair) == [memoryLine]
+                           && PlayCheck.stillTrue([PlayCheck.lowPowerLine, PlayCheck.thermalLine],
+                                                  lowPower: true, thermal: .serious).count == 2))
         checks.append(("every play-time line is one short line",
                        [PlayCheck.lowPowerLine, PlayCheck.thermalLine, PlayCheck.localServerLine,
                         MultiWorld.memoryWarning(swapUsedFraction: 0.9, freePercent: 10) ?? ""]
