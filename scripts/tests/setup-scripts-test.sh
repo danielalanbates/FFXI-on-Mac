@@ -1,22 +1,28 @@
 #!/bin/zsh
 # Exercise the scripts behind the main button's Setup and Repair (install.sh, update-client.sh,
-# fix-wine-rpath.sh) on a tiny fixture tree: a fake wrapper whose wine, wineserver, curl and aria2c
-# are stubs that only log, and a few-KB "HorizonXI" zip. No real wine runs, nothing is
-# downloaded (the one aria2 fetch case reads a local copy through file://), and nothing outside the
-# fixture folder is touched.
+# game-wine.sh, fix-wine-rpath.sh) on a tiny fixture tree: a fake wrapper whose wine, wineserver,
+# curl and aria2c are stubs that only log, a few-KB "HorizonXI" zip and a few-KB fake game Wine
+# tarball. No real wine runs (only the real game Wine's `wineserver --version`, when its tarball
+# is given), nothing is downloaded (the aria2 and game Wine fetches read local copies through
+# file://), and nothing outside the fixture folder is touched.
 #
-#   [HXI_LAUNCHER_BIN=<built HorizonXILauncher>] ./scripts/tests/setup-scripts-test.sh [aria2-1.35.0-osx-darwin.tar.bz2]
+#   [HXI_LAUNCHER_BIN=<built HorizonXILauncher>] [HXI_GAME_WINE_TARBALL=<wine-cx-26.3.0-1-macos-x86_64.tar.xz>] \
+#     ./scripts/tests/setup-scripts-test.sh [aria2-1.35.0-osx-darwin.tar.bz2]
 #
 # The fixture lives in $FIXTURE (default ~/Downloads/FFXI-on-Mac-build/fixture/setup-scripts) and
 # is rebuilt on every run. With the aria2 archive given, the pinned-fetch case runs too (it checks
 # the archive against the size and SHA-256 update-client.sh pins, then runs the real aria2c
 # --version under Rosetta). With HXI_LAUNCHER_BIN, the launcher's --next-action and --fix run
 # against the fixture prefix too (the stub stands in for the patched game Wine).
+# game-wine.sh is fed a tiny fake tarball through file:// with its own size and SHA-256 (the
+# script's test-only overrides). With HXI_GAME_WINE_TARBALL (the real release, downloaded once),
+# it also installs that through file:// against the script's own pin.
 set -uo pipefail
 REPO="${0:A:h:h:h}"
 INSTALL="$REPO/scripts/install.sh"
 UPDATE="$REPO/scripts/update-client.sh"
 RPATH="$REPO/scripts/fix-wine-rpath.sh"
+GAMEWINE="$REPO/scripts/game-wine.sh"
 ARIA2_TARBALL="${1:-}"
 F="${FIXTURE:-$HOME/Downloads/FFXI-on-Mac-build/fixture/setup-scripts}"
 [[ "$F" == */fixture/* ]] || { print -u2 "refusing: FIXTURE must be a .../fixture/... folder"; exit 2; }
@@ -90,7 +96,8 @@ SAFE_PATH="$stubs:/usr/bin:/bin:/usr/sbin:/sbin"
 run() { env -i HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" PATH="${RUN_PATH:-$SAFE_PATH}" STUB_LOG="$STUB_LOG" STUB_API="$STUB_API" \
           STUB_SEED="$STUB_SEED" STUB_REGSVR32_FAIL="${STUB_REGSVR32_FAIL:-}" STUB_OFFLINE="${STUB_OFFLINE:-}" \
           STUB_ARIA2_FAIL="${STUB_ARIA2_FAIL:-}" HXI_WINE="${HXI_WINE:-}" HXI_ARIA2C="${HXI_ARIA2C:-}" \
-          HXI_TOOLS="${HXI_TOOLS:-$F/tools}" HXI_ARIA2_URL="${HXI_ARIA2_URL:-}" "$@"; }
+          HXI_TOOLS="${HXI_TOOLS:-$F/tools}" HXI_ARIA2_URL="${HXI_ARIA2_URL:-}" HXI_GAME_WINE_URL="${HXI_GAME_WINE_URL:-}" \
+          HXI_GAME_WINE_BYTES="${HXI_GAME_WINE_BYTES:-}" HXI_GAME_WINE_SHA256="${HXI_GAME_WINE_SHA256:-}" "$@"; }
 
 # ---- fixture game files --------------------------------------------------------------------------
 # A client tree as HorizonXI's zips lay it out (rooted at HorizonXI/).
@@ -303,6 +310,94 @@ else
   print "  skip (no aria2-1.35.0-osx-darwin.tar.bz2 given)"
 fi
 
+print "\ngame-wine.sh (Setup's game Wine)"
+# A fake release: wine/bin/{wine,wineserver} stubs, a relative link, 20 KB that will not compress
+# (so a partial file is a real partial), served through file:// with its own size and SHA-256.
+gwsrc="$F/build/gamewine"; mkdir -p "$gwsrc/wine/bin" "$gwsrc/wine/lib/wine/x86_64-unix"
+cp "$stubs/wine" "$stubs/wineserver" "$gwsrc/wine/bin/"
+print gcc > "$gwsrc/wine/bin/winegcc"; ln -s winegcc "$gwsrc/wine/bin/winecpp"
+/usr/bin/head -c 20000 /dev/urandom > "$gwsrc/wine/lib/wine/x86_64-unix/ntdll.so"
+( cd "$gwsrc" && /usr/bin/tar -cJf "$seed/wine-fake.tar.xz" wine )
+GW_TAR="$seed/wine-fake.tar.xz"
+GW_BYTES=$(stat -f %z "$GW_TAR"); GW_SHA=$(shasum -a 256 "$GW_TAR" | cut -d' ' -f1)
+GWROOT="$F/Chosen/FFXI on Mac"
+gw() { HXI_GAME_WINE_URL="${GW_URL:-file://$GW_TAR}" HXI_GAME_WINE_BYTES="${GW_B:-$GW_BYTES}" \
+         HXI_GAME_WINE_SHA256="${GW_S:-$GW_SHA}" run /bin/zsh "$GAMEWINE" install "$GWROOT"; }
+# Everything under the chosen folder: path, kind, size, mtime, link target.
+gwsnap() { [[ -d "$GWROOT" ]] || return 0
+  ( cd "$GWROOT" && find . -mindepth 1 -print0 | sort -z | while IFS= read -r -d '' p; do
+      print -r -- "$p $(stat -f '%HT %z %m' "$p") $( [[ -L "$p" ]] && readlink "$p")"; done ) }
+gwleft() { ls -a "$GWROOT" 2>/dev/null | grep -E '^\.wine-coop-(unpack|download)' ; }
+
+print "22. a fresh install: downloaded, checked, unpacked beside, renamed into place, tarball gone"
+rm -rf "$F/Chosen"
+out=$(gw 2>&1); rc=$?
+check "exit 0" "(( rc == 0 ))"
+check "wine-coop/wine/bin/wine and wineserver in place, runnable" "[[ -x '$GWROOT/wine-coop/wine/bin/wine' && -x '$GWROOT/wine-coop/wine/bin/wineserver' ]]"
+check "the tree is the tarball's (its link a link, its 20 KB file whole)" "[[ \"\$(readlink '$GWROOT/wine-coop/wine/bin/winecpp')\" == winegcc ]] && cmp -s '$gwsrc/wine/lib/wine/x86_64-unix/ntdll.so' '$GWROOT/wine-coop/wine/lib/wine/x86_64-unix/ntdll.so'"
+check "an ordinary folder (755), not mktemp's 700" "[[ \"\$(stat -f %Lp '$GWROOT/wine-coop')\" == 755 ]]"
+check "the tarball and the temp folders are gone" "[[ -z \"\$(gwleft)\" ]]"
+check "verified before it was unpacked; progress the button reads" "[[ \"\$out\" == *'==> verifying'*'==> extracting'* && \"\$out\" == *'(100%)]'* ]]"
+
+print "23. already installed: nothing fetched"
+before=$(gwsnap)
+out=$(GW_URL="file://$F/missing.tar.xz" gw 2>&1); rc=$?
+check "exit 0, says so, nothing changed" "(( rc == 0 )) && [[ \"\$out\" == *'already installed'* && \"\$out\" != *downloading* && \"\$(gwsnap)\" == \"\$before\" ]]"
+
+print "24. a download that doesn't match its pin: nothing unpacked, the old state untouched"
+rm -rf "$F/Chosen"; mkdir -p "$GWROOT/wine-coop" "$GWROOT/FFXI on Mac Wine.app"
+print keep > "$GWROOT/FFXI on Mac Wine.app/marker"; print notes > "$GWROOT/wine-coop/notes.txt"
+before=$(gwsnap)
+out=$(GW_S=0000000000000000000000000000000000000000000000000000000000000000 gw 2>&1); rc=$?
+check "exit 1, one line: didn't match its checksum" "(( rc == 1 )) && [[ \"\$out\" == *\"!! The game's Wine download didn't match its checksum\"* ]]"
+check "nothing extracted, nothing set aside, the bad download deleted" "[[ ! -e '$GWROOT/wine-coop/wine' && -z \"\$(gwleft)\" ]] && ! ls '$GWROOT' | grep -q incomplete"
+check "everything that was there is exactly as it was" "[[ \"\$(gwsnap)\" == \"\$before\" ]]"
+out=$(GW_B=$(( GW_BYTES - 1 )) gw 2>&1); rc=$?
+check "a size that doesn't match is refused the same way" "(( rc == 1 )) && [[ \"\$out\" == *'checksum'* && \"\$(gwsnap)\" == \"\$before\" ]]"
+out=$(GW_B=$(( GW_BYTES + 1 )) gw 2>&1); rc=$?
+check "... a file shorter than its pin too" "(( rc == 1 )) && [[ \"\$out\" == *'checksum'* && \"\$(gwsnap)\" == \"\$before\" ]]"
+
+print "25. the same folder with a good download: the incomplete wine-coop is set aside, never deleted"
+out=$(gw 2>&1); rc=$?
+aside=( "$GWROOT"/wine-coop.incomplete-*(N) )
+check "exit 0, installed" "(( rc == 0 )) && [[ -x '$GWROOT/wine-coop/wine/bin/wine' ]]"
+check "the old folder kept, renamed, with its file" "(( \${#aside} == 1 )) && [[ \"\$(cat \"\${aside[1]}/notes.txt\")\" == notes ]] && [[ \"\$out\" == *'set aside'* ]]"
+check "the wrapper beside it untouched" "[[ \"\$(cat '$GWROOT/FFXI on Mac Wine.app/marker')\" == keep ]]"
+
+print "26. a Stop mid-download leaves part of the tarball: the next press resumes it"
+rm -rf "$F/Chosen"; mkdir -p "$GWROOT/.wine-coop-download" "$GWROOT/.wine-coop-unpack.stale1"
+/usr/bin/head -c 5000 "$GW_TAR" > "$GWROOT/.wine-coop-download/wine-fake.tar.xz"
+out=$(gw 2>&1); rc=$?
+check "exit 0, installed from the resumed file" "(( rc == 0 )) && [[ -x '$GWROOT/wine-coop/wine/bin/wine' ]]"
+check "a stale unpack folder from a Stop is cleared" "[[ -z \"\$(gwleft)\" ]]"
+
+print "27. offline (nothing at the address): one line after a few tries, no partial unpack"
+rm -rf "$F/Chosen"
+out=$(GW_URL="file://$F/nowhere.tar.xz" gw 2>&1); rc=$?
+check "exit 1, says check the connection, press Setup" "(( rc == 1 )) && [[ \"\$out\" == *\"!! The game's Wine didn't download.\"*Setup* ]]"
+check "no wine-coop, no unpack folder" "[[ ! -e '$GWROOT/wine-coop' ]] && ! ls -a '$GWROOT' | grep -q unpack"
+
+print "28. refused before anything is written: a drive that is gone, not enough space"
+out=$(run /bin/zsh "$GAMEWINE" install "/Volumes/$GONE/FFXI on Mac" 2>&1); rc=$?
+check "missing drive: exit 1, names it, never restart" "(( rc == 1 )) && [[ \"\$out\" == *\"The '$GONE' drive isn't connected — reconnect it or press Setup\"* && \"\${out:l}\" != *restart* ]]"
+rm -rf "$F/Chosen"
+out=$(GW_B=999999999999999 gw 2>&1); rc=$?
+check "no room: exit 1, the numbers, nothing downloaded" "(( rc == 1 )) && [[ \"\$out\" == *'GB free here; there are'* && \"\$out\" != *downloading* ]] && [[ -z \"\$(ls -A '$GWROOT/.wine-coop-download' 2>/dev/null)\" ]]"
+check "no 'restart' in game-wine.sh" "! grep -qi restart '$GAMEWINE'"
+
+print "29. the real release (HXI_GAME_WINE_TARBALL) against the script's own pin"
+if [[ -f "${HXI_GAME_WINE_TARBALL:-}" ]]; then
+  R="$F/Real/FFXI on Mac"; mkdir -p "$R"
+  out=$(HXI_GAME_WINE_URL="file://$HXI_GAME_WINE_TARBALL" run /bin/zsh "$GAMEWINE" install "$R" 2>&1); rc=$?
+  check "exit 0 with the pinned size and SHA-256" "(( rc == 0 )) && [[ \"\$out\" == *'==> verifying'* ]]"
+  check "3,692 files; wine and wineserver are x86_64" "(( \$(find '$R/wine-coop/wine' -type f | wc -l) == 3692 )) && file '$R/wine-coop/wine/bin/wine' '$R/wine-coop/wine/bin/wineserver' | grep -c 'x86_64' | grep -q 2"
+  check "wineserver --version runs (under Rosetta; no prefix touched)" "WINEPREFIX='$F/Real/no-prefix' '$R/wine-coop/wine/bin/wineserver' --version 2>&1 | grep -qi wine && [[ ! -e '$F/Real/no-prefix' ]]"
+  check "this run's copy of the tarball is gone, the source kept" "[[ ! -e '$R/.wine-coop-download' && -f '$HXI_GAME_WINE_TARBALL' ]]"
+  rm -rf "$F/Real"
+else
+  print "  skip (no HXI_GAME_WINE_TARBALL given)"
+fi
+
 print "21. the launcher's own --next-action and --fix on this fixture (HXI_LAUNCHER_BIN)"
 if [[ -x "${HXI_LAUNCHER_BIN:-}" ]]; then
   # The stub stands in for the patched game Wine; the real ones are never looked at.
@@ -314,6 +409,17 @@ if [[ -x "${HXI_LAUNCHER_BIN:-}" ]]; then
   out=$(launcher --fix HorizonXI --prefix "$PFX" 2>/dev/null); rc=$?
   check "fix: repaired with the game Wine, then Play with no line" "(( rc == 0 )) && [[ \"\$out\" == *'result: ok'* && \"\$out\" == *'after:  play | Play | '* ]] && grep -q 'regsvr32 /s' '$LOG'"
   check "fix: registry/COM left to Play did not grey it" "[[ ! -e '$PFX/system.reg' ]]"
+  # The same ready prefix without the game's Wine, and without Rosetta (both injected; nothing
+  # real is looked at or installed).
+  out=$(FFXI_ON_MAC_WINE="$F/no-game-wine/wine" STUB_LOG="$LOG" "$HXI_LAUNCHER_BIN" --next-action HorizonXI --prefix "$PFX" 2>/dev/null); rc=$?
+  check "next-action: Setup, enabled, installs the game's Wine ($out)" "(( rc == 10 )) && [[ \"\$out\" == \"setup:game-wine | Setup | The game's Wine isn't installed yet.\" ]]"
+  : > "$LOG"
+  out=$(FFXI_ON_MAC_WINE="$F/no-game-wine/wine" STUB_LOG="$LOG" "$HXI_LAUNCHER_BIN" --fix HorizonXI --prefix "$PFX" 2>/dev/null); rc=$?
+  check "fix leaves the game's Wine to the window (it asks where) and runs nothing" "(( rc == 3 )) && [[ \"\$out\" == *refusing* ]] && ! grep -q '^wine' '$LOG'"
+  out=$(FFXI_ON_MAC_ROSETTA=missing launcher --next-action HorizonXI --prefix "$PFX" 2>/dev/null); rc=$?
+  check "next-action: Setup, Rosetta ($out)" "(( rc == 10 )) && [[ \"\$out\" == \"setup:rosetta | Setup | Apple's Rosetta isn't installed yet.\" ]]"
+  out=$(FFXI_ON_MAC_ROSETTA=present launcher --next-action HorizonXI --prefix "$PFX" 2>/dev/null); rc=$?
+  check "next-action: Play again with Rosetta there ($out)" "(( rc == 0 )) && [[ \"\$out\" == 'play | Play | ' ]]"
   rm "$GAME/Ashita-cli.exe"
   out=$(launcher --next-action HorizonXI --prefix "$PFX" 2>/dev/null); rc=$?
   check "next-action: Setup, files missing ($out)" "(( rc == 10 )) && [[ \"\$out\" == \"setup:game-files | Setup | Some of HorizonXI's files are missing.\" ]]"
@@ -328,7 +434,7 @@ else
 fi
 
 print "20. the scripts' user-facing lines never say restart"
-check "no 'restart' in install.sh or update-client.sh messages" "! grep -niE '(die|print|info|say)[^#]*restart' '$INSTALL' '$UPDATE'"
+check "no 'restart' in install.sh, update-client.sh or game-wine.sh messages" "! grep -niE '(die|print|info|say)[^#]*restart' '$INSTALL' '$UPDATE' '$GAMEWINE'"
 
 print
 (( fails == 0 )) && print "all checks passed" || print "$fails FAILED"

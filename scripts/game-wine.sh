@@ -1,3 +1,22 @@
+have=$(size_of "$tarball")
+# Larger than the pin: not something a resume can fix (it is deleted below, once there is room).
+(( have > WINE_BYTES )) && have=0
+
+# The rest of the download plus the unpacked tree; on the Mac's own disk, 8 GB stay free as well.
+# Asked of the nearest folder that exists, so a refusal writes nothing.
+probe="$root"; while [[ ! -e "$probe" ]]; do probe="${probe:h}"; done
+need=$(( WINE_BYTES - have + WINE_UNPACKED ))
+m=$(mount_of "$probe")
+[[ "$m" == / || "$m" == /System/Volumes/Data ]] && need=$(( need + 8000000000 ))
+free=$(( $(/bin/df -k "$probe" | /usr/bin/awk 'NR==2 {print $4}') * 1024 ))
+
+mkdir -p "$dl" || die "Couldn't make a folder in $root. Nothing was changed."
+(( have == 0 )) && /bin/rm -f "$tarball"
+
+# A Stop during an unpack leaves its temp folder: ours, by name, and never complete.
+unpack=""
+trap '[[ -n "$unpack" ]] && /bin/rm -rf "$unpack"' EXIT
+for old in "$root"/.wine-coop-unpack.*(N/); do /bin/rm -rf "$old"; done
 #!/bin/zsh
 # Copyright (c) 2026 Bates LLC. All rights reserved.
 #
@@ -56,23 +75,26 @@ if [[ "$root" == /Volumes/* ]]; then
   vol="/Volumes/${${root#/Volumes/}%%/*}"
   vol_gone "$vol" && die "The '${vol:t}' drive isn't connected — reconnect it or press Setup. Nothing was changed."
 fi
+have=$(size_of "$tarball")
+# Larger than the pin: not something a resume can fix (deleted below, once there is room).
+(( have > WINE_BYTES )) && have=0
+
+# The rest of the download plus the unpacked tree; on the Mac's own disk, 8 GB stay free as well.
+# Asked of the nearest folder that exists, so a refusal writes nothing.
+probe="$root"; while [[ ! -e "$probe" ]]; do probe="${probe:h}"; done
+need=$(( WINE_BYTES - have + WINE_UNPACKED ))
+m=$(mount_of "$probe")
+[[ "$m" == / || "$m" == /System/Volumes/Data ]] && need=$(( need + 8000000000 ))
+free=$(( $(/bin/df -k "$probe" | /usr/bin/awk 'NR==2 {print $4}') * 1024 ))
+(( free >= need )) || die "The game's Wine needs about $(( (need + 999999999) / 1000000000 )) GB free here; there are $(( free / 1000000000 )) GB. Free some space, or press Setup to choose another place."
+
 mkdir -p "$dl" || die "Couldn't make a folder in $root. Nothing was changed."
+(( have == 0 )) && /bin/rm -f "$tarball"
 
 # A Stop during an unpack leaves its temp folder: ours, by name, and never complete.
 unpack=""
 trap '[[ -n "$unpack" ]] && /bin/rm -rf "$unpack"' EXIT
 for old in "$root"/.wine-coop-unpack.*(N/); do /bin/rm -rf "$old"; done
-
-have=$(size_of "$tarball")
-# Larger than the pin: not something a resume can fix.
-(( have > WINE_BYTES )) && { /bin/rm -f "$tarball"; have=0; }
-
-# The rest of the download plus the unpacked tree; on the Mac's own disk, 8 GB stay free as well.
-need=$(( WINE_BYTES - have + WINE_UNPACKED ))
-m=$(mount_of "$root")
-[[ "$m" == / || "$m" == /System/Volumes/Data ]] && need=$(( need + 8000000000 ))
-free=$(( $(/bin/df -k "$root" | /usr/bin/awk 'NR==2 {print $4}') * 1024 ))
-(( free >= need )) || die "The game's Wine needs about $(( (need + 999999999) / 1000000000 )) GB free here; there are $(( free / 1000000000 )) GB. Free some space, or press Setup to choose another place."
 
 if (( have < WINE_BYTES )); then
   say "downloading the game's Wine ($(( WINE_BYTES / 1000000 )) MB) into $root"
@@ -93,9 +115,14 @@ if (( have < WINE_BYTES )); then
       sleep 1
     done
     wait $pid || rc=$?
+    # A finished download of another size is another file: no resume can fix that.
+    got=$(size_of "$tarball")
+    if (( (rc == 0 && got != WINE_BYTES) || got > WINE_BYTES )); then
+      /bin/rm -f "$tarball"; /bin/rmdir "$dl" 2>/dev/null || true
+      die "The game's Wine download didn't match its checksum, so it wasn't installed. Press Setup to try again."
+    fi
     # 33: the server ignored the resume. Start that file over rather than append to it.
     (( rc == 33 )) && /bin/rm -f "$tarball"
-    (( $(size_of "$tarball") > WINE_BYTES )) && /bin/rm -f "$tarball"
   done
   print -r -- "[#game-wine $(( WINE_BYTES / 1000000 ))/$(( WINE_BYTES / 1000000 ))MB(100%)]"
 fi
