@@ -940,10 +940,22 @@ struct ContentView: View {
                     let itemsToWrite = addonPolicy.isRestricting
                         ? addonItems.filter { addonPolicy.allows($0.name) }
                         : addonItems
-                    if let i = active,
-                       !AddonSuite.write(itemsToWrite, to: i,
-                                         profile: store.selected?.bootProfile ?? "horizonxi.ini") {
-                        notice = "Could not write the active boot script — its launcher markers are missing."
+                    let profile = store.selected?.bootProfile ?? "horizonxi.ini"
+                    if let i = active {
+                        // What the script loaded until now: a running client loaded exactly that.
+                        let before = AddonSuite.scan(i, profile: profile)
+                        if !AddonSuite.write(itemsToWrite, to: i, profile: profile) {
+                            notice = "Could not write the active boot script — its launcher markers are missing."
+                        } else if let s = store.selected {
+                            // The same change, at once, in that world's running client (if any).
+                            // Off the main thread; one launcher.log line, nothing on screen.
+                            let r = runner
+                            LiveAddons.apply(LiveAddons.commands(from: before, to: itemsToWrite, policy: addonPolicy),
+                                             world: s.name, host: s.host, profile: s.bootProfile,
+                                             install: i) { line in
+                                Task { @MainActor in r.logFileOnly(line) }
+                            }
+                        }
                     }
                     showAddons = false
                 }

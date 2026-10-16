@@ -297,6 +297,12 @@ enum LiveClients {
     /// (`ps -E`, which shows the variables of this user's own processes). nil when no
     /// wineserver in `pids` serves that prefix or its environment cannot be read.
     static func runningSyncMode(prefix: String, wineservers pids: [pid_t]) -> MultiWorld.SyncMode? {
+        wineserver(serving: prefix, among: pids)?.sync
+    }
+
+    /// The wineserver in `pids` that serves `prefix`, and its msync/esync mode; see
+    /// `runningSyncMode`. LiveAddons needs the pid too, for the wine it was started from.
+    static func wineserver(serving prefix: String, among pids: [pid_t]) -> (pid: pid_t, sync: MultiWorld.SyncMode)? {
         for pid in pids {
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/bin/ps")
@@ -308,7 +314,7 @@ enum LiveClients {
             let data = out.fileHandleForReading.readDataToEndOfFile()
             p.waitUntilExit()
             if let m = MultiWorld.syncMode(wineserverEnv: String(decoding: data, as: UTF8.self), prefix: prefix) {
-                return m
+                return (pid, m)
             }
         }
         return nil
