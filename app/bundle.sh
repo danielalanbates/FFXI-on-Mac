@@ -219,6 +219,14 @@ if [[ ! -f "$REPO/app/Resources/audiofollow.dylib" ]]; then
 fi
 [[ -f "$REPO/app/Resources/audiofollow.dylib" ]] && \
   cp "$REPO/app/Resources/audiofollow.dylib" "$APP/Contents/Resources/audiofollow.dylib"
+# gamewindow.dylib -- inserted into wine the same way; keeps the game window's picture in
+# proportion when it is resized, and carries DYLD_INSERT_LIBRARIES across the x87 sidecar's exec
+# (see window/gamewindow.c). Built here if it is missing so a fresh clone still gets it.
+if [[ ! -f "$REPO/app/Resources/gamewindow.dylib" ]]; then
+  "$REPO/scripts/build-gamewindow.sh" >/dev/null 2>&1 || true
+fi
+[[ -f "$REPO/app/Resources/gamewindow.dylib" ]] && \
+  cp "$REPO/app/Resources/gamewindow.dylib" "$APP/Contents/Resources/gamewindow.dylib"
 
 # Dock/Finder icon: an original crystal mark in the launcher's own Vana'diel palette (see
 # scripts/make_icon.py), not extracted from Square Enix's client -- this project's own art.
@@ -302,6 +310,7 @@ find "$APP" -exec xattr -c {} \; 2>/dev/null || true
 X87SC="$APP/Contents/Resources/x87sidecar_entitled"
 X87COOP="$APP/Contents/Resources/x87sidecar-coop"
 AUDIOFOLLOW="$APP/Contents/Resources/audiofollow.dylib"
+GAMEWINDOW="$APP/Contents/Resources/gamewindow.dylib"
 MOLTENVK="$APP/Contents/Resources/libMoltenVK-1.4.2.dylib"
 if [[ -n "${HXI_SIGN_ID:-}" ]]; then
   # The cooperative sidecar has no entitlements, so it can carry the hardened runtime and the
@@ -315,6 +324,7 @@ if [[ -n "${HXI_SIGN_ID:-}" ]]; then
   # Nested dylibs need the hardened runtime and a secure timestamp too, or the notary rejects
   # the whole bundle on this one file.
   if [[ -f "$AUDIOFOLLOW" ]]; then codesign --force --options runtime --timestamp -s "$HXI_SIGN_ID" "$AUDIOFOLLOW"; fi
+  if [[ -f "$GAMEWINDOW" ]]; then codesign --force --options runtime --timestamp -s "$HXI_SIGN_ID" "$GAMEWINDOW"; fi
   if [[ -f "$MOLTENVK" ]]; then codesign --force --options runtime --timestamp -s "$HXI_SIGN_ID" "$MOLTENVK"; fi
   codesign --force --options runtime -s "$HXI_SIGN_ID" "$APP"
 else
@@ -322,6 +332,7 @@ else
     codesign --force -s - --entitlements "$REPO/vendor/x87sidecar-entitlements.plist" "$X87SC"
   fi
   if [[ -f "$AUDIOFOLLOW" ]]; then codesign --force -s - "$AUDIOFOLLOW"; fi
+  if [[ -f "$GAMEWINDOW" ]]; then codesign --force -s - "$GAMEWINDOW"; fi
   if [[ -f "$MOLTENVK" ]]; then codesign --force -s - "$MOLTENVK"; fi
   codesign --force -s - "$APP"
 fi

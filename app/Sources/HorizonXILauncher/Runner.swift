@@ -1335,7 +1335,14 @@ final class Runner: ObservableObject {
         let x87Enabled = X87Guard.enabled(worldAllows: useX87, override: x87Override, brokenHere: x87Broken)
         // Looked up once: the environment (WINE_DISABLE_NX_COMPAT) and the command must agree on it.
         let gameWine = X87Sidecar.patchedWine()
-        var env = perf.environment(for: install, x87: x87Enabled, world: worldName, gameWine: gameWine != nil)
+        // The size the client is started at, read after the Play-time fit above may have changed
+        // it: the game window is kept at exactly that shape (GameWindow).
+        let gameSize = GameWindow.launchSize(install, profile: profile)
+        var env = perf.environment(for: install, x87: x87Enabled, world: worldName, gameWine: gameWine != nil,
+                                   gameSize: gameSize)
+        if let shape = env[GameWindow.aspectKey] {
+            logFileOnly("i  window shape: kept at \(shape) when the game window is resized")
+        }
         if !x87Enabled {
             env.removeValue(forKey: "ROSETTA_X87_PATH")
             env.removeValue(forKey: "ROSETTA_DISABLE_AOT")
@@ -1831,19 +1838,9 @@ final class Runner: ObservableObject {
         // last-spawn.txt is always the newest launch; each session also keeps its own.
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("HorizonXI-on-Mac", isDirectory: true)
-        // Record only launch settings useful for a renderer comparison. Inheriting the whole
-        // environment wrote unrelated session identifiers and could write user-supplied secrets
-        // from extraEnv into a world-readable diagnostics file.
-        let diagnosticKeys: Set<String> = [
-            "CX_ROOT", "D3D9_RT_READBACK_FENCE", "D3DMETAL_FRAMEWORK_PATH",
-            "DXVK_CONFIG_FILE", "DXVK_STATE_CACHE_PATH", "DYLD_FALLBACK_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
-            "FFXI_FPS_DIVISOR", "LSAppNapIsDisabled", "MVK_CONFIG_FAST_MATH_ENABLED",
-            "MVK_CONFIG_USE_COMMAND_POOLING", "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS",
-            "ROSETTA_X87_PATH", "WINEDEBUG", "WINEESYNC", "WINEMSYNC", "WINEPREFIX",
-            "WINE_DISABLE_NX_COMPAT", "WINE_LARGE_ADDRESS_AWARE"
-        ]
+        // Only `spawnDiagnosticKeys` are recorded, never the whole environment.
         let dump = "exe: \(exe.path)\nargs: \(args)\ncwd: \(cwd.path)\n"
-            + diagnosticKeys.sorted().compactMap { key in e[key].map { "\(key)=\($0)" } }
+            + Self.spawnDiagnosticKeys.sorted().compactMap { key in e[key].map { "\(key)=\($0)" } }
                 .joined(separator: "\n") + "\n"
         for name in ["last-spawn.txt", "last-spawn-\(Self.fileSafe(session)).txt"] {
             let file = support.appendingPathComponent(name)
@@ -1908,6 +1905,18 @@ final class Runner: ObservableObject {
         gamePID = pid
         return pid
     }
+
+    /// What last-spawn.txt records of the game's environment: only launch settings useful for a
+    /// renderer comparison. Inheriting the whole environment wrote unrelated session identifiers
+    /// and could write user-supplied secrets from extraEnv into a diagnostics file.
+    static let spawnDiagnosticKeys: Set<String> = [
+        "CX_ROOT", "D3D9_RT_READBACK_FENCE", "D3DMETAL_FRAMEWORK_PATH",
+        "DXVK_CONFIG_FILE", "DXVK_STATE_CACHE_PATH", "DYLD_FALLBACK_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
+        "FFXI_FPS_DIVISOR", "HXI_GAME_ASPECT", "LSAppNapIsDisabled", "MVK_CONFIG_FAST_MATH_ENABLED",
+        "MVK_CONFIG_USE_COMMAND_POOLING", "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS",
+        "ROSETTA_X87_PATH", "WINEDEBUG", "WINEESYNC", "WINEMSYNC", "WINEPREFIX",
+        "WINE_DISABLE_NX_COMPAT", "WINE_LARGE_ADDRESS_AWARE"
+    ]
 
     /// Keep launch diagnostics private from their first byte, including on the first launch.
     /// Foundation's atomic String.write creates a replacement file with default permissions

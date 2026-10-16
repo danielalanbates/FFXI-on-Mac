@@ -1388,6 +1388,8 @@ struct ContentView: View {
                     Toggle("Keep awake (no App Nap)", isOn: $perf.disableAppNap)
                     Toggle("Follow the Mac's sound output", isOn: $perf.followSoundOutput)
                         .help("Game audio follows your Mac's output device.")
+                    Toggle("Keep the game window's shape", isOn: $perf.keepWindowShape)
+                        .help("Resizing the game window keeps the picture in proportion.")
                     Toggle("Read cutscenes aloud (VanaVoice)", isOn: $perf.narrateCutscenes)
                         .disabled(!Narration.isAvailable || !Narration.allowed(by: addonPolicy))
                         .help(narrationHelp)
@@ -1447,6 +1449,7 @@ struct ContentView: View {
                 .onChange(of: perf.silenceWineDebug) { _ in perf.save() }
                 .onChange(of: perf.disableAppNap) { _ in perf.save() }
                 .onChange(of: perf.followSoundOutput) { _ in perf.save() }
+                .onChange(of: perf.keepWindowShape) { _ in perf.save() }
                 .onChange(of: perf.largeAddressAware) { _ in perf.save() }
                 .onChange(of: perf.narrateCutscenes) { _ in perf.save() }
                 .onChange(of: perf.enableVanaguide) { _ in perf.save() }

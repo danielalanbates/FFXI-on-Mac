@@ -51,8 +51,9 @@ keychain; `HXI_ADHOC=1` forces ad-hoc.
 3. `x87sidecar_entitled`: hardened runtime + `x87sidecar-entitlements.plist`, which holds
    `com.apple.security.cs.debugger` only. `get-task-allow` is deliberately absent: the notary
    rejects any submission containing it.
-4. `audiofollow.dylib` and `libMoltenVK-1.4.2.dylib`: hardened runtime + secure timestamp
-   (v3.9's MoltenVK was ad-hoc, which alone blocks notarisation).
+4. `audiofollow.dylib`, `gamewindow.dylib` (b69) and `libMoltenVK-1.4.2.dylib`: hardened
+   runtime + secure timestamp (v3.9's MoltenVK was ad-hoc, which alone blocks notarisation).
+   audiofollow and gamewindow are this project's own code (`audio/`, `window/`), under `LICENSE`.
 5. The app last, hardened runtime, **without `--deep`**, so the nested signatures above are
    sealed as they are. Signing a nested binary after the app breaks the app's seal.
 6. `codesign --verify --deep --strict`.

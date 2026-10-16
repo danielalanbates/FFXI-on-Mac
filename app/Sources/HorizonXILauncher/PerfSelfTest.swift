@@ -151,6 +151,89 @@ extension Headless {
                            && nxEnv("JUSTAWORD\n=x")["JUSTAWORD"] == nil && nxEnv("=x")[""] == nil
                            && nxEnv("A==b")["A"] == "=b"))
 
+        // The game window keeps its shape (b69): gamewindow.dylib plus HXI_GAME_ASPECT.
+        let gw = GameWindow.aspectKey
+        checks.append(("window shape: on by default, and a setting saved before b69 keeps it on",
+                       PerfSettings().keepWindowShape
+                           && (try? JSONDecoder().decode(PerfSettings.self, from: Data("{\"msync\":true}".utf8)))?
+                               .keepWindowShape == true))
+        let off = { () -> PerfSettings in var p = PerfSettings(); p.keepWindowShape = false; return p }()
+        let offData = try? JSONEncoder().encode(off)
+        checks.append(("window shape: switched off stays off across save and load",
+                       offData.flatMap { try? JSONDecoder().decode(PerfSettings.self, from: $0) }?.keepWindowShape == false))
+        let fakeFollow = "/fake/Resources/audiofollow.dylib"
+        let fakeWindow = URL(fileURLWithPath: "/fake/Resources With Space/gamewindow.dylib")
+        var gwEnv: [String: String] = [:]
+        GameWindow.apply(to: &gwEnv, dylib: nil, size: .init(width: 1920, height: 1080))
+        checks.append(("window shape: dylib missing => nothing inserted, no ratio, environment untouched",
+                       gwEnv.isEmpty))
+        gwEnv = [InsertedLibrary.key: fakeFollow]
+        GameWindow.apply(to: &gwEnv, dylib: fakeWindow, size: .init(width: 1920, height: 1080))
+        checks.append(("window shape: joined after audiofollow with ':' and HXI_GAME_ASPECT=1920x1080",
+                       gwEnv[InsertedLibrary.key] == fakeFollow + ":" + fakeWindow.path && gwEnv[gw] == "1920x1080"))
+        GameWindow.apply(to: &gwEnv, dylib: fakeWindow, size: .init(width: 1920, height: 1080))
+        checks.append(("window shape: inserting twice does not list the dylib twice",
+                       gwEnv[InsertedLibrary.key] == fakeFollow + ":" + fakeWindow.path))
+        gwEnv = [:]
+        GameWindow.apply(to: &gwEnv, dylib: fakeWindow, size: nil)
+        checks.append(("window shape: launch size unknown => dylib inserted alone, no ratio",
+                       gwEnv[InsertedLibrary.key] == fakeWindow.path && gwEnv[gw] == nil))
+        checks.append(("window shape: the ratio is refused exactly where the dylib refuses it",
+                       GameWindow.aspect(.init(width: 640, height: 480)) == "640x480"
+                           && GameWindow.aspect(.init(width: 2074, height: 784)) == "2074x784"
+                           && GameWindow.aspect(.init(width: 0, height: 1080)) == nil
+                           && GameWindow.aspect(.init(width: 1920, height: -2)) == nil
+                           && GameWindow.aspect(.init(width: 4001, height: 1000)) == nil
+                           && GameWindow.aspect(.init(width: 40000, height: 20000)) == nil))
+        // The size is the boot profile's own 0001/0002; a profile without both gives none.
+        let gwRoot = fm.temporaryDirectory.appendingPathComponent("hxi-perf-gw-\(UUID().uuidString)", isDirectory: true)
+        let gwInstall = Install(wrapper: gwRoot.appendingPathComponent("wrapper.app"), prefixName: "prefix",
+                                gameDirOverride: gwRoot.appendingPathComponent("game", isDirectory: true))
+        let boot = gwInstall.gameDir.appendingPathComponent("config/boot", isDirectory: true)
+        try? fm.createDirectory(at: boot, withIntermediateDirectories: true)
+        try? "[ffxi.registry]\r\n0001 = 2560\r\n0002 = 1440\r\n0003 = 4096\r\n".write(
+            to: boot.appendingPathComponent("both.ini"), atomically: true, encoding: .utf8)
+        try? "[ffxi.registry]\n0001 = 2560\n0003 = 4096\n".write(
+            to: boot.appendingPathComponent("width-only.ini"), atomically: true, encoding: .utf8)
+        try? "[ffxi.registry]\n0001 = 2560\n0002 = 0\n".write(
+            to: boot.appendingPathComponent("zero.ini"), atomically: true, encoding: .utf8)
+        checks.append(("window shape: launch size is the profile's 0001 x 0002",
+                       GameWindow.launchSize(gwInstall, profile: "both.ini") == WindowMemory.Size(width: 2560, height: 1440)))
+        checks.append(("window shape: no launch size when the profile lacks 0002, has 0002 = 0, or is missing",
+                       GameWindow.launchSize(gwInstall, profile: "width-only.ini") == nil
+                           && GameWindow.launchSize(gwInstall, profile: "zero.ini") == nil
+                           && GameWindow.launchSize(gwInstall, profile: "absent.ini") == nil))
+        let size1440 = GameWindow.launchSize(gwInstall, profile: "both.ini")
+        try? fm.removeItem(at: gwRoot)
+        let offEnv = off.environment(for: install, gameSize: size1440)
+        checks.append(("window shape off: no gamewindow.dylib and no HXI_GAME_ASPECT",
+                       offEnv[gw] == nil && !(offEnv[InsertedLibrary.key] ?? "").contains("gamewindow")))
+        var bothOn = PerfSettings()
+        bothOn.followSoundOutput = true
+        let onEnv = bothOn.environment(for: install, gameSize: size1440)
+        if let dylib = GameWindow.dylib() {
+            let list = (onEnv[InsertedLibrary.key] ?? "").split(separator: ":").map(String.init)
+            let expected = [AudioFollow.dylib()?.path, dylib.path].compactMap { $0 }
+            checks.append(("window shape on: gamewindow.dylib (x86_64 slice) and HXI_GAME_ASPECT=2560x1440 in the game's environment",
+                           list.contains(dylib.path) && onEnv[gw] == "2560x1440"))
+            checks.append(("window shape on: DYLD_INSERT_LIBRARIES is audiofollow:gamewindow when both are on",
+                           list == expected))
+        } else {
+            checks.append(("gamewindow.dylib found (bundle or app/Resources) with an x86_64 slice", false))
+        }
+        var noAspect = PerfSettings()
+        noAspect.extraEnv = "\(gw)="
+        checks.append(("window shape: HXI_GAME_ASPECT= in extra environment removes the ratio",
+                       noAspect.environment(for: install, gameSize: size1440)[gw] == nil))
+        checks.append(("last-spawn.txt records HXI_GAME_ASPECT and DYLD_INSERT_LIBRARIES",
+                       Runner.spawnDiagnosticKeys.isSuperset(of: [gw, InsertedLibrary.key])))
+        let notMachO = fm.temporaryDirectory.appendingPathComponent("hxi-perf-notmacho-\(UUID().uuidString).dylib")
+        try? Data("not a Mach-O file at all".utf8).write(to: notMachO)
+        checks.append(("a file without an x86_64 Mach-O slice is never inserted",
+                       !InsertedLibrary.hasX86Slice(notMachO)
+                           && !InsertedLibrary.hasX86Slice(notMachO.appendingPathExtension("missing"))))
+        try? fm.removeItem(at: notMachO)
+
         // Stop's wineserver wait is bounded, so the launch lock it holds is always let go.
         checks.append(("Stop's wineserver wait: done at once when quick, gives up at its limit",
                        Runner.finishes(within: 2) {}
