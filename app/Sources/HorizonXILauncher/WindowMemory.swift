@@ -85,10 +85,14 @@ enum WindowMemory {
         // as it was: a profile an older build wrote wrong keys into must not be rewritten, nor
         // copied into the stored choice that Setup gives a new install.
         g.write(to: install, profile: profile, only: g.sizeKeys)
-        var s = stored
-        s.width = w
-        s.height = h
-        s.save(world: world)
+        // Only a value the user saved for this world is updated. `stored` may be the fallback
+        // (the shared value, the defaults, the local world's Low); saving it here would make it
+        // this world's own choice, which a new profile is then made with.
+        if var s = GraphicsSettings.stored(forWorld: world) {
+            s.width = w
+            s.height = h
+            s.save(world: world)
+        }
         return "==> window size remembered for \(world): \(w)x\(h) (was \(old)); next Play opens at that size"
     }
 }

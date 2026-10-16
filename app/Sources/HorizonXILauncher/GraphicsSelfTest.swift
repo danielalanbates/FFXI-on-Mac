@@ -350,6 +350,14 @@ extension Headless {
               remembered != nil && changed(damaged, wmText).map { $0.map { registryKeyOf($0.0) ?? "" }.sorted() } == ["0001", "0002"]
                 && G.load(world: "HorizonXI").width == 1600 && G.load(world: "HorizonXI").height == 900
                 && G.load(world: "HorizonXI").textureCompression == 0 && G.load(world: "HorizonXI").environmentAnimations == 0)
+        let wmFresh = client("windowmemory-unsaved")
+        write(damaged, profileURL(wmFresh))
+        d.removeObject(forKey: G.key(for: "HorizonXI"))
+        let rememberedFresh = WindowMemory.remember(first: .init(width: 1280, height: 720), last: .init(width: 1600, height: 900),
+                                                    install: wmFresh, profile: "horizonxi.ini", world: "HorizonXI")
+        check("WindowMemory with nothing saved for the world: the profile gets the size, and no stored value is made from the fallback",
+              rememberedFresh != nil && BootProfile.value("0001", section: "ffxi.registry", in: read(profileURL(wmFresh))) == "1600"
+                && G.stored(forWorld: "HorizonXI") == nil)
 
         // MARK: 5. Setup's fresh profile, and one that is already there
         guard let horizon = Server.all.first(where: { $0.name == "HorizonXI" }),
@@ -401,14 +409,25 @@ extension Headless {
             let reg = { (t: String, k: String) in BootProfile.value(k, section: "ffxi.registry", in: t) ?? "-" }
             let keys = (G.registry.map(\.key) + [G.hardwareMouse]).sorted()
             print("     sample \(URL(fileURLWithPath: sample).lastPathComponent): " + keys.map { "\($0)=\(reg(text, $0))" }.joined(separator: " "))
-            let panel = G.parse(text, fallback: stored)
+            // The real stored HorizonXI value, only read (the panel's fallback), else Daniel's copy above.
+            let real = UserDefaults(suiteName: UpdateRules.bundleID)?.data(forKey: G.key(for: "HorizonXI")).flatMap(G.decoded)
+            let fallback = real ?? stored
+            print("     stored HorizonXI value: " + (real == nil ? "none readable; Daniel's copy above" : "the real one")
+                  + (real.map { $0 == stored ? " (the same as Daniel's copy)" : " (differs from Daniel's copy)" } ?? ""))
+            let panel = G.parse(text, fallback: fallback)
             print("     the panel would show: " + (panel.map { p in G.registry.map { "\($0.key)=\(p.iniOverrides[$0.key] ?? "-")" }.joined(separator: " ") } ?? "nothing (no registry values)"))
-            let applied = stored.applied(to: text)
-            let diff = (changed(text, applied) ?? []).map { "\(registryKeyOf($0.0) ?? "?"): \(reg(text, registryKeyOf($0.0) ?? "")) -> \(reg(applied, registryKeyOf($0.0) ?? ""))" }
-            print("     Apply of Daniel's stored settings would change: " + (diff.isEmpty ? "nothing" : diff.joined(separator: ", ")))
+            func diff(_ out: String) -> String {
+                let d = (changed(text, out) ?? []).map { "\(registryKeyOf($0.0) ?? "?"): \(reg(text, registryKeyOf($0.0) ?? "")) -> \(reg(out, registryKeyOf($0.0) ?? ""))" }
+                return d.isEmpty ? "nothing" : d.joined(separator: ", ")
+            }
+            let asShown = (panel ?? fallback).applied(to: text)
+            print("     Apply, nothing changed in the panel, would change: " + diff(asShown))
+            let applied = fallback.applied(to: text)
+            print("     Apply of the stored settings would change: " + diff(applied))
             check("sample: Apply never changes 0021, and reads back as applied",
-                  reg(applied, G.hardwareMouse) == reg(text, G.hardwareMouse)
-                    && G.parse(applied)?.iniOverrides == stored.iniOverrides)
+                  reg(applied, G.hardwareMouse) == reg(text, G.hardwareMouse) && reg(asShown, G.hardwareMouse) == reg(text, G.hardwareMouse)
+                    && G.parse(applied)?.iniOverrides == fallback.iniOverrides
+                    && G.parse(asShown)?.iniOverrides == (panel ?? fallback).iniOverrides)
         }
 
         finish()
