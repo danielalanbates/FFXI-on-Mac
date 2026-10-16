@@ -1267,8 +1267,8 @@ struct ContentView: View {
     // MARK: - Right: account + play
 
     private var sidebar: some View {
-        // Scrolls rather than clips: with two prefixes found the install picker appears, and
-        // together with a long notice the column outgrew a 632pt window and lost its top edge.
+        // Scrolls rather than clips: with the install picker (gone in b65) and a long notice the
+        // column outgrew a 632pt window and lost its top edge.
         ScrollView(.vertical, showsIndicators: false) {
         VStack(alignment: .leading, spacing: 14) {
             serverPicker
@@ -1294,18 +1294,6 @@ struct ContentView: View {
             Toggle("Remember me", isOn: $remember)
                 .toggleStyle(.checkbox).font(.system(size: 12)).foregroundStyle(Vana.muted)
                 .help("Remembered in a mode-600 file in Application Support. The game loader also receives it in its command line.")
-
-            if installs.count > 1 {
-                Picker("", selection: Binding(
-                    get: { selected?.id ?? "" },
-                    set: { id in selected = installs.first { $0.id == id }; recheck() })
-                ) {
-                    ForEach(installs) { i in
-                        Text("\(i.wrapper.lastPathComponent) · \(i.prefixName)").tag(i.id)
-                    }
-                }
-                .labelsHidden()
-            }
 
             playButton
             runningList
