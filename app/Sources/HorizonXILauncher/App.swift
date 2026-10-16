@@ -2674,13 +2674,11 @@ struct ContentView: View {
 
     /// Mount, unmount and activation rechecks: one at a time, the latest folded into a single rerun.
     private func autoRecheck() {
-        // Nothing selected (the install's drive was gone at launch): a drive coming back may
-        // bring it back. With `install.last` set nothing else can be picked (InstallSelection),
-        // so its own folder is looked at instead of scanning /Volumes on every mount and
-        // activation; the scan runs once it is back.
-        if selected == nil, !scanning, Install.lastChosen() == nil || Install.remembered() != nil {
-            refresh(); return
-        }
+        // Nothing selected and no `install.last` (a first run): a drive coming back may bring an
+        // install, which only a scan finds. With `install.last` set nothing else can be picked
+        // (InstallSelection): the recheck looks at its own folder, off the main thread (a
+        // spinning drive can take seconds to answer), and rescans once it is back.
+        if selected == nil, !scanning, Install.lastChosen() == nil { refresh(); return }
         if checksInFlight > 0 { recheckPending = true; return }
         recheck()
     }
@@ -2691,10 +2689,14 @@ struct ContentView: View {
         guard let i = active else {
             checks = []; horizonInstalled = nil; probe = Primary.Probe(); checksWorld = nil
             // Nothing selected: if the remembered install is on a drive that is gone, the button
-            // asks for that drive instead of offering a fresh setup (G6).
-            let r = await Task.detached(priority: .userInitiated) { Primary.rememberedDrive() }.value
+            // asks for that drive instead of offering a fresh setup (G6). Back on disk (its drive
+            // came back), it is the install in use again, which the rescan takes up.
+            let (r, back) = await Task.detached(priority: .userInitiated) {
+                (Primary.rememberedDrive(), Install.remembered() != nil)
+            }.value
             guard generation == checksGeneration else { return }
             rememberedDrive = r.map { (name: $0.0, state: $0.1) }
+            if back, selected == nil, !scanning { refresh() }
             return
         }
         rememberedDrive = nil
