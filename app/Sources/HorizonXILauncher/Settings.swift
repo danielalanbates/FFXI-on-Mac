@@ -65,7 +65,9 @@ struct PerfSettings: Codable {
     var enableVanaguide = false
     /// Large address aware heap hint for the 32-bit client.
     var largeAddressAware = true
-    /// Extra environment, one KEY=VALUE per line, for experiments.
+    /// Extra environment, one KEY=VALUE per line, for experiments. It wins over every value the
+    /// launcher sets itself; `KEY=` with nothing after the `=` takes KEY out of the game's
+    /// environment, including one of the launcher's own defaults (see `extraEnvironment`).
     var extraEnv = ""
     /// Which renderer pathway to run. Metal/DXVK reaches FFXI's 30 fps cap with the world
     /// drawing correctly, so it is the default; Vulkan and Classic are fallbacks.
@@ -120,10 +122,28 @@ struct PerfSettings: Codable {
         if let d = try? JSONEncoder().encode(self) { UserDefaults.standard.set(d, forKey: Self.key) }
     }
 
+    /// The patched game Wine's switch for keeping no-execute on; see `environment`.
+    static let nxCompatKey = "WINE_DISABLE_NX_COMPAT"
+
+    /// `extraEnv`, line by line, in order (a later line wins): `KEY=VALUE` sets KEY, `KEY=`
+    /// removes it (nil). A line with no `=`, or no name before it, is ignored.
+    var extraEnvironment: [(key: String, value: String?)] {
+        extraEnv.split(whereSeparator: \.isNewline).compactMap { line in
+            let parts = line.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2 else { return nil }
+            let key = parts[0].trimmingCharacters(in: .whitespaces)
+            let value = parts[1].trimmingCharacters(in: .whitespaces)
+            return key.isEmpty ? nil : (key, value.isEmpty ? nil : value)
+        }
+    }
+
     /// Environment applied to the wine process.
     /// - Parameter x87: whether this world may use x87 acceleration (`Server.x87`).
     /// - Parameter world: names the default frame-rate log, so two clients never share one.
-    func environment(for install: Install, x87: Bool = true, world: String = "") -> [String: String] {
+    /// - Parameter gameWine: the client runs under the patched game Wine (`X87Sidecar.patchedWine`),
+    ///   not the wrapper's own.
+    func environment(for install: Install, x87: Bool = true, world: String = "",
+                     gameWine: Bool = true) -> [String: String] {
         var env: [String: String] = [:]
         env["WINEPREFIX"] = install.prefix.path
         env["D3DMETAL_FRAMEWORK_PATH"] = install.d3dMetal.path
@@ -210,12 +230,22 @@ struct PerfSettings: Codable {
         // applied. One explicit file for every world instead (vendor/dxvk.conf, put in place by
         // RendererSetup.syncDXVKConfig).
         if env["DXVK_CONFIG_FILE"] == nil { env["DXVK_CONFIG_FILE"] = RendererSetup.dxvkConfigWinePath }
-        for line in extraEnv.split(separator: "\n") {
-            let parts = line.split(separator: "=", maxSplits: 1).map(String.init)
-            if parts.count == 2 {
-                env[parts[0].trimmingCharacters(in: .whitespaces)] =
-                    parts[1].trimmingCharacters(in: .whitespaces)
-            }
+        // Keep no-execute on: the fault storm (b66, docs/BETA-66.md). The game's Wine
+        // (athei/wine-build cx-26.3.0-1) turns NX off for the whole process as soon as any module
+        // without the PE NX_COMPAT flag loads (i386 ntdll alloc_module ->
+        // NtSetInformationProcess(ProcessExecuteFlags, MEM_EXECUTE_OPTION_ENABLE)). The loaders
+        // and Ashita carry the flag; Square Enix's FFXiMain.dll, FFXi.dll, polhook.dll, app.dll
+        // and polcore.dll do not, in every world. With NX off every readable page is mapped
+        // executable, and under Rosetta that measured 85-94k page faults/s, 50-84% kernel time,
+        // 2-minute zone loads and multi-second freezes (2026-10-15); with this set, the same
+        // character select ran at ~3k faults/s and the game played normally. That build only
+        // asks whether the variable exists. Reported upstream as athei/wine-build#3 and fixed in
+        // cx-26.3.0-6, where "0" brings the slow behaviour back -- so always "1". Only for the
+        // game's Wine: the wrapper's own build was never measured with it. An explicit value in
+        // extraEnv (below) wins; `WINE_DISABLE_NX_COMPAT=` there removes it.
+        if gameWine { env[Self.nxCompatKey] = "1" }
+        for (key, value) in extraEnvironment {
+            if let value { env[key] = value } else { env.removeValue(forKey: key) }
         }
         return env
     }

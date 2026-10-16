@@ -1317,7 +1317,9 @@ final class Runner: ObservableObject {
         let x87Broken = useX87 && x87Override == nil
             && X87Sidecar.coopBinary().map { X87Guard.isBroken(sidecar: $0) } == true
         let x87Enabled = X87Guard.enabled(worldAllows: useX87, override: x87Override, brokenHere: x87Broken)
-        var env = perf.environment(for: install, x87: x87Enabled, world: worldName)
+        // Looked up once: the environment (WINE_DISABLE_NX_COMPAT) and the command must agree on it.
+        let gameWine = X87Sidecar.patchedWine()
+        var env = perf.environment(for: install, x87: x87Enabled, world: worldName, gameWine: gameWine != nil)
         if !x87Enabled {
             env.removeValue(forKey: "ROSETTA_X87_PATH")
             env.removeValue(forKey: "ROSETTA_DISABLE_AOT")
@@ -1360,7 +1362,7 @@ final class Runner: ObservableObject {
         // `injector.exe <profile>.xml`. Same shape, different names — see Install.AshitaGeneration.
         let injector = install.gameDirWine + "\\" + install.ashitaCLI.lastPathComponent
         let bootFile = install.bootProfileName(profile)
-        if let wine = X87Sidecar.patchedWine() {
+        if let wine = gameWine {
             // Not about x87: the wrapper's own wine exits one second after login. See
             // X87Sidecar.patchedWine.
             exe = wine
@@ -1381,7 +1383,7 @@ final class Runner: ObservableObject {
         }
         // Watched only where the sidecar can be reached: ROSETTA_X87_PATH means nothing to the
         // wrapper's own wine, and a check there would always "fail".
-        x87Sidecar = X87Sidecar.patchedWine() == nil ? nil
+        x87Sidecar = gameWine == nil ? nil
             : env["ROSETTA_X87_PATH"].map { URL(fileURLWithPath: $0) }
         x87Forced = x87Override == "1"
         x87Settled = x87Sidecar == nil
@@ -1803,6 +1805,9 @@ final class Runner: ObservableObject {
             e.removeValue(forKey: "ROSETTA_X87_PATH")
             e.removeValue(forKey: "ROSETTA_DISABLE_AOT")
         }
+        // Decided by PerfSettings.environment alone (extraEnv's `WINE_DISABLE_NX_COMPAT=` must
+        // turn it off), never inherited from however the launcher itself was started.
+        if env[PerfSettings.nxCompatKey] == nil { e.removeValue(forKey: PerfSettings.nxCompatKey) }
         // The RetroAchievements key never reaches the game (or last-spawn.txt).
         e.removeValue(forKey: RetroAchievements.envKey)
         // Record the launch path and relevant performance settings. Diffing these against a
@@ -1819,7 +1824,7 @@ final class Runner: ObservableObject {
             "FFXI_FPS_DIVISOR", "LSAppNapIsDisabled", "MVK_CONFIG_FAST_MATH_ENABLED",
             "MVK_CONFIG_USE_COMMAND_POOLING", "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS",
             "ROSETTA_X87_PATH", "WINEDEBUG", "WINEESYNC", "WINEMSYNC", "WINEPREFIX",
-            "WINE_LARGE_ADDRESS_AWARE"
+            "WINE_DISABLE_NX_COMPAT", "WINE_LARGE_ADDRESS_AWARE"
         ]
         let dump = "exe: \(exe.path)\nargs: \(args)\ncwd: \(cwd.path)\n"
             + diagnosticKeys.sorted().compactMap { key in e[key].map { "\(key)=\($0)" } }

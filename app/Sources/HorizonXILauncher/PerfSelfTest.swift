@@ -125,6 +125,32 @@ extension Headless {
                        env["DXVK_CONFIG_FILE"] == #"C:\dxvk-cache\dxvk.conf"#
                            && env["DXVK_STATE_CACHE_PATH"] == #"C:\dxvk-cache"#))
 
+        // No-execute stays on under the game's Wine (the b66 fault storm): by default, for every
+        // world; an explicit extraEnv value wins; `KEY=` takes it out; the wrapper's Wine is left alone.
+        let nx = PerfSettings.nxCompatKey
+        func nxEnv(_ extra: String, gameWine: Bool = true) -> [String: String] {
+            var p = PerfSettings()
+            p.extraEnv = extra
+            return p.environment(for: install, gameWine: gameWine)
+        }
+        checks.append(("WINE_DISABLE_NX_COMPAT=1 by default under the game's Wine",
+                       nx == "WINE_DISABLE_NX_COMPAT" && env[nx] == "1"))
+        checks.append(("WINE_DISABLE_NX_COMPAT=1 for every built-in world (x87 on or off, any name)",
+                       Server.all.allSatisfy {
+                           PerfSettings().environment(for: install, x87: $0.x87, world: $0.name)[nx] == "1" }))
+        checks.append(("an explicit WINE_DISABLE_NX_COMPAT in extra environment wins",
+                       nxEnv("\(nx)=0")[nx] == "0" && nxEnv(" \(nx) = 2 \nFOO=bar")[nx] == "2"
+                           && nxEnv("FOO=bar")["FOO"] == "bar" && nxEnv("FOO=bar")[nx] == "1"))
+        checks.append(("WINE_DISABLE_NX_COMPAT= (empty) in extra environment removes it",
+                       nxEnv("\(nx)=")[nx] == nil && !nxEnv("\(nx)=\r\nFOO=1").keys.contains(nx)
+                           && nxEnv("\(nx)=\n\(nx)=1")[nx] == "1"))
+        checks.append(("the wrapper's own Wine gets no WINE_DISABLE_NX_COMPAT unless asked",
+                       nxEnv("", gameWine: false)[nx] == nil && nxEnv("\(nx)=1", gameWine: false)[nx] == "1"))
+        checks.append(("extra environment: KEY= drops a launcher default; no '=' or no name is ignored",
+                       nxEnv("DXVK_CONFIG_FILE=")["DXVK_CONFIG_FILE"] == nil
+                           && nxEnv("JUSTAWORD\n=x")["JUSTAWORD"] == nil && nxEnv("=x")[""] == nil
+                           && nxEnv("A==b")["A"] == "=b"))
+
         // Stop's wineserver wait is bounded, so the launch lock it holds is always let go.
         checks.append(("Stop's wineserver wait: done at once when quick, gives up at its limit",
                        Runner.finishes(within: 2) {}
