@@ -213,6 +213,45 @@ struct AddonSuite {
         return true
     }
 
+    /// What the Addons… sheet shows. Worked out off the main actor (b69): the folder listing and
+    /// the newest client log are slow to read on an external drive, and reading them before the
+    /// sheet opened made the click look like it did nothing.
+    struct SheetContents: Equatable {
+        var items: [Item]
+        /// Installed items the server's list hides.
+        var hidden: Int
+        /// Plugins Ashita refused on the last run; "" when none.
+        var warning: String
+    }
+
+    /// What the sheet says where the list will be while it scans.
+    static let scanningLabel = "Searching…"
+
+    /// The items the sheet lists and how many the server's list hides: on a restricting policy
+    /// only what it allows, otherwise everything.
+    static func sheetItems(_ all: [Item], policy: AddonPolicy) -> (items: [Item], hidden: Int) {
+        guard policy.isRestricting else { return (all, 0) }
+        let shown = all.filter { policy.allows($0.name) }
+        return (shown, all.count - shown.count)
+    }
+
+    /// The sheet's line about plugins Ashita refused (`mismatchedPlugins`); "" when none.
+    static func mismatchWarning(_ bad: [String]) -> String {
+        guard !bad.isEmpty else { return "" }
+        return "Ashita refused these plugins on the last run because they are built for a different "
+            + "interface version than this Ashita core: \(bad.joined(separator: ", ")). "
+            + (bad.contains { $0.lowercased() == "addons" }
+               ? "That includes the Lua host, so no addon below can run until it is fixed."
+               : "")
+    }
+
+    /// Everything the sheet shows for `i`. Reads the disk: call it off the main actor.
+    static func sheetContents(_ i: Install, profile: String, policy: AddonPolicy) -> SheetContents {
+        let shown = sheetItems(scan(i, profile: profile), policy: policy)
+        return SheetContents(items: shown.items, hidden: shown.hidden,
+                             warning: mismatchWarning(mismatchedPlugins(i)))
+    }
+
     /// Ashita refuses any plugin built against a different interface version than its core, and
     /// the client's log is the only place that shows it. Surfacing it matters: a mismatch means
     /// the Lua host (`addons`) does not load either, so *every* addon silently does nothing while
