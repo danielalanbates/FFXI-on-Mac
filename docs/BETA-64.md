@@ -89,18 +89,21 @@ Help lines:
 - "Animates effects such as water and weather."
 - "How many sounds can play at once. 20 is the most."
 
-The Max (4K) help now reads "4K with every setting at its maximum. Uses more graphics memory."
+The Max (4K) help is b63's, "4K with maximum texture detail. Uses more graphics memory." (the
+implementation changed it to "every setting at its maximum"; the review put it back, §K).
 Resolution, Texture resolution, Remember window size and the interface controls are unchanged.
 
 Presets:
 
 - **Max (4K):** 3840 × 2160 with every quality key at its documented maximum: 0000 = 6, 0011 = 2,
-  0017 = 1, 0018 = 2, 0019 = 1, 0003/0004 = 4096, 0029 = 20.
+  0018 = 2, 0019 = 1, 0003/0004 = 4096, 0029 = 20. Bump mapping 0017 = 0, as the template and every
+  measured profile (review, §K).
 - **Low:** Max at 640 × 480.
 - **Balanced:** Max at 1920 × 1080 with 2048 textures and 12 sounds. Those are the same three
   differences from Max that Balanced had before.
 - **Defaults** (`GraphicsSettings()`, shown only when nothing is stored or on disk): quality keys
-  at max, per Daniel's rule that shipped defaults stay max. Size, 2048 and 12 sounds are as before.
+  at max, per Daniel's rule that shipped defaults stay max, and bump mapping off as the template
+  ships it. Size, 2048 and 12 sounds are as before.
 
 ## D. Migration of stored values
 
@@ -121,8 +124,9 @@ A value with no schema is read in the old panel's terms:
 | Textures "Compressed" (2) | 0018 = 0 (high), 0019 = 0 (compressed) |
 | textureCompression 1 (only ever read from a profile's 0011) | 0018 = 1 (low), 0019 = 0 |
 | Environmental animation on / off | 0011 = 2 (smooth) / 0 (off) |
-| Bump mapping on / off | 0017 = 1 / 0 |
+| Bump mapping on / off | 0017 = 0 either way (review, §K) |
 | anything else, or missing | that field's default |
+| **mip 2, "Compressed", bump on, environment on** (the old defaults: nothing moved) | all four at b64's defaults: 0000 = 6, 0011 = 2, 0017 = 0, 0018 = 2, 0019 = 1 (review, §K) |
 
 How these were chosen:
 
@@ -149,15 +153,15 @@ Daniel's stored values (read only, from `org.batesai.horizonxi-on-mac`):
 | Key | Stored (old) | Becomes |
 |---|---|---|
 | `graphics.settings.horizonxi` | 1280×720, UI 960×540, 512, mip 4, Compressed, bump off, environment off, 12 | 0000=6 0001=1280 0002=720 0003/0004=512 0011=0 0017=0 0018=0 0019=0 0029=12 0037=960 0038=540 |
-| `graphics.settings` (shared) | 1920×1080, UI 960×540, 2048, mip 2, Compressed, bump on, environment on, 12 | 0000=3 0011=2 0017=1 0018=0 0019=0, rest as stored |
+| `graphics.settings` (shared) | 1920×1080, UI 960×540, 2048, mip 2, Compressed, bump on, environment on, 12 | 0000=6 0011=2 0017=0 0018=2 0019=1, rest as stored (was 0000=3 0017=1 0018=0 0019=0 before the review, §K) |
 | `graphics.settings.localserver` | 3840×2160, UI 1920×1080, 2048, mip 2, Compressed, bump on, environment on, 12, remember off | same quality keys as the shared one, 4K, remember off kept |
 
 The HorizonXI row is exactly what the main session put by hand into the live new install's
 `horizonxi.ini`. In a masked copy of that file, Apply of the migrated value changes **nothing**.
 
-A consequence: the old Max (4K), Balanced and Low presets all stored "Compressed" and mip 2. A
-value saved from them becomes high compression and mip 3, not the new Max. Pressing Max again
-gives the new Max.
+The old Max (4K), Balanced and Low presets all stored "Compressed" and mip 2. As implemented, a
+value saved from them became high compression and mip 3; since the review it becomes this build's
+Max, Balanced or Low (§K).
 
 ## E. A fresh install inherits the saved graphics
 
@@ -192,7 +196,7 @@ would have:
 - copied siku.app's wrong `0011 = 2` into the stored choice, which Setup now gives to new installs.
 
 It now writes `0001/0002` only, plus `0037/0038` when the interface follows the window, and stores
-the new size only.
+the new size only, and only into a value the user saved for that world (review, §K).
 
 ## G. install-location: the 4 failures since b62 (root cause, fixed)
 
@@ -243,7 +247,7 @@ after all runs). It covers:
   - Titles and ranges for all 12 keys; 0021 = Hardware Mouse and not in the table.
   - Every documented value has exactly one panel choice; the labels are as above.
   - Each preset writes exactly the 12 keys, never 0021.
-  - Max is at every documented maximum.
+  - Max is at every documented maximum (bump mapping excepted since the review, §K).
   - A value outside a range is never written.
 - **Migration.**
   - Daniel's exact HorizonXI JSON gives the keys in §D.
@@ -298,7 +302,7 @@ Every suite, same binary:
 
 | Suite | Result |
 |---|---|
-| graphics | 62/62 |
+| graphics | 62/62 (64/64 after the review, §K) |
 | install-location | **107/107** (was 103/107 on b62 and b63, §G) |
 | boot-profile 43/43, dxvk-cache 39/39, leftovers 26/26, news 36/36, primary-action 77/77, setup-progress 27/27, retroachievements 47/47 | passed |
 | addon-policy, addon-source, addon-installer, addon-profile, addon-scrub, addon-install, cursor-fix, guide-disabled, narration-disabled, multiworld, updater, perf, ui-text, single-instance | all passed |
@@ -319,8 +323,8 @@ Not run: `scripts/tests/setup-scripts-test.sh`. No script changed.
   b64 then converts that again. The values come out consistent, but the user's b64 choices for
   those four keys are lost. The launcher in /Applications is still older until this build is
   installed.
-- **Presets stored by older builds** convert to "Compressed" = high compression and mip 3 (§D),
-  not to the new Max.
+- **Presets stored by older builds** converted to high compression and mip 3 as implemented; fixed
+  in the review (§K).
 - **Section-aware writes add keys.** Apply, and Play's one-time Low seed of an `lsb.ini` with no
   registry values, now add missing keys to `[ffxi.registry]`; before, they were silently not
   written. The seed applies only when the profile has no numeric registry value.
@@ -337,4 +341,108 @@ Not run: `scripts/tests/setup-scripts-test.sh`. No script changed.
 | a5891bf | Graphics: Ashita's registry keys, the game's own values, old choices kept |
 | b7d791e | A new HorizonXI profile carries the graphics saved for that world |
 | 2fe53d6 | `--selftest-graphics` |
-| (this file) | docs: beta 64 |
+| 0747a00 | docs: beta 64 |
+| 39f2ef7 | Graphics: an old value nobody moved converts to the defaults, not to compression (review) |
+| baea95f | Graphics: bump mapping stays as the template ships it (review) |
+| 7d554c8 | WindowMemory: a fallback never becomes the world's own saved graphics (review) |
+| (this edit) | docs: beta 64 review |
+
+## K. Review (adversarial, beta-b63..beta-b64)
+
+Every key re-derived from `addons/lsb2.ini.example` (lines 342-512): 0000 mip 0-6, 0001/0002
+window, 0003/0004 background, 0011 environment 0-2, 0017 bump 0-1, 0018 texture compression
+(0 high, 1 low, 2 uncompressed), 0019 map compression (0 compressed, 1 uncompressed), 0021 hardware
+mouse, 0029 sounds 12-20, 0037/0038 menu. `registry`, `iniOverrides`, `parse`, the panel's choices
+and labels all match. 0021 and unknown keys are never written; writes stay in `[ffxi.registry]`.
+The fresh-install hook fires only where `ensureProfile` makes a profile from the template (HorizonXI),
+with that world's own stored value; an existing profile (adopt, move, repair) returns before it.
+No main-thread disk I/O was added (the migration and the hook read UserDefaults only).
+
+### Defects found and fixed
+
+1. **Untouched old values converted to a quality cut** (39f2ef7). mip 2, "Compressed", bump on,
+   environment on were b63's defaults; every b63 preset, every Apply that never moved those four,
+   and a b63 panel opened on the template or max.json (it read 0018 = 2, 0011 = 2, 0019 = 1,
+   0021 = 1 as those four) stored exactly that. Read through the old labels it became high texture
+   compression, compressed maps and mip 3, which is not what anyone chose or ran. Daniel's
+   `graphics.settings` and `graphics.settings.localserver` are that combination. Now such a value
+   keeps b64's defaults for the four; a value the old panel could not hold (mip -1, textures 1)
+   counts as untouched; any other combination is read through the table as before. Daniel's
+   HorizonXI value (mip 4, bump off, environment off) is unchanged by this: 0000=6 0011=0 0017=0
+   0018=0 0019=0.
+2. **Bump mapping turned on** (baea95f). b64 set `bumpMapping = true` in the defaults and in Max,
+   Balanced and Low (so the local world's one-time Low seed too), and mapped an old "bump on" to
+   0017 = 1. The old toggle wrote 0019, never 0017; the template, HorizonXI's stock profile,
+   `scripts/max.json` and `scripts/max4k.json` all run 0017 = 0, and docs/PATHWAYS.md records D3D8
+   bump format 65 as a DXVK translation gap. So "Max" stopped being the measured configuration its
+   own comment claims, and an untested render path would go live on Apply. Defaults and presets now
+   keep 0017 = 0, an old value never turns it on, the Max help line is b63's again. The toggle still
+   sets 0017 when the user moves it. **Product call for the main session:** if bump mapping should be
+   part of Max, that needs an in-game check first (format 65); it is one line in `max4K`.
+3. **WindowMemory manufactured a stored choice** (7d554c8). `remember()` saved the loaded value
+   with the new size even when the world had nothing of its own, so the shared value, the defaults
+   or Low became `graphics.settings.<world>`, and Setup's next fresh profile was made with it (for
+   HorizonXI: 2048 textures and 12 sounds over the template's 4096 / 20). It now updates only a
+   value the user saved for the world; the profile still gets the size, so the next Play opens at it.
+
+Mutation check: with those three source changes reverted (tests kept), 10 of 64 graphics checks
+fail; restored, 64/64.
+
+### Gemini cross-check (gemini-2.5-flash; hints, each verified)
+
+| Finding | Verdict |
+|---|---|
+| b64 diff: `migrateStored` runs on the main thread at window open | Rejected: UserDefaults only (in-memory, cfprefsd writes asynchronously), three small blobs, a no-op once at schema 2. |
+| Review fixes: an untouched old value now gets mip 6 / uncompressed instead of mip 3 / compressed | Intended (defect 1). |
+| Review fixes: an old explicit `bumpMapping: true` is ignored | Intended (defect 2): the old toggle never controlled 0017. |
+| Review fixes: a world with no saved value no longer remembers its window size | Rejected: the size is written into the profile, which is what the next Play opens at (`--selftest-graphics` checks the profile gets it). Only the stored copy is skipped. |
+
+### Tests (release build, same binary, no game running)
+
+- `--selftest-graphics`: 64/64; 65/65 with `HXI_GRAPHICS_PROFILE_SAMPLE`. New checks: Daniel's shared
+  and local values to the defaults' quality; b63's own Max / Low encodings to b64's Max / Low;
+  untouched or impossible values to the defaults; an old bump on or off never turns 0017 on; Max and
+  the defaults keep 0017 = 0 and Max applied to the template leaves `0017 = 0`; WindowMemory with
+  nothing saved for the world writes the profile and makes no stored value. The sample now reads the
+  real stored HorizonXI value (read only) and prints what Apply would write with nothing changed.
+- All other suites passed: install-location 107/107, primary-action 77/77, boot-profile 43,
+  dxvk-cache 39, leftovers 26, news 36, setup-progress 27, retroachievements 47; addon-install,
+  addon-installer, addon-policy, addon-profile, addon-scrub, addon-source, cursor-fix,
+  guide-disabled, multiworld, narration-disabled, perf, single-instance, ui-text, updater.
+- `scripts/tests/setup-scripts-test.sh` with `HXI_LAUNCHER_BIN`: 80 ok, **20 FAIL, all
+  environment**. Every failure is in a case that downloads the base client (10, 11, 12, 16, 30,
+  31): `update-client.sh` refuses with "HorizonXI needs about 17 GB free; there are 14 GB"
+  (`need_space` reserves 16 GB for the unzip on top of the fixture's 4 KB zip), and this Mac has
+  about 14 GB free. No script changed since b63.
+- Daniel's real preferences still hold no `schema` (nothing migrated), the live new install's
+  `horizonxi.ini` SHA-1 is the same before and after (1e57295a…), launcher.log untouched.
+
+### Daniel's live new-install profile (masked copy, read only)
+
+Copy: `~/Downloads/FFXI-on-Mac-build/fixture/graphics-b64-review/live-new-install-horizonxi.ini`.
+Stored fallback: the real `graphics.settings.horizonxi` (identical to his JSON in §D).
+
+| Key | On disk | Panel shows | Apply (nothing changed) writes |
+|---|---|---|---|
+| 0000 mip mapping | 6 | 6 (best) | unchanged |
+| 0001/0002 resolution | 1280 / 720 | 1280 × 720 | unchanged |
+| 0003/0004 background | 512 / 512 | 512 | unchanged |
+| 0011 environment | 0 | Off | unchanged |
+| 0017 bump | 0 | off | unchanged |
+| 0018 texture compression | 0 | High (least memory) | unchanged |
+| 0019 map compression | 0 | Compressed | unchanged |
+| 0029 sounds | 12 | 12 | unchanged |
+| 0037/0038 menu | 960 / 540 | interface not matched, 960 × 540 | unchanged |
+| 0021 hardware mouse | 1 | (no control) | never written |
+
+Apply of the stored value itself also changes nothing. For siku.app's masked copy the panel shows
+0011 = 2 (the file's, from the old bug) and 0018 = 0 (stored; the file's 4 is out of range); Apply
+with nothing changed writes only `0018: 4 -> 0`, and 0021 = 0 stays.
+
+### Still open
+
+- Not seen in the GUI or in game (rules): the panel's layout at 380 pt, and bump mapping on.
+- The new help lines on the panel's controls (§C) are user-visible text beyond the labels; they
+  follow the other controls' pattern and were left.
+- `parse` matches `[ffxi.registry]` case- and space-exactly while `BootProfile` does not (since b63);
+  a hand-written `[FFXI.Registry]` would read as empty but still be written. Not changed.
