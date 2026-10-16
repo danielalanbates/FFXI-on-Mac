@@ -206,9 +206,12 @@ tag" — it parses the Vanaguide checkout in Google Drive, not this repo, and no
 
 If the window still stretches: Setup & Diagnostics → extra environment → `FFXI_GAMEWINDOW_DEBUG=1`,
 Play, and open the log. `gamewindow: loaded; keeping game windows at W:H (carry on)` from the
-client, then `key: window 0x… now keeps W:H`, means the lock is set and AppKit is not honouring it
-for this window; no `gamewindow:` lines from the client means the dylib did not arrive (look for
-`gamewindow: carrying the inserted libraries through …`).
+client, then `key: window 0x… now keeps W:H`, means the lock is set. After each drag,
+`resize ended: window 0x… is WxH points, in proportion with W:H` means it held;
+`OUT OF PROPORTION with (the game overrode the size)` means the game's window procedure answered
+`WM_SIZING` with its own size, which AppKit lets win (see Review). No `gamewindow:` lines from the
+client means the dylib did not arrive (look for `gamewindow: carrying the inserted libraries
+through …`).
 
 ## Not covered
 
@@ -225,3 +228,68 @@ for this window; no `gamewindow:` lines from the client means the dylib did not 
   and is not constrained either.
 - A world whose client opens another titled, resizable window of at least 320x240 points (a retail
   PlayOnline window, say) gets the same ratio on it.
+
+## Review (2026-10-16)
+
+Adversarial review of `48719f6..81e1070`: every claim above checked against the code, against
+upstream source (athei/wine `cx-26-patched` and `3804c30b`, athei/x87sidecar `238a214`, read
+only) and against the installed `wine-coop` binaries, and every test rerun. Nothing was launched,
+installed or pushed; every build and process test waited until no game was running.
+
+**Does the lock engage under wine? Yes, unless the game answers `WM_SIZING`.**
+- WineWindow resizes through AppKit's own tracking: its `sendEvent:` override only handles
+  title-bar drags of maximized windows and otherwise calls `[super sendEvent:]`; its
+  `setFrame:display:` overrides call super; `constrainFrameRect:toScreen:` is about screens. It
+  never sets `contentAspectRatio` or `resizeIncrements` itself.
+- Measured on macOS 27 with AppKit's per-drag computation (`_frame:resizedFromEdge:withDelta:
+  withEvent:`, on hidden windows; now in `gamewindow-test.m`): the ratio is applied *before*
+  `windowWillResize:toSize:` and the delegate's answer is final. A +300-point right-edge drag gives
+  1260x540 unlocked and 1120x630 locked; a delegate that answers 1000x400 gets 1000x400.
+- WineWindow is its own delegate and returns AppKit's size unless the window procedure handles
+  `WM_SIZING` and returns TRUE (`query_resize_size`); wine's `DefWindowProc` does not handle it.
+  Whether FFXI or Ashita does is still unknown. No swizzle was added for that case: there is no
+  evidence it happens, and overriding the game's own answer would start a size tug-of-war through
+  `WM_WINDOWPOSCHANGING`. Instead, with `FFXI_GAMEWINDOW_DEBUG=1`, the dylib now logs at the end of
+  each live resize whether the window kept the ratio, so the in-game check can tell.
+
+**The carry, end to end.** The installed `wine-coop` `ntdll.so` re-execs through the sidecar with
+`execv(ROSETTA_X87_PATH, [sidecar, --cooperative, loader, …])`, which the interpose catches. The
+loop guard (`WINELOADERNOEXEC`) and the sidecar's own variables (`ROSETTA_DISABLE_AOT`,
+`X87_SIDECAR_BOOTSTRAP`) pass through `/bin/sh` (bash 3.2 here). That shell also keeps variables
+whose names are not identifiers and reads neither `ENV` nor `BASH_ENV`; it adds `PWD` and `SHLVL`,
+which the launch script's own shell already set. The carry test now does wine's real cooperative
+handshake from the stand-in client, against the hardened sidecar. Through the carry, the sidecar
+attaches, installs its x87 JIT hook and replies, x87 arithmetic runs, and the dylib is mapped,
+with CoreFoundation opened before the handshake as in the client. Without the carry the result is
+the same except for the dylib.
+
+**Process scans.** For the life of the game, the sidecar's command line now carries the `/bin/sh`
+step (`… --cooperative /bin/sh -c export DYLD_INSERT_LIBRARIES="$HXI_DYLD_INSERT_LIBRARIES"; exec
+"$@" hxi-carry <wine> <loader> …`, read from `ps`). `LiveClients.parse` still files it under the
+client's host and still counts it as the sidecar, an injector keeps its boot file, Leftovers still
+adopts the session and reads its `WINEPREFIX` (4 new self-test checks).
+
+**Fixed.**
+- `gw_log` wrote with stdio, including from wine's forked child (the carry's log line). If another
+  thread held the `stderr` lock at `fork()`, that child would block forever (debug mode only).
+  It now formats into a buffer and writes each line with one `write(2)`.
+- Added the debug-only end-of-resize report above. The dylib was rebuilt; before the change the
+  committed slices matched a fresh build of the source exactly (signatures stripped).
+
+**Checked, no change needed.** `bundle.sh` signs `gamewindow.dylib` exactly like audiofollow
+(Developer ID, hardened runtime, timestamp) before the app. `package.sh` only verifies the app
+`--deep --strict`. `publish-release.sh` only requires v3.9's files to still be present, so a new
+file passes. The wine loader is unsigned, so dyld honours the insert. `DYLD_FALLBACK_LIBRARY_PATH`
+stays stripped in accelerated clients, as before. `GameWindow.aspect` and the dylib refuse the
+same values. `PerfSettings.environment` is used only for Play.
+
+**Tests rerun (no game running).** `scripts/tests/gamewindow-test.sh`: all passed on arm64 and
+x86_64 under Rosetta, including the new drag-order checks, the debug report and the handshake
+through the carry. Release build in `swift-build-b69` gave only the two older warnings. All 26
+`--selftest-*` suites passed: 927 checks, 0 failures (multiworld 74, leftovers 28).
+
+**Still not verified.** A real drag of the game window, and macOS 27's window-manager resize path
+if it bypasses AppKit's tracking. Whether FFXI or Ashita handles `WM_SIZING`. Zoom, full screen
+and tiling (not covered, see above). The carry under real wine (it was tested with the real sidecar
+and a stand-in that does wine's exact exec and handshake). Notarization of the new dylib
+(`package.sh` not run).
