@@ -124,6 +124,10 @@ extension Headless {
         checks.append(("a closed gate (Play stopped waiting): not renamed, target as it was, no temp file left",
                        !m6.wrote && m6.refused != nil && !gate.renamed && bytes(gated) == C.encode([e[0]])
                            && noTemps(work.appendingPathComponent("m"))))
+        let unmade = work.appendingPathComponent("m/no-folder-yet/x.dxvk-cache")
+        let m7 = C.merge([b], into: unmade, gate: gate)
+        checks.append(("... nor a folder or file made for a target that is not there yet",
+                       !m7.wrote && m7.refused != nil && !fm.fileExists(atPath: unmade.deletingLastPathComponent().path)))
 
         // Daniel's real caches, copied.
         let fixtures = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FFXI_DXVK_CACHE_FIXTURES"]

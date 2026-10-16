@@ -224,6 +224,9 @@ enum DXVKStateCache {
         /// The rename happened (whether or not the caller was still waiting for it).
         var renamed: Bool { lock.lock(); defer { lock.unlock() }; return done }
 
+        /// The caller has stopped waiting: write nothing more beside the target either.
+        var isClosed: Bool { lock.lock(); defer { lock.unlock() }; return closed }
+
         func close() { lock.lock(); closed = true; lock.unlock() }
 
         /// What the merge reported, for the caller that waited.
@@ -297,6 +300,9 @@ enum DXVKStateCache {
     private static func writeAtomically(_ bytes: Data, entries: Int, to target: URL, unchanged: Stamp?,
                                         gate: CommitGate?) -> String? {
         let fm = FileManager.default
+        // Play stopped waiting while this read: the client may be starting in that prefix, so not
+        // even a temp file or a folder goes into it now.
+        if gate?.isClosed == true { return "not renamed in time" }
         let dir = target.deletingLastPathComponent()
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let tmp = dir.appendingPathComponent(".\(target.lastPathComponent).\(getpid()).tmp")
@@ -310,8 +316,15 @@ enum DXVKStateCache {
         }
         // A DXVK writer (or anything else) appended meanwhile: replacing the file would lose that.
         guard stamp(target) == unchanged else { return "changed while merging" }
-        let renamed = { rename(tmp.path, target.path) == 0 }
-        guard gate.map({ $0.commit(renamed) }) ?? renamed() else { return "not renamed in time" }
+        var renameErrno: Int32 = 0
+        let renamed = { () -> Bool in
+            if rename(tmp.path, target.path) == 0 { return true }
+            renameErrno = errno
+            return false
+        }
+        guard gate.map({ $0.commit(renamed) }) ?? renamed() else {
+            return renameErrno == 0 ? "not renamed in time" : "rename failed: \(String(cString: strerror(renameErrno)))"
+        }
         return nil
     }
 
