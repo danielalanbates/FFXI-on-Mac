@@ -30,6 +30,12 @@ extension Headless {
         // Ours.
         checks.append(("own orphaned loader (own wine, the selected prefix, no other launcher) is adopted",
                        adoptable(own) == [orphan]))
+        // b69: the sidecar's command line when gamewindow.dylib's carry put /bin/sh before the loader.
+        let carriedPs = psText.replacingOccurrences(
+            of: "--cooperative /Volumes",
+            with: "--cooperative /bin/sh -c export DYLD_INSERT_LIBRARIES=\"$HXI_DYLD_INSERT_LIBRARIES\"; exec \"$@\" hxi-carry /Volumes")
+        checks.append(("... the same when its sidecar went through the carry's /bin/sh step (b69)",
+                       carriedPs != psText && adoptable(LiveClients.parse(carriedPs)) == [orphan]))
         checks.append(("... with no sidecar to read, when this wine's only wineserver serves the selected prefix",
                        adoptable(own, groupPrefix: [:]) == [orphan]
                            && adoptable(own, groupPrefix: [:], servers: [990416: prefix + "/"]) == [orphan]))
@@ -146,6 +152,11 @@ extension Headless {
                        Leftovers.envValue("WINEPREFIX", in: sidecarEnv) == prefix
                            && Leftovers.envValue("WINEPREFIX", in: "/x/wineserver WINEPREFIX=/a b/c") == "/a b/c"
                            && Leftovers.envValue("WINEPREFIX", in: ".\\\\bootloader\\\\horizon-loader.exe --server h") == nil))
+        // b69's carry puts a /bin/sh step, with a KEY="value"-looking word, before the loader in the
+        // sidecar's command line, and its environment gains HXI_* variables.
+        let carriedEnv = "/Applications/FFXI-on-Mac.app/Contents/Resources/x87sidecar-coop --cooperative /bin/sh -c export DYLD_INSERT_LIBRARIES=\"$HXI_DYLD_INSERT_LIBRARIES\"; exec \"$@\" hxi-carry /x/wine .\\\\bootloader\\\\horizon-loader.exe --server play.horizonxi.com --user u --pass p HOME=/Users/x HXI_DYLD_INSERT_LIBRARIES=/A b/gamewindow.dylib HXI_GAME_ASPECT=1920x1080 WINEPREFIX=\(prefix) WINEESYNC=0 WINEMSYNC=1"
+        checks.append(("WINEPREFIX is read the same from a sidecar started through the carry's /bin/sh step",
+                       Leftovers.envValue("WINEPREFIX", in: carriedEnv) == prefix))
         checks.append(("the wineserver socket folder is named as wine names it",
                        Leftovers.serverDir(dev: 0x1000016, ino: 0xd7c73b, uid: 501) == "/tmp/.wine-501/server-1000016-d7c73b"))
 

@@ -758,6 +758,21 @@ enum Headless {
                        catseye?.maxClients == 2 && refusal(catseye, oneCats) == nil))
         checks.append(("CatsEyeXI: a third client is refused (their two-character cap)",
                        refusal(catseye, twoCats)?.contains("at most 2") == true))
+        // b69: with gamewindow.dylib inserted, wine execs the sidecar with a /bin/sh step before the
+        // loader (the DYLD_INSERT_LIBRARIES carry, window/gamewindow.c), so the sidecar that lives
+        // as long as the client shows this command line (read from ps, 2026-10-16). It must still
+        // file under the client's host, still count as its sidecar, and an injector still names
+        // its boot file.
+        let carryScript = "/bin/sh -c export DYLD_INSERT_LIBRARIES=\"$HXI_DYLD_INSERT_LIBRARIES\"; exec \"$@\" hxi-carry"
+        let carried = LiveClients.parse("""
+            76001 76000 .\\\\bootloader\\\\horizon-loader.exe --server play.horizonxi.com --user fixture --pass fixture
+            76002 76000 /Applications/FFXI on Mac.app/Contents/Resources/x87sidecar-coop --cooperative \(carryScript) /Users/x/Library/Application Support/BatesAI/ffxi-runtime/wine-coop/wine/lib/wine/x86_64-unix/wine .\\\\bootloader\\\\horizon-loader.exe --server play.horizonxi.com --user fixture --pass fixture
+            77002 77000 /x/x87sidecar-coop --cooperative \(carryScript) /x/wine C:\\HorizonXI\\Ashita-cli.exe horizonxi.ini
+            """)
+        checks.append(("the carry's /bin/sh step: the loader and its sidecar still file under one host, the sidecar as a sidecar",
+                       carried.byHost["play.horizonxi.com"] == [76001, 76002] && carried.sidecars == [76002, 77002]))
+        checks.append(("the carry's /bin/sh step: an injector's sidecar is still an injector with its boot file",
+                       carried.clients.first { $0.pid == 77002 }.map { $0.injecting && $0.bootFile == "horizonxi.ini" } == true))
 
         // Two local-world sessions in one prefix: A launched first (group 71000), then B (72000).
         let twoLocal = LiveClients.parse("""
