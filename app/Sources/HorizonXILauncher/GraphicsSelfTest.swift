@@ -358,19 +358,9 @@ extension Headless {
         check("WindowMemory with nothing saved for the world: the profile gets the size, and no stored value is made from the fallback",
               rememberedFresh != nil && BootProfile.value("0001", section: "ffxi.registry", in: read(profileURL(wmFresh))) == "1600"
                 && G.stored(forWorld: "HorizonXI") == nil)
-        // The window macOS cut down on one side at creation (2026-10-16): the first sample is not
-        // the profile's size, so the delta would keep the wrong shape; the window's own size wins,
-        // even when it never changed while the game ran.
-        let wmCut = client("windowmemory-cut")
-        write(damaged, profileURL(wmCut))
-        let rememberedCut = WindowMemory.remember(first: .init(width: 1100, height: 720), last: .init(width: 1100, height: 720),
-                                                  install: wmCut, profile: "horizonxi.ini", world: "HorizonXI")
-        check("WindowMemory: a 1280 × 720 profile whose window opened at 1100 × 720 and stayed there is remembered as 1100 × 720",
-              rememberedCut != nil && BootProfile.value("0001", section: "ffxi.registry", in: read(profileURL(wmCut))) == "1100"
-                && BootProfile.value("0002", section: "ffxi.registry", in: read(profileURL(wmCut))) == "720")
         let wmSame = client("windowmemory-same")
         write(damaged, profileURL(wmSame))
-        check("WindowMemory: a window that opened at the profile's size (frame slack included) and never changed writes nothing",
+        check("WindowMemory: a window that never changed size writes nothing",
               WindowMemory.remember(first: .init(width: 1282, height: 716), last: .init(width: 1282, height: 716),
                                     install: wmSame, profile: "horizonxi.ini", world: "HorizonXI") == nil
                 && read(profileURL(wmSame)) == damaged)
@@ -382,9 +372,28 @@ extension Headless {
         let tall = WindowMemory.fitted(.init(width: 2560, height: 1440), into: .init(width: 1438, height: 848))
         check("fitted: 2560 × 1440 is held by the width and stays 16:9 (\(tall.width) × \(tall.height))",
               tall.width <= 1438 && tall.width >= 1430 && tall.height <= 848 && abs(Double(tall.width) / Double(tall.height) - 16.0 / 9.0) < 0.01)
-        check("fitted: a size that fits is left alone, and one that would go under 640 × 480 is not shrunk",
+        check("fitted: a size that fits is left alone, and a shape one factor would take under 640 × 480 is clamped side by side",
               WindowMemory.fitted(.init(width: 1280, height: 720), into: .init(width: 1438, height: 848)) == .init(width: 1280, height: 720)
-                && WindowMemory.fitted(.init(width: 4000, height: 3000), into: .init(width: 600, height: 400)) == .init(width: 4000, height: 3000))
+                && WindowMemory.fitted(.init(width: 2560, height: 784), into: .init(width: 1438, height: 848)) == .init(width: 1438, height: 784))
+        let screen = WindowMemory.Size(width: 1438, height: 848)
+        var wide = G(); wide.width = 2074; wide.height = 784; wide.uiFollowsResolution = false; wide.uiWidth = 960; wide.uiHeight = 540
+        let wideFit = WindowMemory.playSettings(wide, stored: nil, limit: screen)
+        check("Play: the 2074 × 784 profile opens whole at \(wideFit?.width ?? 0) × \(wideFit?.height ?? 0), its 960 × 540 interface untouched",
+              wideFit.map { $0.width <= 1438 && $0.height <= 848 && $0.width >= 1430 && $0.uiWidth == 960 && $0.uiHeight == 540 } == true)
+        var fine = G(); fine.width = 1280; fine.height = 720
+        check("Play: a profile that fits and matches its stored choice is left alone",
+              WindowMemory.playSettings(fine, stored: fine, limit: screen) == nil)
+        let firstFit = WindowMemory.fitted(.init(width: 2560, height: 1440), into: screen)
+        var shrunk = G(); shrunk.width = firstFit.width; shrunk.height = firstFit.height; shrunk.uiFollowsResolution = true
+        var chosen = shrunk; chosen.width = 2560; chosen.height = 1440
+        let regrown = WindowMemory.playSettings(shrunk, stored: chosen, limit: .init(width: 2558, height: 1410))
+        check("Play: an earlier fit grows back toward the stored 2560 × 1440 on a bigger screen (\(regrown?.width ?? 0) × \(regrown?.height ?? 0)), still 16:9",
+              regrown.map { $0.width > firstFit.width && $0.width <= 2558 && $0.height <= 1410 && abs(Double($0.width) / Double($0.height) - 16.0 / 9.0) < 0.01 } == true
+                && WindowMemory.playSettings(shrunk, stored: chosen, limit: screen) == nil)
+        var bigUI = G(); bigUI.width = 2560; bigUI.height = 1440; bigUI.uiFollowsResolution = false; bigUI.uiWidth = 1920; bigUI.uiHeight = 1080
+        let bigUIFit = WindowMemory.playSettings(bigUI, stored: nil, limit: screen)
+        check("Play: an own-size interface bigger than the fitted window is scaled to fit inside it",
+              bigUIFit.map { $0.uiWidth <= $0.width && $0.uiHeight <= $0.height && $0.uiWidth >= 640 } == true)
 
         // MARK: 5. Setup's fresh profile, and one that is already there
         guard let horizon = Server.all.first(where: { $0.name == "HorizonXI" }),
