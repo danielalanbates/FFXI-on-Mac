@@ -317,11 +317,16 @@ struct Install: Identifiable, Hashable {
     /// builds Wine in the chosen folder the game is not downloaded yet, and that install (not
     /// an older one with a game elsewhere) is the one being set up.
     static func remembered(_ defaults: UserDefaults = AppDefaults.store) -> Install? {
+        guard let i = lastChosen(defaults) else { return nil }
+        return FileManager.default.fileExists(atPath: i.prefix.path) ? i : nil
+    }
+
+    /// `install.last` as written, whether or not it is on disk now (InstallSelection).
+    static func lastChosen(_ defaults: UserDefaults = AppDefaults.store) -> Install? {
         guard let s = defaults.string(forKey: key) else { return nil }
         let parts = s.components(separatedBy: "#")
-        guard parts.count == 2 else { return nil }
-        let i = Install(wrapper: URL(fileURLWithPath: parts[0]), prefixName: parts[1])
-        return FileManager.default.fileExists(atPath: i.prefix.path) ? i : nil
+        guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { return nil }
+        return Install(wrapper: URL(fileURLWithPath: parts[0]), prefixName: parts[1])
     }
 
     /// The remembered install's wrapper, from defaults alone: nothing on disk is checked, so
@@ -332,8 +337,8 @@ struct Install: Identifiable, Hashable {
         return parts.count == 2 ? URL(fileURLWithPath: parts[0]) : nil
     }
 
-    func remember() {
-        AppDefaults.store.set(id, forKey: Self.key)
+    func remember(_ defaults: UserDefaults = AppDefaults.store) {
+        defaults.set(id, forKey: Self.key)
     }
 
     // MARK: - Discovery

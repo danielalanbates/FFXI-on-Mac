@@ -78,7 +78,7 @@ extension Headless {
         guard let server = store.servers.first(where: { $0.name == name }) else {
             FileHandle.standardError.write(Data("no world named \(name)\n".utf8)); exit(2)
         }
-        let base = installFromPrefixArgument() ?? Install.remembered() ?? Install.discover().first
+        let base = installFromPrefixArgument() ?? InstallSelection.inUse()
         let d = headlessDecision(base: base, server: server)
         print(line(d))
         if base == nil { exit(2) }
@@ -93,7 +93,7 @@ extension Headless {
             FileHandle.standardError.write(Data("no world named \(name)\n".utf8)); exit(2)
         }
         guard let base = installFromPrefixArgument() else {
-            let d = headlessDecision(base: Install.remembered() ?? Install.discover().first, server: server)
+            let d = headlessDecision(base: InstallSelection.inUse(), server: server)
             print(line(d))
             print("refusing: --fix only works on a prefix named with --prefix …/Contents/SharedSupport/<prefix>")
             exit(3)

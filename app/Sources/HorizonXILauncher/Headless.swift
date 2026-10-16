@@ -144,8 +144,14 @@ enum Headless {
         var only: String? = nil
         if let w = args.firstIndex(of: "--world"), w + 1 < args.count { only = args[w + 1] }
 
-        guard let base = Install.remembered() ?? Install.discover().first else {
-            FileHandle.standardError.write(Data("no wrapper/install found\n".utf8))
+        // The window's install (InstallSelection): never another one while its drive is gone.
+        guard let base = InstallSelection.inUse() else {
+            if let l = Install.lastChosen() {
+                let gone = Preflight.unavailableDrive(for: l.wrapper.path).map { " " + Preflight.driveMessage($0) } ?? ""
+                FileHandle.standardError.write(Data("the install in use isn't on disk: \(l.wrapper.path) [\(l.prefixName)].\(gone)\n".utf8))
+            } else {
+                FileHandle.standardError.write(Data("no wrapper/install found\n".utf8))
+            }
             exit(2)
         }
         print("install: \(base.wrapper.path) [\(base.prefixName)]\n")

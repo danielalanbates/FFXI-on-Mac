@@ -162,7 +162,9 @@ enum Vana {
 }
 
 struct ContentView: View {
+    /// Every install the last scan found, the one in use included: what DXVK's cache is seeded from.
     @State private var installs: [Install] = []
+    /// The install in use: `install.last`, nil while it is not on disk (InstallSelection).
     @State private var selected: Install?
     /// The wrapper/prefix in `selected`, pointed at the chosen world's game folder.
     private var active: Install? {
@@ -454,8 +456,8 @@ struct ContentView: View {
             // `--play` used to wait for the full volume scan below. After the game data moved
             // to the x10 (2.4 TB, spinning), that scan can run for many minutes, and the
             // launcher sat with no window and no log line — "it says it's running but it's
-            // not". The remembered install is enough to play with; the scan only refreshes the
-            // picker. So: fast path first, Play immediately, full scan afterwards.
+            // not". The remembered install is enough to play with, and the scan never changes it
+            // (InstallSelection). So: fast path first, Play immediately, full scan afterwards.
             if selected == nil, let remembered = Install.remembered() {
                 selected = remembered
                 installs = [remembered]
@@ -2039,7 +2041,7 @@ struct ContentView: View {
             guard await bringIn(c, to: install) else { return false }
         }
         // Install dependencies… beside an install that already has the game keeps that one in
-        // use (G11); the new one is in the picker.
+        // use (G11); the folder button switches to the new one.
         if adoptAlways || selected?.hasGame != true {
             install.remember()
             installs = Install.dedupe([install] + installs.filter { $0.id != install.id }, keep: install.id)
@@ -2633,23 +2635,25 @@ struct ContentView: View {
         }
 
         scanning = true
-        // One entry per set of game files (Install.dedupe), the one in use kept.
-        let keep = selected?.id
-        let found = await Task.detached(priority: .userInitiated) { Install.dedupe(Install.discover(), keep: keep) }.value
+        // One entry per set of game files (Install.dedupe), the one in use kept. The scan never
+        // changes the install in use (InstallSelection): it is `install.last`, kept while its
+        // drive is gone; only with no `install.last` is one picked from what was found.
+        let keep = selected?.id, current = selected
+        let (list, choice) = await Task.detached(priority: .userInitiated) { () -> ([Install], InstallSelection.Decision) in
+            let found = Install.dedupe(Install.discover(), keep: keep)
+            let choice = InstallSelection.resolve(current: current, found: { found })
+            // The one in use is known even when the scan did not reach it (its wine is broken,
+            // or it is outside the scanned folders).
+            guard let c = choice.install, !found.contains(where: { $0.id == c.id }) else { return (found, choice) }
+            return (Install.dedupe([c] + found, keep: c.id), choice)
+        }.value
         scanning = false
-        // Nothing found: the checks still run, so the button can name a remembered install's
-        // missing drive instead of offering a setup from scratch (G6).
-        guard !found.isEmpty else { await recheckAsync(); return }
-        installs = found
-        if let cur = selected, !found.contains(where: { $0.id == cur.id }), cur.hasGame {
-            // The selected install still holds the game but was not found (its wine is broken,
-            // or it is outside the scanned folders): keep it rather than switching to an empty
-            // wrapper and asking for a 9 GB download again (G11).
-            installs = Install.dedupe([cur] + found, keep: cur.id)
-        } else if selected == nil || !found.contains(where: { $0.id == selected?.id }) {
-            selected = found.first
+        installs = list
+        selected = choice.install
+        if case .adopted(let i) = choice {
+            i.remember()
+            runner.logFileOnly("==> install in use: \(i.wrapper.path) [\(i.prefixName)]")
         }
-        selected?.remember()
         // The launcher's copy of DXVK's state cache starts from every cache the installs it knows
         // already hold (once; see DXVKStateCache.seedIfNeeded). Read-only on the installs.
         let known = installs, log = runner
@@ -2665,8 +2669,12 @@ struct ContentView: View {
     /// Mount, unmount and activation rechecks: one at a time, the latest folded into a single rerun.
     private func autoRecheck() {
         // Nothing selected (the install's drive was gone at launch): a drive coming back may
-        // bring it back, which only a scan finds.
-        if selected == nil, !scanning { refresh(); return }
+        // bring it back. With `install.last` set nothing else can be picked (InstallSelection),
+        // so its own folder is looked at instead of scanning /Volumes on every mount and
+        // activation; the scan runs once it is back.
+        if selected == nil, !scanning, Install.lastChosen() == nil || Install.remembered() != nil {
+            refresh(); return
+        }
         if checksInFlight > 0 { recheckPending = true; return }
         recheck()
     }
