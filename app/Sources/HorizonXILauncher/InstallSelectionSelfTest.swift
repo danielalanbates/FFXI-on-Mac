@@ -141,7 +141,15 @@ extension Headless {
         fresh.remember(defaults)
         check("install.last on disk again -> in use again", tag(S.resolve(defaults: defaults, location: place, found: scan)) == tag(.last(fresh)))
 
-        for bad in ["", "no-hash", "#prefix10", "/Applications/x.app#", "a#b#c"] {
+        // A folder the user chose may have "#" in its name: install.last splits at the last one.
+        let hashed = Install(wrapper: URL(fileURLWithPath: "/Volumes/\(drive)/Games #2/FFXI on Mac/FFXI on Mac Wine.app"),
+                             prefixName: "prefix10")
+        hashed.remember(defaults)
+        check("install.last in a folder named with \"#\" -> read back as that install, not as none",
+              Install.lastChosen(defaults)?.id == hashed.id
+                && tag(S.resolve(defaults: defaults, location: place, found: scan)) == tag(.unreachable(hashed)) && scanned == 0)
+
+        for bad in ["", "no-hash", "#prefix10", "/Applications/x.app#", "/Applications/x.app#a/b"] {
             defaults.set(bad, forKey: "install.last")
             if Install.lastChosen(defaults) != nil { check("install.last \"\(bad)\" is not an install", false) }
         }

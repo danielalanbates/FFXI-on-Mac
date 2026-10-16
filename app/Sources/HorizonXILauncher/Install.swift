@@ -323,18 +323,24 @@ struct Install: Identifiable, Hashable {
 
     /// `install.last` as written, whether or not it is on disk now (InstallSelection).
     static func lastChosen(_ defaults: UserDefaults = AppDefaults.store) -> Install? {
-        guard let s = defaults.string(forKey: key) else { return nil }
-        let parts = s.components(separatedBy: "#")
-        guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { return nil }
-        return Install(wrapper: URL(fileURLWithPath: parts[0]), prefixName: parts[1])
+        guard let p = lastParts(defaults) else { return nil }
+        return Install(wrapper: URL(fileURLWithPath: p.wrapper), prefixName: p.prefix)
     }
 
     /// The remembered install's wrapper, from defaults alone: nothing on disk is checked, so
     /// it is cheap enough for every process scan (`OwnWine`).
     static func rememberedWrapper() -> URL? {
-        guard let s = AppDefaults.store.string(forKey: key) else { return nil }
-        let parts = s.components(separatedBy: "#")
-        return parts.count == 2 ? URL(fileURLWithPath: parts[0]) : nil
+        lastParts(AppDefaults.store).map { URL(fileURLWithPath: $0.wrapper) }
+    }
+
+    /// `install.last` (`id`) split at its last "#": the prefix is a folder name ("prefix10"), the
+    /// wrapper any folder the user chose, "#" included ("Games #2"). Split at every "#", such a
+    /// folder read as no `install.last` at all, and the next rescan picked another install.
+    private static func lastParts(_ defaults: UserDefaults) -> (wrapper: String, prefix: String)? {
+        guard let s = defaults.string(forKey: key), let h = s.range(of: "#", options: .backwards) else { return nil }
+        let wrapper = String(s[..<h.lowerBound]), prefix = String(s[h.upperBound...])
+        guard !wrapper.isEmpty, !prefix.isEmpty, !prefix.contains("/") else { return nil }
+        return (wrapper, prefix)
     }
 
     func remember(_ defaults: UserDefaults = AppDefaults.store) {
