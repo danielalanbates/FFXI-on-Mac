@@ -176,7 +176,11 @@ enum ExistingInstall {
                 guard let kids = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil,
                                                              options: [.skipsHiddenFiles]) else { continue }
                 let homeDir = fm.homeDirectoryForCurrentUser.standardizedFileURL.path
-                for k in kids {
+                // In `root`'s spelling. macOS 27 lists a /var or /tmp folder's children as
+                // /private/var/…, /private/tmp/…, so a wrapper found there and the home it is
+                // compared with (`unreachableAtHome`, the caller's paths) spelled the same folder
+                // two ways.
+                for k in kids.map({ URL(fileURLWithPath: InstallMove.normalize($0.path), isDirectory: $0.hasDirectoryPath) }) {
                     let n = k.lastPathComponent
                     if skipNames.contains(n) || packageExtensions.contains(k.pathExtension.lowercased()) { continue }
                     if dir.path == homeDir, ["Desktop", "Documents", "Downloads"].contains(n) { continue }
