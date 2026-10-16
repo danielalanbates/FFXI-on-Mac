@@ -271,6 +271,9 @@ struct ContentView: View {
     @State private var carryHints: [URL] = []
     /// A carry-over is copying; Play waits for it.
     @State private var carryingOver = false
+    /// Play already said once that a pending carry-over could not run: the next press plays
+    /// anyway, so a process that never ends can't hold Play up for good.
+    @State private var carryOverWarned = false
     private var fdaBlocked: Bool { checks.contains(where: { $0.id == "fda" && $0.state == .bad }) }
 
     /// The drive the selected world's files are on (or link to), when it is not there.
@@ -1766,9 +1769,18 @@ struct ContentView: View {
                !Preflight.registryPointed(i) {
                 GameRegistry.invalidate(i)
             }
-            // A carry-over Setup could not do (a game was running then) goes first.
-            if a == .play, sessions.live.isEmpty, let i = active, CarryOver.isPending(i) {
-                Task { await carryOver(.play); play() }
+            // A carry-over Setup could not do (a game was running then) goes first. With a game
+            // still running it can't, and Play says so once instead of starting: after this Play
+            // a character has logged in here, and nothing is carried any more.
+            if a == .play, carriesOver, let i = active, CarryOver.isPending(i) {
+                Task {
+                    if let why = Self.carryOverBlocked(await carryOver(.play)), !carryOverWarned {
+                        carryOverWarned = true
+                        notice = why
+                    } else {
+                        play()
+                    }
+                }
             } else {
                 play()
             }
@@ -1945,6 +1957,7 @@ struct ContentView: View {
                 guard await setupLocationStep(need) else { return }
             case .game:
                 setupStep(.game)
+                await carryOverPrepare()
                 guard await setupGameStep(r) else { return }
                 // The macros, equipment sets and addon settings of the install played before, as
                 // soon as the client is there (a configure step that fails must not lose them).
@@ -1962,18 +1975,46 @@ struct ContentView: View {
         }
     }
 
+    /// The selected world's client is the one Setup downloads (HorizonXI's, which the local
+    /// world plays too): the only one CarryOver carries into by itself. Another world's
+    /// characters live on another server.
+    private var carriesOver: Bool {
+        guard let s = store.selected else { return false }
+        return s.installKind == .horizonTorrent || s.local
+    }
+
+    /// Before Setup downloads the client: the folders it knows, kept with the install
+    /// (CarryOver.prepare), so quitting mid-download does not lose them.
+    private func carryOverPrepare() async {
+        guard carriesOver, let i = active else { return }
+        let known = carryHints + installs.map(\.gameDir)
+        await Task.detached(priority: .userInitiated) { CarryOver.prepare(i, known: known) }.value
+    }
+
     /// CarryOver for the install in use, off the main thread: right after Setup downloaded its
     /// client (`.setup`), or before its first Play when Setup could not do it then (`.play`).
-    /// One line in launcher.log when it did or decided anything; nothing on screen.
-    private func carryOver(_ trigger: CarryOver.Trigger) async {
-        guard let i = active, !carryingOver else { return }
+    /// One line in launcher.log when it did or decided anything; nothing on screen. Returns what
+    /// it waits for, when it could not run.
+    @discardableResult
+    private func carryOver(_ trigger: CarryOver.Trigger) async -> CarryOver.Result.Wait? {
+        guard carriesOver, let i = active, !carryingOver else { return nil }
         carryingOver = true
         defer { carryingOver = false }
         let known = carryHints + installs.map(\.gameDir)
-        let line = await Task.detached(priority: .userInitiated) {
+        let r = await Task.detached(priority: .userInitiated) {
             CarryOver.automatic(trigger, dest: i, known: known)
         }.value
-        if let line { runner.logFileOnly(line) }
+        if let line = r.line { runner.logFileOnly(line) }
+        return r.waits
+    }
+
+    /// The one line Play shows instead of starting, when a pending carry-over could not run.
+    static func carryOverBlocked(_ w: CarryOver.Result.Wait?) -> String? {
+        switch w {
+        case .game?: return "Close the other game first: your macros and settings are copied to this install before its first Play."
+        case .launch?: return "Another launch is under way. Press Play again in a moment."
+        case .other?, nil: return nil
+        }
     }
 
     /// The chain's recheck: back once the newest checks are on screen. A job ending also
@@ -2453,7 +2494,14 @@ struct ContentView: View {
                 }
             }
             runner.appendLine("==> --play\(from): \(store.selected?.name ?? "?") as \(user.isEmpty ? "(no account)" : user)")
-            if sessions.live.isEmpty, let i = active, CarryOver.isPending(i) { await carryOver(.play) }
+            if carriesOver, let i = active, CarryOver.isPending(i) {
+                let why = carryingOver ? "macros and settings are being copied to this install"
+                                       : Self.carryOverBlocked(await carryOver(.play))
+                if let why {
+                    runner.logFileOnly("!! --play\(from): not carried out: \(why)")
+                    return
+                }
+            }
             play()
             if !notice.isEmpty { runner.logFileOnly("!! \(notice)") }
         }

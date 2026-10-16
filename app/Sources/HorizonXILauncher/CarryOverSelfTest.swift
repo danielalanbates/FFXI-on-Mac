@@ -126,7 +126,7 @@ extension Headless {
                            && p0.items.filter { $0.area == .config }.map(\.target).sorted()
                                == ["addons/LuAshitacast/Murn_1/WAR.lua", "addons/clock/Murn_1/settings.lua", "imgui.ini"]
                            && p0.replaced == 1 && p0.same == 1 && p0.charactersAdded == ["1410b", "99f"]))
-        let line0 = C.automatic(.setup, dest: dest, known: gameDirs([dest, src]), env: env) ?? ""
+        let line0 = C.automatic(.setup, dest: dest, known: gameDirs([dest, src]), env: env).line ?? ""
         print("  log: \(line0)")
         let rec0 = C.record(dest.gameDir)
         checks.append(("Setup's carry-over: one line, the marker says done and where from",
@@ -160,12 +160,12 @@ extension Headless {
         checks.append(("no hidden copy folder left behind", leftovers(dest.gameDir).isEmpty))
         // Once.
         put(user(dest, "1410b/mcr.dat"), "played since")
-        let again = C.automatic(.setup, dest: dest, known: gameDirs([src]), env: env)
-        let againPlay = C.automatic(.play, dest: dest, known: gameDirs([src]), env: env)
+        let again = C.automatic(.setup, dest: dest, known: gameDirs([src]), env: env).line
+        let againPlay = C.automatic(.play, dest: dest, known: gameDirs([src]), env: env).line
         checks.append(("once only: another Setup or a Play does nothing (the marker), even with the source still there",
                        again == nil && againPlay == nil && text(user(dest, "1410b/mcr.dat")) == "played since"))
         checks.append(("a Play never starts one Setup did not leave pending",
-                       C.automatic(.play, dest: install("never-set-up"), known: gameDirs([src]), env: env) == nil
+                       C.automatic(.play, dest: install("never-set-up"), known: gameDirs([src]), env: env).line == nil
                            && C.record(install("never-set-up").gameDir) == nil))
 
         // MARK: A destination a character has played in
@@ -175,7 +175,7 @@ extension Headless {
         put(user(playedDest, "tig.dat"), "new title")
         put(config(playedDest, "imgui.ini"), "new layout")
         let before = snapshot(playedDest.gameDir)
-        let skippedLine = C.automatic(.setup, dest: playedDest, known: gameDirs([src]), env: env) ?? ""
+        let skippedLine = C.automatic(.setup, dest: playedDest, known: gameDirs([src]), env: env).line ?? ""
         checks.append(("played: nothing is carried by itself; the marker says skipped",
                        skippedLine.contains("not done") && C.record(playedDest.gameDir)?.state == .skipped
                            && snapshot(playedDest.gameDir).filter { !$0.key.hasPrefix(".ffxi") } == before))
@@ -214,7 +214,7 @@ extension Headless {
         checks.append(("never the destination's own files, however reached",
                        C.candidates([link.gameDir, sharing.gameDir, src.gameDir], dest: C.side(sharing)).map(\.side.root.path) == [src.gameDir.path]))
         let freshA = install("fresh-a")
-        let linkLine = C.automatic(.setup, dest: freshA, known: gameDirs([link]), env: env) ?? ""
+        let linkLine = C.automatic(.setup, dest: freshA, known: gameDirs([link]), env: env).line ?? ""
         checks.append(("carried from the linked folder", linkLine.hasPrefix("==> ") && text(user(freshA, "5155/es1.dat")) == "linked 5155/es1.dat"))
 
         let newer = install("newer")
@@ -243,10 +243,10 @@ extension Headless {
 
         // MARK: Missing and unreadable sources
         let lonely = install("lonely")
-        let missingLine = C.automatic(.setup, dest: lonely, known: [work.appendingPathComponent("gone/HorizonXI")], env: env) ?? ""
+        let missingLine = C.automatic(.setup, dest: lonely, known: [work.appendingPathComponent("gone/HorizonXI")], env: env).line ?? ""
         checks.append(("no earlier install at all: said once, the marker says so, and never again",
                        missingLine.contains("no earlier install") && C.record(lonely.gameDir)?.state == .nothing
-                           && C.automatic(.setup, dest: lonely, known: gameDirs([src]), env: env) == nil))
+                           && C.automatic(.setup, dest: lonely, known: gameDirs([src]), env: env).line == nil))
         let locked = install("locked")
         played(locked, date: day, tag: "locked")
         let lockedUser = C.side(locked).user
@@ -258,27 +258,27 @@ extension Headless {
         checks.append(("... a readable one is chosen instead, even though the unreadable one may be newer",
                        C.choose(C.candidates(gameDirs([locked, src]), dest: C.side(install("x"))))?.side.root.path == src.gameDir.path))
         let waiting = install("waiting")
-        let waitLine = C.automatic(.setup, dest: waiting, known: gameDirs([locked]), env: env) ?? ""
+        let waitLine = C.automatic(.setup, dest: waiting, known: gameDirs([locked]), env: env).line ?? ""
         checks.append(("only an unreadable one: it waits (pending), nothing written but the marker",
                        waitLine.contains("waits") && C.isPending(waiting) && C.read(C.side(waiting).user).files.isEmpty))
         chmod(lockedUser.path, 0o755)
-        let lateLine = C.automatic(.play, dest: waiting, known: [], env: env) ?? ""
+        let lateLine = C.automatic(.play, dest: waiting, known: [], env: env).line ?? ""
         checks.append(("readable again before the first Play: done then, from the folders Setup knew",
                        lateLine.hasPrefix("==> ") && C.record(waiting.gameDir)?.state == .done
                            && text(user(waiting, "1410b/mcr.dat")) == "locked 1410b/mcr.dat"))
         chmod(lockedUser.path, 0)
         let firstGone = install("first-gone")
-        let fgLine = C.automatic(.setup, dest: firstGone, known: gameDirs([locked, src]), env: env) ?? ""
+        let fgLine = C.automatic(.setup, dest: firstGone, known: gameDirs([locked, src]), env: env).line ?? ""
         checks.append(("the install in use before Setup can't be read: Setup waits for it, though an older one could be read",
                        fgLine.contains("waits") && C.isPending(firstGone) && C.read(C.side(firstGone).user).files.isEmpty))
-        let fgPlay = C.automatic(.play, dest: firstGone, known: [], env: env) ?? ""
+        let fgPlay = C.automatic(.play, dest: firstGone, known: [], env: env).line ?? ""
         checks.append(("... still unreadable at the first Play: the best readable one then",
                        fgPlay.hasPrefix("==> ") && C.record(firstGone.gameDir)?.from == src.gameDir.path))
         chmod(lockedUser.path, 0o755)
         let gameless = work.appendingPathComponent("gameless/HorizonXI")
         put(gameless.appendingPathComponent("Ashita-cli.exe"), "MZ")
         let glDest = install("gameless-dest")
-        let glLine = C.automatic(.setup, dest: glDest, known: [gameless, src.gameDir], env: env) ?? ""
+        let glLine = C.automatic(.setup, dest: glDest, known: [gameless, src.gameDir], env: env).line ?? ""
         checks.append(("a client folder with no game in it is not waited for", glLine.hasPrefix("==> ")))
         let behindDrive = C.side(at: URL(fileURLWithPath: "/Volumes/ffxi-carryover-selftest-not-a-drive/HorizonXI"))
         let bd = behindDrive.map(C.survey)
@@ -288,21 +288,24 @@ extension Headless {
         // MARK: Game running, lock, room
         let busy = install("busy")
         running = true
-        let busyLine = C.automatic(.setup, dest: busy, known: gameDirs([src]), env: env) ?? ""
+        let busyRun = C.automatic(.setup, dest: busy, known: gameDirs([src]), env: env)
+        let busyLine = busyRun.line ?? ""
         running = false
-        checks.append(("a game running: nothing copied, it waits for the first Play",
-                       busyLine.contains("a game is running") && C.isPending(busy) && C.read(C.side(busy).user).files.isEmpty))
+        checks.append(("a game running: nothing copied, it waits for the first Play (which says so instead of starting)",
+                       busyLine.contains("a game is running") && busyRun.waits == .game && C.isPending(busy)
+                           && C.read(C.side(busy).user).files.isEmpty))
         let held = LaunchLock.acquire(at: lockFile)
-        let heldLine = C.automatic(.play, dest: busy, known: [], env: env) ?? ""
+        let heldRun = C.automatic(.play, dest: busy, known: [], env: env)
         if let h = held { LaunchLock.release(h) }
-        checks.append(("the launch lock held elsewhere: it waits again", heldLine.contains("a launch is under way") && C.isPending(busy)))
+        checks.append(("the launch lock held elsewhere: it waits again",
+                       (heldRun.line ?? "").contains("a launch is under way") && heldRun.waits == .launch && C.isPending(busy)))
         free = 10
-        let fullLine = C.automatic(.play, dest: busy, known: [], env: env) ?? ""
+        let fullLine = C.automatic(.play, dest: busy, known: [], env: env).line ?? ""
         free = 50_000_000_000
         checks.append(("no room: nothing changed, it waits, said as a failure",
                        fullLine.hasPrefix("!! ") && fullLine.contains("not enough space") && C.isPending(busy)
                            && C.read(C.side(busy).user).files.isEmpty && leftovers(busy.gameDir).isEmpty))
-        let busyDone = C.automatic(.play, dest: busy, known: [], env: env) ?? ""
+        let busyDone = C.automatic(.play, dest: busy, known: [], env: env).line ?? ""
         checks.append(("then nothing running and room: done", busyDone.hasPrefix("==> ") && C.record(busy.gameDir)?.state == .done))
 
         // MARK: Failures and changes between the plan and the copy
@@ -338,16 +341,71 @@ extension Headless {
         try? fm.createDirectory(at: elsewhere, withIntermediateDirectories: true)
         try? fm.createDirectory(at: C.side(escape).user, withIntermediateDirectories: true)
         try? fm.createSymbolicLink(atPath: user(escape, "99f").path, withDestinationPath: elsewhere.path)
+        let deep = install("deep-source")
+        put(user(deep, "99f/mcr.dat"), "deep 99f")
+        put(user(deep, "99f/deeper/es1.dat"), "deep es1")
+        put(user(deep, "1410b/mcr.dat"), "deep 1410b")
+        let deepCand = C.survey(C.side(deep))
         let (eu, ec) = C.readDest(C.side(escape))
-        let ep = C.plan(from: srcCand, to: C.side(escape), destUser: eu, destConfig: ec)
-        let eo = (try? C.apply(ep, from: srcCand.side, to: C.side(escape), env: env)) ?? C.Outcome(failed: ["threw"])
-        checks.append(("nothing is written through a link out of the destination",
-                       eu.links == 1 && eo.skipped == 1 && ((try? fm.contentsOfDirectory(atPath: elsewhere.path)) ?? ["?"]).isEmpty))
+        let ep = C.plan(from: deepCand, to: C.side(escape), destUser: eu, destConfig: ec)
+        let eo = (try? C.apply(ep, from: deepCand.side, to: C.side(escape), env: env)) ?? C.Outcome(failed: ["threw"])
+        checks.append(("nothing is written, and no folder made, through a link out of the destination",
+                       eu.links == 1 && eo.skipped == 2 && eo.added >= 1 && text(user(escape, "1410b/mcr.dat")) == "deep 1410b"
+                           && ((try? fm.contentsOfDirectory(atPath: elsewhere.path)) ?? ["?"]).isEmpty))
         let bak1 = C.backupFolder(beside: work.appendingPathComponent("b/USER").path, day: dayName)
         try? fm.createDirectory(atPath: bak1, withIntermediateDirectories: true)
         let bak2 = C.backupFolder(beside: work.appendingPathComponent("b/USER").path, day: dayName)
         checks.append(("a second backup the same day gets -2", bak1.hasSuffix("USER.bak-\(dayName)-carryover")
                            && bak2.hasSuffix("USER.bak-\(dayName)-carryover-2")))
+
+        // MARK: Unreadable, ambiguous, cut short, prepared
+        let walled = work.appendingPathComponent("walled")
+        let walledClient = walled.appendingPathComponent("HorizonXI")
+        put(walledClient.appendingPathComponent("Ashita-cli.exe"), "MZ")
+        put(walledClient.appendingPathComponent("SquareEnix/FINAL FANTASY XI/USER/1410b/mcr.dat"), "walled", day)
+        chmod(walled.path, 0)
+        unlockLater.append(walled)
+        let ws = C.side(at: walledClient)
+        let wc = ws.map(C.survey)
+        checks.append(("a client inside a folder that can't be read: a candidate that can't be read, not one that isn't there",
+                       ws?.unreadable != nil && wc?.unreachable == true && wc?.usable == false
+                           && C.read(walledClient.appendingPathComponent("SquareEnix/FINAL FANTASY XI/USER")).problem != nil))
+        let walledDest = install("walled-dest")
+        let wl = C.automatic(.setup, dest: walledDest, known: [walledClient, src.gameDir], env: env)
+        checks.append(("... and when it is the install in use before Setup, Setup waits for it",
+                       (wl.line ?? "").contains("waits") && C.isPending(walledDest)))
+        chmod(walled.path, 0o755)
+        let both = work.appendingPathComponent("both")
+        for w in ["HorizonXI", "CatsEyeXI"] { put(both.appendingPathComponent("\(w)/Ashita-cli.exe"), "MZ") }
+        checks.append(("a folder holding two clients names neither", C.side(at: both) == nil && C.clients(under: both) == 2))
+
+        let cut = install("cut-short")
+        for rel in ["1410b/mcr.dat", "tig.dat"] { put(user(cut, rel), "old \(rel)", old) }
+        put(user(cut, "1410b/mcr1.dat"), "half-written by nobody: kept")
+        C.write(C.Record(state: .applying, date: day, from: src.gameDir.path, hints: [src.gameDir.path]), cut.gameDir)
+        let cutRun = C.automatic(.play, dest: cut, known: [], env: env)
+        checks.append(("a copy cut short is finished at the next Play: only what is missing, nothing replaced, then done",
+                       (cutRun.line ?? "").contains("finished a copy cut short") && C.record(cut.gameDir)?.state == .done
+                           && text(user(cut, "1410b/mcr1.dat")) == "half-written by nobody: kept"
+                           && text(user(cut, "1410b/es0.dat")) == "old 1410b/es0.dat" && text(user(cut, "99f/mcr.dat")) == "old 99f/mcr.dat"
+                           && !fm.fileExists(atPath: C.side(cut).user.path + ".bak-\(dayName)-carryover")))
+
+        let prepared = install("prepared")
+        C.prepare(prepared, known: gameDirs([src]), now: day)
+        let pr = C.record(prepared.gameDir)
+        C.prepare(prepared, known: gameDirs([newer]), now: day)
+        checks.append(("before the download: a pending marker with the folders Setup knows, added to, not replaced",
+                       pr?.state == .pending && pr?.hints == [src.gameDir.path]
+                           && C.record(prepared.gameDir)?.hints == [src.gameDir.path, newer.gameDir.path]))
+        C.prepare(dest, known: gameDirs([newer]), now: day)
+        checks.append(("... and never over a marker that says done", C.record(dest.gameDir)?.state == .done))
+        let offline = Install(wrapper: URL(fileURLWithPath: "/Volumes/ffxi-carryover-selftest-not-a-drive/FFXI on Mac Wine.app"), prefixName: "prefix10")
+        C.prepare(offline, known: [], now: day)
+        checks.append(("... and never a folder made on a drive that isn't there",
+                       !fm.fileExists(atPath: "/Volumes/ffxi-carryover-selftest-not-a-drive")))
+        let preparedLine = C.automatic(.setup, dest: prepared, known: [], env: env).line ?? ""
+        checks.append(("the download done after a relaunch (nothing in memory): the folders kept with the install are used",
+                       preparedLine.hasPrefix("==> ") && C.record(prepared.gameDir)?.from == newer.gameDir.path))
 
         // MARK: Case
         func tree(_ files: [(String, Date)]) -> C.Tree { C.Tree(files: files.map { C.File(rel: $0.0, size: 1, modified: $0.1) }) }
@@ -362,6 +420,10 @@ extension Headless {
                                  destConfig: tree([("imgui.ini", old)]), caseInsensitive: true) { _, _, _ in false }
         checks.append(("a replaced file keeps the name the destination has for it",
                        replaceCase.items.map(\.target).sorted() == ["TIG.DAT", "imgui.ini"] && replaceCase.replaced == 2))
+        let mixed = C.plan(user: tree([("1410B/mcr.dat", older), ("1410b/mcr.dat", day)]), config: tree([("A.lua", day), ("a.lua", day)]),
+                           destUser: C.Tree(), destConfig: C.Tree(), caseInsensitive: false, configCaseInsensitive: true) { _, _, _ in false }
+        checks.append(("case is decided for each folder by its own drive (USER case-sensitive, config not)",
+                       mixed.count(.user, replaces: false) == 2 && mixed.count(.config, replaces: false) == 1 && mixed.clashes == 1))
 
         // MARK: The marker
         let r = C.Record(state: .pending, date: day, hints: ["/a", "/b"], why: "a game is running")
@@ -384,7 +446,7 @@ extension Headless {
             try? fm.copyItem(at: fixture, to: C.side(real).user)
             let realNew = install("real-new")
             let t0 = Date()
-            let rl = C.automatic(.setup, dest: realNew, known: gameDirs([real]), env: env) ?? ""
+            let rl = C.automatic(.setup, dest: realNew, known: gameDirs([real]), env: env).line ?? ""
             let took = Date().timeIntervalSince(t0)
             let a = C.read(C.side(real).user), b = C.read(C.side(realNew).user)
             print("  real USER: \(a.files.count) files, \(a.characters().count) characters, \(a.bytes) bytes; carried in \(Int(took * 1000)) ms")
@@ -426,7 +488,13 @@ extension Headless {
 
     private static func describe(_ p: CarryOver.Plan) -> [String] {
         typealias A = CarryOver.Area
-        var out = ["\(p.mode == .fresh ? "into a fresh install" : "into an install a character has played in: only what is missing"):"]
+        let mode: String
+        switch p.mode {
+        case .fresh: mode = "into a fresh install"
+        case .played: mode = "into an install a character has played in: only what is missing"
+        case .finishing: mode = "finishing a copy cut short: only what is missing"
+        }
+        var out = [mode + ":"]
         for a in A.allCases {
             out.append("  \(a.rawValue): add \(p.count(a, replaces: false)), replace \(p.count(a, replaces: true)), \(mb(p.bytes(a)))")
         }
@@ -474,7 +542,10 @@ extension Headless {
         let dest: CarryOver.Side
         var base: Install? = nil
         if let to = values("--to").first {
-            guard let s = CarryOver.side(at: to), s.config != nil else { fail("no client (Ashita and SquareEnix) found at \(to.path)", 2) }
+            guard let s = CarryOver.side(at: to), s.config != nil, s.unreadable == nil else {
+                let n = CarryOver.clients(under: to)
+                fail(n > 1 ? "\(to.path) holds \(n) clients: name the one meant" : "no readable client (Ashita and SquareEnix) at \(to.path)", 2)
+            }
             dest = s
         } else {
             guard let b = InstallSelection.inUse() else { fail("the install in use isn't on disk", 2) }
@@ -512,6 +583,7 @@ extension Headless {
         let auto: String
         switch rec?.state {
         case .pending?: auto = "before this install's next Play (pending)"
+        case .applying?: auto = "before this install's next Play: a copy was cut short, what is missing is added"
         case .done?, .skipped?, .nothing?: auto = "never again (marker: \(rec!.state.rawValue))"
         case nil: auto = du.characters().isEmpty ? "only after Setup downloads a client here" : "no: a character has played here"
         }
@@ -535,8 +607,14 @@ extension Headless {
             return URL(fileURLWithPath: (args[at + 1] as NSString).expandingTildeInPath)
         }
         let (fromURL, toURL) = (value("--from"), value("--to"))
-        guard let from = CarryOver.side(at: fromURL) else { fail("no client found at \(fromURL.path)", 2) }
-        guard let to = CarryOver.side(at: toURL), to.config != nil else { fail("no client (Ashita and SquareEnix) found at \(toURL.path)", 2) }
+        func notFound(_ u: URL) -> Never {
+            let n = CarryOver.clients(under: u)
+            fail(n > 1 ? "\(u.path) holds \(n) clients: name the one meant" : "no client found at \(u.path)", 2)
+        }
+        guard let from = CarryOver.side(at: fromURL) else { notFound(fromURL) }
+        guard let to = CarryOver.side(at: toURL) else { notFound(toURL) }
+        if let why = to.unreadable { fail("\(to.root.path) can't be read: \(why)", 1) }
+        guard to.config != nil else { fail("\(to.root.path) is a SquareEnix folder: name the client (Ashita) folder", 2) }
         guard let destID = CarryOver.identity(to) else { fail("\(to.root.path) has no FINAL FANTASY XI folder", 2) }
         let env = CarryOver.Environment.live
         // Never released by hand: exit() closes the fd, and with it the flock.

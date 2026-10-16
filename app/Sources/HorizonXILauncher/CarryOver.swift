@@ -29,11 +29,12 @@ import Foundation
 /// - A link inside those folders is counted and skipped, never followed. The folders themselves
 ///   may be links (siku.app's SquareEnix leads to another drive), and those are followed.
 ///
-/// **When.** Once per install, by itself: right after Setup has downloaded a client into it
-/// (`.setup`) or, when it could not run then (a game was running, an earlier install could not
-/// be read), before that install's first Play (`.play`). Never again once it has run, found
-/// nothing to copy, or been skipped: the marker `.ffxi-on-mac-carryover` in the client's folder
-/// says which. `--carryover-apply` does it by hand.
+/// **When.** Once per install, by itself, and only for HorizonXI's client (the worlds whose
+/// client Setup downloads): right after Setup has downloaded it (`.setup`) or, when it could not
+/// run then (a game was running, the install played before could not be read), before that
+/// install's first Play (`.play`). Never again once it has run, found nothing to copy, or been
+/// skipped: the marker `.ffxi-on-mac-carryover` in the client's folder says which.
+/// `--carryover-apply` does it by hand.
 ///
 /// **Only into a fresh install.** An install is fresh while no folder in its USER holds a file:
 /// FFXI makes a character's folder the first time that character logs in there, and writes its
@@ -46,14 +47,17 @@ import Foundation
 ///
 /// **From where.** The installs the launcher knows: the one in use before Setup, every install
 /// the scan found, a client the user chose not to use. The one whose USER has the newest file
-/// wins. One that cannot be read, or whose drive is not there, is never chosen; when no
-/// candidate can be used and one of them could not be read, the carry-over waits.
+/// wins. One that cannot be read, or whose drive is not there, is never chosen; when the install
+/// in use before Setup is one of those, Setup waits for it, and the first Play takes the best
+/// that can be read.
 ///
 /// **How.** With the launch lock held and no game running anywhere: every file is copied into a
 /// hidden folder beside its destination (`copyfile`, attributes and dates kept) and compared byte
 /// for byte with its source; each file it replaces is copied to the backup folder and compared
-/// the same way; only then is each moved into place, one rename per file. A failure before that
-/// point leaves the install as it was.
+/// the same way; only then is each moved into place, one rename per file that never writes over
+/// anything it did not check. A failure before that point leaves the install as it was. From that
+/// point the marker says `applying`: a copy cut short (the launcher quit) is finished the next
+/// time, adding only what is still missing.
 enum CarryOver {
 
     // MARK: - Where
@@ -64,6 +68,9 @@ enum CarryOver {
         var root: URL
         var user: URL
         var config: URL?
+        /// It is there but can't be read (no permission, macOS privacy, a link that loops, a
+        /// drive not connected): why. Its contents are unknown, not absent.
+        var unreadable: String? = nil
     }
 
     static func userFolder(in squareEnix: URL) -> URL {
@@ -76,15 +83,27 @@ enum CarryOver {
              config: i.gameDir.appendingPathComponent("config", isDirectory: true))
     }
 
-    /// What a folder names: a wrapper (.app, its prefix that holds HorizonXI), a client folder
-    /// (Ashita's, or one with it at most three folders down), or a SquareEnix folder (USER only).
-    /// A folder behind a drive that is not there is still a side, whose reading says so.
+    /// What a folder names: a wrapper (.app, its prefix that holds HorizonXI), an "FFXI on Mac"
+    /// folder (or the one it is in), a client folder (Ashita's, or the only one at most three
+    /// folders down), or a SquareEnix folder (USER only). nil when it is none of them, or holds
+    /// more than one client. A folder that is there but can't be read is a side that says so.
     static func side(at url: URL) -> Side? {
         let fm = FileManager.default
         let u = url.standardizedFileURL
-        if Preflight.unavailableDrive(for: u.path) != nil {
-            return Side(root: u, user: userFolder(in: u.appendingPathComponent("SquareEnix")),
-                        config: u.appendingPathComponent("config", isDirectory: true))
+        func unreadable(_ why: String) -> Side {
+            Side(root: u, user: userFolder(in: u.appendingPathComponent("SquareEnix")),
+                 config: u.appendingPathComponent("config", isDirectory: true), unreadable: why)
+        }
+        if let d = Preflight.unavailableDrive(for: u.path) { return unreadable("the '\(d)' drive isn't connected") }
+        var lst = stat()
+        guard lstat(u.path, &lst) == 0 else {
+            let e = errno
+            return e == ENOENT || e == ENOTDIR ? nil : unreadable("it can't be read (\(String(cString: strerror(e))))")
+        }
+        do { _ = try fm.contentsOfDirectory(atPath: u.path) } catch {
+            var st = stat()
+            if stat(u.path, &st) == 0, st.st_mode & S_IFMT != S_IFDIR { return nil }
+            return unreadable("it can't be read (\(reason(error)))")
         }
         if u.pathExtension.lowercased() == "app" {
             return ExistingInstall.wrapper(at: u).map { side($0.0) }
@@ -97,11 +116,16 @@ enum CarryOver {
         if fm.fileExists(atPath: u.appendingPathComponent("FINAL FANTASY XI").path) {
             return Side(root: u, user: userFolder(in: u), config: nil)
         }
+        if !Install.isAshitaDir(u), clients(under: u) > 1 { return nil }
         let ashita = Install.resolveAshitaDir(u)
         guard Install.isAshitaDir(ashita) else { return nil }
         let se = Install.resolveSquareEnix(gameDir: ashita, root: u)
         return Side(root: ashita, user: userFolder(in: se), config: ashita.appendingPathComponent("config", isDirectory: true))
     }
+
+    /// How many clients (Ashita folders) are at or under `u`, three folders down: a folder that
+    /// holds several (`~/Games/FFXI`) names none of them.
+    static func clients(under u: URL) -> Int { Install.ashitaCandidates(under: u).count }
 
     /// Where a HorizonXI client Setup downloads may find its macros and settings, the likeliest
     /// first: HorizonXI's client in `base` (the install in use, or `install.last` while its drive
@@ -124,7 +148,8 @@ enum CarryOver {
     /// is what tells two sides apart: links, a second wrapper on the same files, the same folder
     /// spelled two ways. nil when there is no FINAL FANTASY XI folder to follow (or it loops).
     static func identity(_ s: Side) -> String? {
-        InstallMove.canonical(s.user.deletingLastPathComponent().path).map { $0 + "/USER" }
+        guard s.unreadable == nil else { return nil }
+        return InstallMove.canonical(s.user.deletingLastPathComponent().path).map { $0 + "/USER" }
     }
 
     // MARK: - Reading (read-only)
@@ -132,8 +157,8 @@ enum CarryOver {
     /// Config folders never carried (see the type's comment). Compared without case.
     static let configSkipped: Set<String> = ["boot", "ashita", "sandbox", "pivot"]
     static let ignoredNames: Set<String> = [".DS_Store"]
-    /// Far beyond any USER or config folder (Daniel's: about 1,000 files, 5 MB). A folder over
-    /// either is refused rather than walked: it is not one.
+    /// Far beyond any USER or config folder (Daniel's: about 1,250 files, 35 MB, most of it
+    /// Vanaguide's nav grids). A folder over either is refused rather than walked: it is not one.
     static let maxFiles = 50_000
     static let maxBytes: Int64 = 2_000_000_000
 
@@ -170,7 +195,12 @@ enum CarryOver {
         var t = Tree()
         if let d = Preflight.unavailableDrive(for: dir.path) { t.problem = "the '\(d)' drive isn't connected"; return t }
         var st = stat()
-        guard lstat(dir.path, &st) == 0 else { return t }
+        guard lstat(dir.path, &st) == 0 else {
+            // Not there is empty; anything else (no permission, macOS privacy) is unknown.
+            let e = errno
+            if e != ENOENT && e != ENOTDIR { t.problem = "it can't be read (\(String(cString: strerror(e))))" }
+            return t
+        }
         guard let real = InstallMove.realPath(dir.path) else {
             t.problem = "it can't be followed (\(String(cString: strerror(errno))))"
             return t
@@ -252,19 +282,20 @@ enum CarryOver {
         var config: Tree
 
         var characters: Int { user.characters().count }
-        /// Why it cannot be read now, if it cannot.
+        /// Why it cannot be used, if it cannot.
         var problem: String? {
             user.problem ?? config.problem ?? (identity == nil ? "its FINAL FANTASY XI folder isn't there" : nil)
         }
         var usable: Bool { problem == nil && characters > 0 }
-        /// Its files are there but can't be read now (a drive not connected, no permission): what
-        /// is in it is unknown, not absent.
+        /// Its files may be there but can't be read now (a drive not connected, no permission):
+        /// what is in it is unknown, not absent.
         var unreachable: Bool { user.problem != nil || config.problem != nil }
     }
 
     static func survey(_ s: Side) -> Candidate {
-        Candidate(side: s, identity: identity(s), user: read(s.user),
-                  config: s.config.map { read($0, skipping: configSkipped) } ?? Tree())
+        if let why = s.unreadable { return Candidate(side: s, identity: nil, user: Tree(problem: why), config: Tree()) }
+        return Candidate(side: s, identity: identity(s), user: read(s.user),
+                         config: s.config.map { read($0, skipping: configSkipped) } ?? Tree())
     }
 
     /// Each folder in `roots` that is a client, read, in order: never `dest`'s own files, and each
@@ -298,7 +329,9 @@ enum CarryOver {
 
     // MARK: - Plan
 
-    enum Mode: String, Equatable { case fresh, played }
+    /// `fresh`: no character has played in the destination. `played`: one has. `finishing`: a
+    /// copy that was cut short, finished: every file still missing, nothing replaced.
+    enum Mode: String, Equatable { case fresh, played, finishing }
     enum Area: String, Equatable, CaseIterable { case user = "USER", config = "config" }
 
     struct Item: Equatable {
@@ -335,14 +368,17 @@ enum CarryOver {
         func bytes(_ a: Area) -> Int64 { items.filter { $0.area == a }.reduce(0) { $0 + $1.size } }
     }
 
-    /// What copying `user`/`config` onto `destUser`/`destConfig` does. `same(area, source rel,
+    /// What copying `user`/`config` onto `destUser`/`destConfig` does. Names are compared without
+    /// case on a drive that ignores it, each folder by its own drive (`caseInsensitive` for USER,
+    /// `configCaseInsensitive` for config, the same when not given). `same(area, source rel,
     /// destination rel)` compares two files' bytes; it is asked only when their sizes match.
     static func plan(user: Tree, config: Tree, destUser: Tree, destConfig: Tree, caseInsensitive ci: Bool,
+                     configCaseInsensitive: Bool? = nil, finishing: Bool = false,
                      same: (Area, String, String) -> Bool) -> Plan {
         let destChars = destUser.characters(folded: ci)
-        var p = Plan(mode: destChars.isEmpty ? .fresh : .played)
-        func key(_ s: String) -> String { ci ? s.lowercased() : s }
-        for (area, src, dst) in [(Area.user, user, destUser), (Area.config, config, destConfig)] {
+        var p = Plan(mode: finishing ? .finishing : destChars.isEmpty ? .fresh : .played)
+        for (area, src, dst, folded) in [(Area.user, user, destUser, ci), (Area.config, config, destConfig, configCaseInsensitive ?? ci)] {
+            func key(_ s: String) -> String { folded ? s.lowercased() : s }
             var have: [String: File] = [:]
             for f in dst.files { have[key(f.rel)] = f }
             var pick: [String: File] = [:]
@@ -377,15 +413,16 @@ enum CarryOver {
         }
         let srcChars = user.characters(folded: ci)
         p.charactersAdded = srcChars.subtracting(destChars).sorted()
-        p.charactersKept = srcChars.intersection(destChars).sorted()
+        p.charactersKept = p.mode == .played ? srcChars.intersection(destChars).sorted() : []
         return p
     }
 
     /// The same, from a candidate onto a destination already read.
-    static func plan(from c: Candidate, to dest: Side, destUser: Tree, destConfig: Tree) -> Plan {
+    static func plan(from c: Candidate, to dest: Side, destUser: Tree, destConfig: Tree, finishing: Bool = false) -> Plan {
         let fm = FileManager.default
         return plan(user: c.user, config: dest.config == nil ? Tree() : c.config, destUser: destUser, destConfig: destConfig,
-                    caseInsensitive: caseInsensitive(dest.user)) { area, s, d in
+                    caseInsensitive: caseInsensitive(dest.user),
+                    configCaseInsensitive: dest.config.map(caseInsensitive), finishing: finishing) { area, s, d in
             guard let from = area == .user ? c.side.user : c.side.config,
                   let to = area == .user ? dest.user : dest.config else { return false }
             return fm.contentsEqual(atPath: from.appendingPathComponent(s).path, andPath: to.appendingPathComponent(d).path)
@@ -456,11 +493,22 @@ enum CarryOver {
         return InstallMove.canonical(u.deletingLastPathComponent().path).map { $0 + "/" + u.lastPathComponent }
     }
 
+    /// Is `path` (made or not) really inside `root` (a real path)? Its nearest part that is there
+    /// is followed through every link and must be `root` or below it.
+    static func inside(_ path: String, _ root: String) -> Bool {
+        var p = path
+        while !lexists(p), p != "/", !p.isEmpty { p = (p as NSString).deletingLastPathComponent }
+        guard let real = InstallMove.canonical(p) else { return false }
+        return real == root || real.hasPrefix(root + "/")
+    }
+
     /// Copy one regular file, attributes and dates included, never through a link, never over
     /// anything. A file system that refuses the extended attributes or ACL gets the data and the
     /// POSIX attributes (mode, dates).
     static func copyFile(_ src: String, _ dst: String) -> Bool {
         if copyfile(src, dst, nil, copyfile_flags_t(COPYFILE_ALL | COPYFILE_EXCL | COPYFILE_NOFOLLOW)) == 0 { return true }
+        // Something was already there: never removed. Otherwise it is this call's own half-copy.
+        guard errno != EEXIST else { return false }
         unlink(dst)
         return copyfile(src, dst, nil, copyfile_flags_t(COPYFILE_DATA | COPYFILE_STAT | COPYFILE_EXCL | COPYFILE_NOFOLLOW)) == 0
     }
@@ -476,15 +524,17 @@ enum CarryOver {
     private static let stagingTag = ".carryover-"
 
     /// Carry `p` out (see the type's comment). Throws, having changed nothing in `to`, when a
-    /// copy or a backup fails or there is not room; after that point each file that cannot be
-    /// put in place is listed in `failed` and the rest go in. The caller holds the launch lock
+    /// copy or a backup fails or there is not room. `beforeCommit` runs once everything is copied
+    /// and backed up, just before the first file goes into place; after that each file that cannot
+    /// be put in place is listed in `failed` and the rest go in. The caller holds the launch lock
     /// and has made sure no game is running.
-    static func apply(_ p: Plan, from: Side, to: Side, env: Environment = .live) throws -> Outcome {
+    static func apply(_ p: Plan, from: Side, to: Side, env: Environment = .live,
+                      beforeCommit: () -> Void = {}) throws -> Outcome {
         let fm = FileManager.default
         var o = Outcome()
         guard !p.items.isEmpty else { return o }
-        struct Area_ { var area: Area; var src: String; var dst: String; var items: [Item] }
-        var areas: [Area_] = []
+        struct Part { var area: Area; var src: String; var dst: String; var items: [Item] }
+        var parts: [Part] = []
         for a in Area.allCases {
             let items = p.items.filter { $0.area == a }
             guard !items.isEmpty else { continue }
@@ -495,15 +545,24 @@ enum CarryOver {
             guard dst != src, !dst.hasPrefix(src + "/"), !src.hasPrefix(dst + "/") else {
                 throw Refusal("the two \(a.rawValue) folders are the same folder")
             }
-            areas.append(Area_(area: a, src: src, dst: dst, items: items))
+            parts.append(Part(area: a, src: src, dst: dst, items: items))
         }
-        // Room for the copies and the backups, and what stays free on the Mac's own disk.
-        let backupBytes = p.items.filter(\.replaces).reduce(Int64(0)) { $0 + $1.size }
-        let parent = URL(fileURLWithPath: (areas[0].dst as NSString).deletingLastPathComponent)
-        let room = env.space(parent)
-        let need = p.bytes + backupBytes + (room.boot ? InstallLocation.bootFloor : 0)
-        guard room.free >= need else {
-            throw Refusal("not enough space: \(InstallLocation.gb(room.free)) free, \(InstallLocation.gb(need)) needed")
+        // Room on each drive written to, for the copies and the backups, and what stays free on
+        // the Mac's own disk.
+        var need: [dev_t: (at: URL, bytes: Int64)] = [:]
+        for a in parts {
+            let parent = (a.dst as NSString).deletingLastPathComponent
+            var st = stat()
+            let dev = stat(parent, &st) == 0 ? st.st_dev : 0
+            let n = a.items.reduce(Int64(0)) { $0 + $1.size + ($1.replaces ? ($1.was?.size ?? $1.size) : 0) }
+            need[dev] = (URL(fileURLWithPath: parent), (need[dev]?.bytes ?? 0) + n)
+        }
+        for (_, w) in need {
+            let room = env.space(w.at)
+            let total = w.bytes + (room.boot ? InstallLocation.bootFloor : 0)
+            guard room.free >= total else {
+                throw Refusal("not enough space: \(InstallLocation.gb(room.free)) free, \(InstallLocation.gb(total)) needed")
+            }
         }
 
         // 1. Every file into a hidden folder beside its destination, compared with its source.
@@ -511,7 +570,7 @@ enum CarryOver {
         func discardStaging() { for s in staging.values { try? fm.removeItem(atPath: s) } }
         var backups: [Area: String] = [:]
         func discardBackups() { for b in backups.values { try? fm.removeItem(atPath: b) } }
-        for a in areas {
+        for a in parts {
             let dir = (a.dst as NSString).deletingLastPathComponent
             let name = (a.dst as NSString).lastPathComponent
             // An earlier run that never finished (the launcher quit mid-copy) left only copies here.
@@ -542,7 +601,7 @@ enum CarryOver {
         // plan saw it (written meanwhile, it is newer than anything carried, and stays).
         let d = day(env.now())
         var changed = Set<String>()
-        for a in areas {
+        for a in parts {
             for it in a.items where it.replaces {
                 let now = facts(a.dst + "/" + it.target, rel: it.target)
                 if now == nil || now?.size != it.was?.size || now?.modified != it.was?.modified {
@@ -550,7 +609,7 @@ enum CarryOver {
                 }
             }
         }
-        for a in areas where a.items.contains(where: { $0.replaces && !changed.contains(a.area.rawValue + "/" + $0.target) }) {
+        for a in parts where a.items.contains(where: { $0.replaces && !changed.contains(a.area.rawValue + "/" + $0.target) }) {
             let b = backupFolder(beside: a.dst, day: d)
             backups[a.area] = b
             for it in a.items where it.replaces && !changed.contains(a.area.rawValue + "/" + it.target) {
@@ -563,9 +622,10 @@ enum CarryOver {
                 }
             }
         }
-        // 3. Into place, one rename each. Nothing is written over that changed since the plan,
-        // and nothing is written through a link out of the destination folder.
-        for a in areas {
+        // 3. Into place, one rename each, never writing over anything that was not checked, never
+        // through a link out of the destination folder, and no folder made outside it.
+        beforeCommit()
+        for a in parts {
             guard let s = staging[a.area] else { continue }
             if !lexists(a.dst) {
                 do { try fm.createDirectory(atPath: a.dst, withIntermediateDirectories: false) } catch {
@@ -576,18 +636,7 @@ enum CarryOver {
             for it in a.items {
                 let tmp = s + "/" + it.target, dst = a.dst + "/" + it.target
                 let dir = (dst as NSString).deletingLastPathComponent
-                if changed.contains(a.area.rawValue + "/" + it.target) {
-                    o.skipped += 1
-                    continue
-                }
-                if it.replaces {
-                    let saved = backups[a.area].map { $0 + "/" + it.target } ?? ""
-                    var st = stat()
-                    guard lstat(dst, &st) == 0, st.st_mode & S_IFMT == S_IFREG, fm.contentsEqual(atPath: dst, andPath: saved) else {
-                        o.skipped += 1
-                        continue
-                    }
-                } else if lexists(dst) {
+                if changed.contains(a.area.rawValue + "/" + it.target) || !inside(dir, a.dst) {
                     o.skipped += 1
                     continue
                 }
@@ -595,20 +644,52 @@ enum CarryOver {
                     o.failed.append("\(a.area.rawValue)/\(it.target): \(reason(error))")
                     continue
                 }
-                guard let realDir = InstallMove.canonical(dir), realDir == a.dst || realDir.hasPrefix(a.dst + "/") else {
-                    o.skipped += 1
-                    continue
+                guard inside(dir, a.dst) else { o.skipped += 1; continue }
+                if it.replaces {
+                    let saved = backups[a.area].map { $0 + "/" + it.target } ?? ""
+                    guard facts(dst, rel: it.target) != nil else { o.skipped += 1; continue }
+                    // Swapped in, and what came out must be what was backed up; else it goes back.
+                    if renamex_np(tmp, dst, UInt32(RENAME_SWAP)) == 0 {
+                        if fm.contentsEqual(atPath: tmp, andPath: saved) {
+                            o.replaced += 1; o.bytes += it.size
+                        } else {
+                            _ = renamex_np(tmp, dst, UInt32(RENAME_SWAP))
+                            o.skipped += 1
+                        }
+                        continue
+                    }
+                    let e = errno
+                    guard e == ENOTSUP || e == EINVAL else {
+                        o.failed.append("\(a.area.rawValue)/\(it.target): \(String(cString: strerror(e)))")
+                        continue
+                    }
+                    // A file system without the swap: compared, then renamed over.
+                    guard fm.contentsEqual(atPath: dst, andPath: saved) else { o.skipped += 1; continue }
+                    guard rename(tmp, dst) == 0 else {
+                        o.failed.append("\(a.area.rawValue)/\(it.target): \(String(cString: strerror(errno)))")
+                        continue
+                    }
+                    o.replaced += 1; o.bytes += it.size
+                } else {
+                    // Never over something that appeared meanwhile.
+                    if renamex_np(tmp, dst, UInt32(RENAME_EXCL)) == 0 { o.added += 1; o.bytes += it.size; continue }
+                    let e = errno
+                    if e == EEXIST { o.skipped += 1; continue }
+                    guard e == ENOTSUP || e == EINVAL else {
+                        o.failed.append("\(a.area.rawValue)/\(it.target): \(String(cString: strerror(e)))")
+                        continue
+                    }
+                    guard !lexists(dst) else { o.skipped += 1; continue }
+                    guard rename(tmp, dst) == 0 else {
+                        o.failed.append("\(a.area.rawValue)/\(it.target): \(String(cString: strerror(errno)))")
+                        continue
+                    }
+                    o.added += 1; o.bytes += it.size
                 }
-                guard rename(tmp, dst) == 0 else {
-                    o.failed.append("\(a.area.rawValue)/\(it.target): \(String(cString: strerror(errno)))")
-                    continue
-                }
-                if it.replaces { o.replaced += 1 } else { o.added += 1 }
-                o.bytes += it.size
             }
         }
         discardStaging()
-        o.backups = areas.compactMap { backups[$0.area] }.map { URL(fileURLWithPath: $0) }
+        o.backups = parts.compactMap { backups[$0.area] }.map { URL(fileURLWithPath: $0) }
         return o
     }
 
@@ -617,12 +698,13 @@ enum CarryOver {
     /// What happened, kept in the client's folder (`.ffxi-on-mac-carryover`). Paths only: no
     /// file's contents, nothing from a boot profile.
     struct Record: Codable, Equatable {
-        enum State: String, Codable { case pending, done, skipped, nothing }
+        /// `applying`: files were going into place when it last ran; finished next time.
+        enum State: String, Codable { case pending, applying, done, skipped, nothing }
         var state: State
         var date: Date
         /// The client copied from.
         var from: String? = nil
-        /// Pending: the folders of the installs known when Setup finished, tried again at Play.
+        /// Pending: the folders of the installs known when Setup ran, tried again at Play.
         var hints: [String]? = nil
         var files: Int? = nil
         var replaced: Int? = nil
@@ -649,68 +731,114 @@ enum CarryOver {
         return (try? d.write(to: marker(root), options: .atomic)) != nil
     }
 
-    /// Setup left a carry-over for this install's first Play. One small file read.
-    static func isPending(_ i: Install) -> Bool { record(i.gameDir)?.state == .pending }
+    /// Setup left a carry-over (or one cut short) for this install's next Play. One small read.
+    static func isPending(_ i: Install) -> Bool {
+        guard let s = record(i.gameDir)?.state else { return false }
+        return s == .pending || s == .applying
+    }
+
+    /// Before Setup downloads a client into `i`: a pending marker holding the folders Setup knows
+    /// now, so a launcher quit in the middle of the download still knows them afterwards. Leaves
+    /// any other marker alone. Never makes a folder on a drive that is not there.
+    static func prepare(_ i: Install, known: [URL], now: Date = Date()) {
+        let root = i.gameDir
+        let rec = record(root)
+        guard rec == nil || rec?.state == .pending else { return }
+        guard Preflight.unavailableDrive(for: root.path) == nil,
+              FileManager.default.fileExists(atPath: root.deletingLastPathComponent().path) else { return }
+        var hints = rec?.hints ?? []
+        for p in known.map({ $0.standardizedFileURL.path }) where !hints.contains(p) { hints.append(p) }
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        write(Record(state: .pending, date: now, hints: hints, why: "Setup is downloading the client"), root)
+    }
 
     enum Trigger { case setup, play }
 
+    /// What `automatic` did: a line for launcher.log (nil: nothing to say), and what it waits for
+    /// when it could not run.
+    struct Result: Equatable {
+        enum Wait: Equatable { case game, launch, other }
+        var line: String? = nil
+        var waits: Wait? = nil
+    }
+
     /// The carry-over by itself: right after Setup downloaded a client into `dest` (`.setup`), or
-    /// before a Play when Setup left it pending (`.play`; nothing otherwise). `known`: the folders
-    /// of the installs the launcher knows, the install in use before Setup first. Returns one line
-    /// for launcher.log, or nil when there was nothing to do. Reads and copies files: never on the
-    /// main thread.
-    static func automatic(_ trigger: Trigger, dest i: Install, known: [URL], env: Environment = .live) -> String? {
+    /// before a Play when one is pending or was cut short (`.play`; nothing otherwise). `known`:
+    /// the folders of the installs the launcher knows, the install in use before Setup first.
+    /// Reads and copies files: never on the main thread.
+    static func automatic(_ trigger: Trigger, dest i: Install, known: [URL], env: Environment = .live) -> Result {
         let dest = side(i)
         let rec = record(dest.root)
-        if let r = rec, r.state != .pending { return nil }
-        if trigger == .play, rec == nil { return nil }
+        let finishing = rec?.state == .applying
+        if let r = rec, r.state != .pending, !finishing { return Result() }
+        if trigger == .play, rec == nil { return Result() }
         // No game in this folder (yet): nothing to carry into.
-        guard FileManager.default.fileExists(atPath: dest.user.deletingLastPathComponent().path) else { return nil }
+        guard FileManager.default.fileExists(atPath: dest.user.deletingLastPathComponent().path) else { return Result() }
         var hints: [String] = []
         for p in (rec?.hints ?? []) + known.map({ $0.standardizedFileURL.path }) where !hints.contains(p) { hints.append(p) }
-        func wait(_ why: String, failed: Bool = false) -> String {
-            write(Record(state: .pending, date: env.now(), hints: hints, why: why), dest.root)
-            return (failed ? "!! " : "i  ") + "carry-over of macros and settings waits (\(why)); it runs before this install's first Play"
+        func wait(_ why: String, _ kind: Result.Wait = .other, failed: Bool = false) -> Result {
+            // A copy already going into place stays `applying`: it is finished, never begun afresh.
+            write(Record(state: finishing ? .applying : .pending, date: env.now(), from: rec?.from, hints: hints, why: why), dest.root)
+            return Result(line: (failed ? "!! " : "i  ") + "carry-over of macros and settings waits (\(why)); it runs before this install's next Play",
+                          waits: kind)
         }
-        func played(_ t: Tree) -> String? {
-            guard !t.characters().isEmpty else { return nil }
+        func played(_ t: Tree) -> Result? {
+            guard !finishing, !t.characters().isEmpty else { return nil }
             write(Record(state: .skipped, date: env.now(), why: "a character has played in this install"), dest.root)
-            return "i  carry-over of macros and settings: not done, a character has already played in this install"
+            return Result(line: "i  carry-over of macros and settings: not done, a character has already played in this install")
         }
         let first = read(dest.user)
         if let p = first.problem { return wait("this install's USER folder can't be read: \(p)") }
-        if let line = played(first) { return line }
-        guard let fd = env.lock() else { return wait("a launch is under way") }
+        if let r = played(first) { return r }
+        guard let fd = env.lock() else { return wait("a launch is under way", .launch) }
         defer { env.unlock(fd) }
-        if env.gameRunning() { return wait("a game is running") }
+        if env.gameRunning() { return wait("a game is running", .game) }
         // Read again under the lock, with nothing running.
         let (destUser, destConfig) = readDest(dest)
         if let p = destUser.problem ?? destConfig.problem { return wait("this install's folders can't be read: \(p)") }
-        if let line = played(destUser) { return line }
-        let found = candidates(hints.map { URL(fileURLWithPath: $0) }, dest: dest)
-        // The first is the install in use before Setup: the one played last. When it can't be
-        // read, Setup waits for it rather than take an older one; the first Play, the last chance
-        // before a character logs in here, takes the best there is.
-        if trigger == .setup, let first = found.first, first.unreachable, let why = first.problem {
-            return wait("\(first.side.root.path) can't be read now: \(why)")
-        }
-        guard let best = choose(found) else {
-            if let w = found.first(where: \.unreachable), let why = w.problem {
-                return wait("\(w.side.root.path) can't be read now: \(why)")
+        if let r = played(destUser) { return r }
+        let best: Candidate
+        if finishing {
+            // Cut short last time: the same client, and only what is still missing.
+            guard let from = rec?.from, let s = side(at: URL(fileURLWithPath: from)) else {
+                return wait("the client it was copying from isn't there")
             }
-            write(Record(state: .nothing, date: env.now(), why: "no earlier install with characters"), dest.root)
-            return "i  carry-over of macros and settings: no earlier install with characters to copy from"
+            let c = survey(s)
+            if c.identity == nil || c.unreachable { return wait("\(from) can't be read now: \(c.problem ?? "")") }
+            best = c
+        } else {
+            let found = candidates(hints.map { URL(fileURLWithPath: $0) }, dest: dest)
+            // The first is the install in use before Setup: the one played last. When it can't be
+            // read, Setup waits for it rather than take an older one; the next Play, the last
+            // chance before a character logs in here, takes the best there is.
+            if trigger == .setup, let f = found.first, f.unreachable, let why = f.problem {
+                return wait("\(f.side.root.path) can't be read now: \(why)")
+            }
+            guard let b = choose(found) else {
+                if let w = found.first(where: \.unreachable), let why = w.problem {
+                    return wait("\(w.side.root.path) can't be read now: \(why)")
+                }
+                write(Record(state: .nothing, date: env.now(), why: "no earlier install with characters"), dest.root)
+                return Result(line: "i  carry-over of macros and settings: no earlier install with characters to copy from")
+            }
+            best = b
         }
-        let p = plan(from: best, to: dest, destUser: destUser, destConfig: destConfig)
+        let p = plan(from: best, to: dest, destUser: destUser, destConfig: destConfig, finishing: finishing)
         do {
-            let o = try apply(p, from: best.side, to: dest, env: env)
-            if o.added + o.replaced == 0, !o.failed.isEmpty {
-                return wait("nothing could be put in place: \(o.failed[0])", failed: true)
+            let o = try apply(p, from: best.side, to: dest, env: env, beforeCommit: {
+                write(Record(state: .applying, date: env.now(), from: best.side.root.path, hints: hints,
+                             why: "files were going into place"), dest.root)
+            })
+            if !o.failed.isEmpty {
+                // The rest is in place; what is still missing is added next time.
+                write(Record(state: .applying, date: env.now(), from: best.side.root.path, hints: hints,
+                             why: "\(o.failed.count) not put in place: \(o.failed[0])"), dest.root)
+                let line = String(summary(o, plan: p, from: best.side).dropFirst(4))
+                return Result(line: "!! " + line + "; what is missing is added before the next Play", waits: .other)
             }
             write(Record(state: .done, date: env.now(), from: best.side.root.path, files: o.added + o.replaced,
-                         replaced: o.replaced, bytes: o.bytes, why: o.failed.isEmpty ? nil : "\(o.failed.count) not put in place"),
-                  dest.root)
-            return summary(o, plan: p, from: best.side)
+                         replaced: o.replaced, bytes: o.bytes), dest.root)
+            return Result(line: summary(o, plan: p, from: best.side))
         } catch {
             let why = (error as? Refusal)?.line ?? error.localizedDescription
             return wait("the copy from \(best.side.root.path) failed, nothing was changed: \(why)", failed: true)
@@ -720,7 +848,8 @@ enum CarryOver {
     /// One line for launcher.log.
     static func summary(_ o: Outcome, plan p: Plan, from: Side) -> String {
         let mb = String(format: "%.1f MB", Double(o.bytes) / 1e6)
-        var s = "==> carried over macros and settings from \(from.root.path): \(p.charactersAdded.count) characters, "
+        var s = "==> carried over macros and settings from \(from.root.path): "
+            + (p.mode == .finishing ? "finished a copy cut short, " : "\(p.charactersAdded.count) characters, ")
             + "\(o.added + o.replaced) files (\(mb))"
         if o.replaced > 0 { s += "; \(o.replaced) replaced, the originals kept in " + o.backups.map(\.lastPathComponent).joined(separator: ", ") }
         if o.skipped > 0 { s += "; \(o.skipped) left as they were (changed meanwhile)" }
