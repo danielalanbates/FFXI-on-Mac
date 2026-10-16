@@ -36,6 +36,7 @@ enum Headless {
             || a.contains("--selftest-ui-text")
             || a.contains("--selftest-primary-action")
             || a.contains("--selftest-install-location")
+            || a.contains("--selftest-install-selection")
             || a.contains("--selftest-setup-progress")
             || a.contains("--selftest-boot-profile")
             || a.contains("--selftest-news")
@@ -102,6 +103,9 @@ enum Headless {
         }
         if args.contains("--selftest-install-location") {
             runInstallLocationSelfTest()
+        }
+        if args.contains("--selftest-install-selection") {
+            runInstallSelectionSelfTest()
         }
         if args.contains("--selftest-setup-progress") {
             runSetupProgressSelfTest()
