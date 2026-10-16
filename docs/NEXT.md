@@ -18,7 +18,8 @@ in `archive/docs-2026-08/`.
    #18, #19; #20/#21/#22 per HANDOFF (#21's sidecar must not replace ours).
 6. **#35** (password off the command line): fix the flag and path, call `scrubLoginFiles`, test a
    login on local LSB before HorizonXI.
-7. **Remaining A/Bs** from HANDOFF › Performance (`WINE_DISABLE_NX_COMPAT`, enforce-nx dll,
+7. **Remaining A/Bs** from HANDOFF › Performance (`WINE_DISABLE_NX_COMPAT` is settled and on by
+   default since b66; enforce-nx dll on top of it,
    `maxFrameLatency`, MVK concurrent compilation, Play-to-window time).
 8. **Public 3.10** when the gates in `RELEASE-WHEN-STABLE.md` pass, at most weekly:
    `package.sh` → `publish-release.sh` (dry run, then `--yes` with Daniel's OK) → check

@@ -152,8 +152,10 @@ Low Power Mode first; `FFXI_ON_MAC_FPSLOG=1`, compare rows with >800 draws, same
 - Play-time lines: turn Low Power Mode on → one line; LSB running + Play HorizonXI → line + Stop
   button stops it; none of them on a normal Play.
 - Not added, A/B candidates only: `MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION=1` (pipeline
-  compile stalls, via Settings › extra environment), `WINE_DISABLE_NX_COMPAT` (FFXI exes are already
-  NX_COMPAT, so low expectation), and whether the Keep-awake toggle (`LSAppNapIsDisabled` env) does
+  compile stalls, via Settings › extra environment), `WINE_DISABLE_NX_COMPAT` (the expectation
+  written here was wrong: the exes are NX_COMPAT, but Square Enix's DLLs are not, and one of those
+  is enough for this Wine to turn no-execute off; measured and made the default in b66, see
+  `BETA-66.md`), and whether the Keep-awake toggle (`LSAppNapIsDisabled` env) does
   anything (Activity Monitor App Nap column with the game occluded); it stays as is.
 - Known gaps: the sidecar's macOS 27 build (`vendor/x87sidecar-coop`, 3c7c2f6, 09-24) has no
   source or patch in the repo, so it cannot be rebuilt after the next macOS update (vendor/NOTICE.md

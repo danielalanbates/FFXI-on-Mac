@@ -100,6 +100,15 @@ which upstream says otherwise crawl. The HorizonXI `horizon-loader.exe`, `pol.ex
 of this game's slowdown. A module loaded later could differ. Do not replace the
 shared playable Wine tree based on this release note alone.
 
+**Correction (2026-10-15, b66):** the conclusion above was wrong, and "a module loaded later"
+was exactly it. Square Enix's `FFXiMain.dll`, `FFXi.dll`, `FFXiResource.dll`,
+`FFXiVersions.dll`, and PlayOnlineViewer's own `pol.exe`, `polhook.dll`, `app.dll` and
+`polcore.dll` all report `DllCharacteristics 0x0000`: no `NX_COMPAT`. The pinned cx-26.3.0-1
+turns no-execute off for the whole process when *any* module lacks the flag, not only the main
+exe. Live on character select: ~85-94k page faults/s and 50-84% kernel time without
+`WINE_DISABLE_NX_COMPAT`, ~3k faults/s with it. b66 sets it on every Play; see `BETA-66.md`,
+which also covers the later Wine bump.
+
 The current [x87sidecar](https://github.com/athei/x87sidecar/releases/tag/v1.7.0)
 documents macOS 27 support and cooperative attachment through patched Wine.
 Our bundled sidecar accelerated an isolated 32-bit Wine x87 benchmark on 27.0.1,

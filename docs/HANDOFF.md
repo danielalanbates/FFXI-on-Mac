@@ -62,7 +62,7 @@ before merging; asking needs Daniel's OK.
 | #17 (rdbell) `/play` → `/play-now` | applies cleanly; both URLs answer 200 | merge only after confirming which page is canonical |
 | #18, #19 (rdbell) | #18 applies with reduced context; #19 conflicts | rebase |
 | #20 (rdbell) patched-wine installer | replaces Daniel's wine candidates and hard-blocks Play without a 1 GB+ runtime | rebase: keep existing candidates first, offer the install only when none is found, free-space check, no hard block |
-| #21 (rdbell) DXVK enforce-nx | biggest measured scene-load win (time below 10 fps 24 s → 1 s, M2 Max, macOS 26.5) but replaces `x87sidecar-coop` with upstream 4e9c738 and would undo the macOS 27 change (3c7c2f6) | do not merge as is: A/B `WINE_DISABLE_NX_COMPAT=1` first; if the patch still wins, take only the patch and a rebuilt dll |
+| #21 (rdbell) DXVK enforce-nx | biggest measured scene-load win (time below 10 fps 24 s → 1 s, M2 Max, macOS 26.5) but replaces `x87sidecar-coop` with upstream 4e9c738 and would undo the macOS 27 change (3c7c2f6) | do not merge as is. b66 sets `WINE_DISABLE_NX_COMPAT=1` on Play (written independently; the same stall, BETA-66.md); only if the patch still wins on top of that, take only the patch and a rebuilt dll |
 | #22 (rdbell) | ~29k lines, stacked on #20/#21 | after those |
 | #23, #28 (rdbell) docs | apply cleanly | merge after the licence agreement |
 | #24 (rdbell) era label | the same change landed in b59 (2e80269) | close with credit |
@@ -77,10 +77,14 @@ medians and ranges; check swap and Low Power Mode first; `FFXI_ON_MAC_FPSLOG=1`,
 draws). Recipes: `BETA-59.md` › Performance.
 
 1. x87 sidecar on (default) vs `FFXI_ON_MAC_X87=0`, macOS 27.0.1.
-2. `WINE_DISABLE_NX_COMPAT=1` (athei wine a3e07b7c6d; rdbell's no-binary alternative to #21),
-   scene-load time. Conflicting expectations: FFXI's exes are already NX_COMPAT, yet rdbell
-   measured nearly #21's win with it. Only a measurement settles it.
-3. #21's enforce-nx DXVK patch alone, in a rebuilt dll, keeping our `x87sidecar-coop`.
+2. ~~`WINE_DISABLE_NX_COMPAT=1`~~ settled, and the default since b66 (`BETA-66.md`). The
+   "FFXI's exes are already NX_COMPAT" doubt written here was wrong: the exes are, but
+   FFXiMain.dll, FFXi.dll, polhook.dll, app.dll and polcore.dll are not, and this Wine turns
+   no-execute off for the whole process when any module lacks the flag. Measured live
+   2026-10-15: ~85-94k page faults/s without it, ~3k with it. Reported upstream as
+   athei/wine-build#3 (rdbell, same ratios); the cx-26.3.0-6 release notes carry the fix.
+3. #21's enforce-nx DXVK patch alone, in a rebuilt dll, keeping our `x87sidecar-coop`. Now only
+   worth measuring against b66 (variable on): #21 addressed the same stall from inside DXVK.
 4. `d3d9.maxFrameLatency = 1` in `vendor/dxvk.conf` (every harness 4K number used it; Play never did).
 5. `MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION=1` (pipeline-compile stalls).
 6. Cold Play-to-window time and beach-balls vs b58 (#25).
