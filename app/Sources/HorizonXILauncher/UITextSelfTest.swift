@@ -1,9 +1,10 @@
-import Foundation
+import AppKit
 
 /// `--selftest-ui-text`: what the window says, headless. A drive that is not there (unplugged,
 /// or ghost-mounted: listed by `mount`, absent on disk) is named whether the path lives on it or
 /// reaches it through a symlink; the footer's one line and its order; that only "!!" lines reach
-/// the log strip; the quit question. Files go to a temporary folder, deleted afterwards. The real
+/// the log strip; the quit question; where the keyboard goes when the window opens (on an AppKit
+/// window that is never shown). Files go to a temporary folder, deleted afterwards. The real
 /// install is only read, and only reported.
 extension Headless {
     @MainActor static func runUITextSelfTest() -> Never {
@@ -104,6 +105,62 @@ extension Headless {
                            && LauncherDelegate.quitQuestion("Updating Wine").info == nil
                            && LauncherDelegate.quitQuestion("Downloading Eden").info != nil
                            && LauncherDelegate.quitQuestion(nil).message == "Quit while downloading?"))
+
+        // The account field when the window opens (b66): focused only while empty, never with
+        // its text selected for a stray keystroke to replace.
+        checks.append(("open focus: the account field is focused only when empty and editable",
+                       OpenFocus.focusAccount(accountName: "", fieldsDisabled: false)
+                           && OpenFocus.focusAccount(accountName: "  ", fieldsDisabled: false)
+                           && !OpenFocus.focusAccount(accountName: "someaccount", fieldsDisabled: false)
+                           && !OpenFocus.focusAccount(accountName: "", fieldsDisabled: true)))
+        checks.append(("open focus: all-selected is the signature, a caret or an empty field is not",
+                       OpenFocus.isSelectAll(NSRange(location: 0, length: 11), textLength: 11)
+                           && !OpenFocus.isSelectAll(NSRange(location: 11, length: 0), textLength: 11)
+                           && !OpenFocus.isSelectAll(NSRange(location: 0, length: 4), textLength: 11)
+                           && !OpenFocus.isSelectAll(NSRange(location: 0, length: 0), textLength: 0)))
+        checks.append(("open focus: letters are dropped; Tab, Return, Escape, arrows and shortcuts are not",
+                       OpenFocus.isTyping("d", shortcut: false) && OpenFocus.isTyping("é", shortcut: false)
+                           && OpenFocus.isTyping(" ", shortcut: false)
+                           && !OpenFocus.isTyping("\t", shortcut: false) && !OpenFocus.isTyping("\r", shortcut: false)
+                           && !OpenFocus.isTyping("\u{1B}", shortcut: false)
+                           && !OpenFocus.isTyping("\u{F700}", shortcut: false)
+                           && !OpenFocus.isTyping("q", shortcut: true) && !OpenFocus.isTyping("", shortcut: false)))
+        // The same in AppKit, on a window that is never shown.
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 120), styleMask: [.titled],
+                           backing: .buffered, defer: true)
+        win.isReleasedWhenClosed = false
+        let field = NSTextField(string: "someaccount")
+        field.frame = NSRect(x: 10, y: 10, width: 200, height: 24)
+        let anchor = OpenFocusAnchor.AnchorView(frame: .zero)
+        win.contentView?.addSubview(field)
+        win.contentView?.addSubview(anchor)
+        checks.append(("open focus (AppKit): a window not yet shown opens on the anchor, not a field",
+                       win.initialFirstResponder === anchor))
+        win.makeFirstResponder(field)
+        let editor = win.firstResponder as? NSTextView
+        checks.append(("open focus (AppKit): a field the window focuses has all its text selected (the bug)",
+                       editor.map { $0.isFieldEditor && OpenFocus.isSelectAll($0.selectedRange(), textLength: ($0.string as NSString).length) } == true))
+        checks.append(("open focus (AppKit): that field is let go of, its text untouched",
+                       anchor.releaseSelectAll(in: win) && win.firstResponder === anchor && field.stringValue == "someaccount"))
+        win.makeFirstResponder(field)
+        (win.firstResponder as? NSTextView)?.setSelectedRange(NSRange(location: 4, length: 0))
+        checks.append(("open focus (AppKit): a field with a caret (clicked into) keeps the keyboard",
+                       !anchor.releaseSelectAll(in: win) && (win.firstResponder as? NSTextView)?.isFieldEditor == true))
+        win.makeFirstResponder(anchor)
+        if let d = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                    windowNumber: 0, context: nil, characters: "d",
+                                    charactersIgnoringModifiers: "d", isARepeat: false, keyCode: 2) {
+            anchor.keyDown(with: d)
+        }
+        checks.append(("open focus (AppKit): a letter typed while nothing is chosen changes nothing",
+                       win.firstResponder === anchor && field.stringValue == "someaccount"))
+        win.recalculateKeyViewLoop()
+        win.selectNextKeyView(nil)   // what Tab does
+        checks.append(("open focus (AppKit): Tab goes on into the field; the anchor is no Tab stop",
+                       (win.firstResponder as? NSText)?.delegate === field && field.nextValidKeyView !== anchor))
+        win.makeFirstResponder(nil)
+        anchor.removeFromSuperview()
+        field.removeFromSuperview()
 
         let failures = checks.filter { !$0.1 }.count
         for (name, passed) in checks { print("  \(passed ? "ok  " : "FAIL") \(name)") }

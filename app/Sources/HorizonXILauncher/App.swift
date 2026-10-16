@@ -337,6 +337,14 @@ struct ContentView: View {
                 sidebar.frame(width: 372)
             }
         }
+        // The window opens with no field focused when an account name is remembered, and with
+        // the empty account field focused when there is none; never with text selected for a
+        // stray keystroke to replace (2026-10-15: the remembered name became "de"). See OpenFocus.
+        .background(OpenFocusAnchor {
+            if focus == nil, OpenFocus.focusAccount(accountName: user, fieldsDisabled: store.selected?.local == true) {
+                focus = .account
+            }
+        }.frame(width: 0, height: 0))
         .onAppear {
             // What builds up to b63 stored for the graphics panel, in Ashita's keys (b64).
             for line in GraphicsSettings.migrateStored() { runner.logFileOnly("==> " + line) }
