@@ -56,7 +56,8 @@ struct LaunchCommand: Equatable {
 ///
 /// `--selftest-*` and `--check` are exempt: they open no window, touch nothing, exit on their
 /// own (`Headless.runIfAsked` runs first), and must work while a launcher is open. So is
-/// `--send-ashita`, whose `--world` names the world to send to, not one for the window to show.
+/// `--send-ashita`, whose `--world` names the world to send to, not one for the window to show,
+/// and so are `--carryover-report` (its `--world` likewise) and `--carryover-apply`.
 enum SingleInstance {
     static let bundleID = "org.batesai.horizonxi-on-mac"
     static let notificationName = Notification.Name("org.batesai.horizonxi-on-mac.request")
@@ -73,6 +74,7 @@ enum SingleInstance {
             || args.contains("--news-preview") || args.contains("--leftovers-report")
             || args.contains("--dxvk-cache-report") || args.contains("--dxvk-cache-warm")
             || args.contains("--send-ashita")
+            || args.contains("--carryover-report") || args.contains("--carryover-apply")
     }
 
     // MARK: - The lock

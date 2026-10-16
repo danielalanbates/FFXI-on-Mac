@@ -44,7 +44,10 @@ enum Headless {
             || a.contains("--selftest-dxvk-cache")
             || a.contains("--selftest-graphics")
             || a.contains("--selftest-addons-live")
+            || a.contains("--selftest-carryover")
             || a.contains("--send-ashita")
+            || a.contains("--carryover-report")
+            || a.contains("--carryover-apply")
             || a.contains("--leftovers-report")
             || a.contains("--dxvk-cache-report")
             || a.contains("--dxvk-cache-warm")
@@ -130,6 +133,9 @@ enum Headless {
         if args.contains("--selftest-addons-live") {
             runAddonsLiveSelfTest()
         }
+        if args.contains("--selftest-carryover") {
+            runCarryOverSelfTest()
+        }
         if args.contains("--news-preview") { runNewsPreview() }
         if args.contains("--leftovers-report") { runLeftoversReport() }
         if args.contains("--dxvk-cache-report") { runDXVKCacheReport() }
@@ -148,6 +154,8 @@ enum Headless {
             exit(2)
         }
         if args.contains("--send-ashita") { runSendAshita(args) }
+        if args.contains("--carryover-report") { runCarryOverReport(args) }
+        if args.contains("--carryover-apply") { runCarryOverApply(args) }
         if args.contains("--next-action") { runNextAction() }
         if args.contains("--fix") { runFix() }
         guard args.contains("--check") else { return }
