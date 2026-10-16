@@ -145,7 +145,8 @@ for required in \
   "$REPO/vendor/dxvk.conf" "$REPO/LICENSE" "$HERE/Resources/horizonxi-boot.ini" \
   "$REPO/vendor/licenses/README.txt" "$REPO/vendor/licenses/d3d8to9-BSD-3-Clause.txt" \
   "$REPO/vendor/licenses/DXVK-zlib.txt" "$REPO/vendor/licenses/MoltenVK-Apache-2.0.txt" \
-  "$REPO/vendor/licenses/cereal-BSD-3-Clause.txt" "$REPO/vendor/licenses/x87sidecar-MIT.txt"; do
+  "$REPO/vendor/licenses/cereal-BSD-3-Clause.txt" "$REPO/vendor/licenses/x87sidecar-MIT.txt" \
+  "$REPO/vendor/licenses/mingw-w64-runtime-ZPL-2.1.txt" "$REPO/vendor/ashita-send.exe"; do
   [[ -f "$required" ]] || { echo "required bundle input missing: $required" >&2; exit 1; }
 done
 
@@ -181,6 +182,10 @@ chmod +x "$APP/Contents/Resources/"*.sh
 for dll in d3d8to9.dll dxvk-1.10.3-x32-d3d9-horizonxi.dll libMoltenVK-1.4.2.dylib; do
   [[ -f "$REPO/vendor/$dll" ]] && cp "$REPO/vendor/$dll" "$APP/Contents/Resources/$dll"
 done
+# This project's own helper (tools/ashita-send.c, built by scripts/build-ashita-send.sh): run under
+# the game's wine, it hands an Addons… change to a client that is already running, through Ashita's
+# Thirdparty plugin (LiveAddons.swift). A Windows program, so a sealed resource, not signed itself.
+cp "$REPO/vendor/ashita-send.exe" "$APP/Contents/Resources/ashita-send.exe"
 # DXVK's settings file. Play copies it into the prefix and sets DXVK_CONFIG_FILE (Renderer.swift).
 cp "$REPO/vendor/dxvk.conf" "$APP/Contents/Resources/dxvk.conf"
 # The licence texts travel with the binaries (BSD-3, zlib, Apache-2.0 and MIT all require it), and

@@ -30,5 +30,13 @@ x87sidecar (https://github.com/athei/x87sidecar)
             x87sidecar-coop carries a changed Rosetta pattern for macOS 27.
   Licence:  MIT, Copyright (c) 2025 Lifeisawful -> x87sidecar-MIT.txt
 
+mingw-w64 14.0.0 runtime (https://www.mingw-w64.org)
+  Ships as: part of ashita-send.exe, which is this project's own program (tools/ashita-send.c,
+            under LICENSE); its start-up code is the mingw-w64 runtime, linked in statically.
+  Licence:  Zope Public License 2.1, Copyright (c) 2009 - 2013 by the mingw-w64 project, with the
+            public-domain and BSD parts it marks -> mingw-w64-runtime-ZPL-2.1.txt
+            (libgcc, also linked in, is under the GCC Runtime Library Exception, which puts no
+            condition on a program compiled this way.)
+
 The bundled Vanaguide and VanaVoice addons are Bates LLC's own; their licences are in
 their folders (Resources/Vanaguide/LICENSE, Resources/vanavoice/LICENSE).
