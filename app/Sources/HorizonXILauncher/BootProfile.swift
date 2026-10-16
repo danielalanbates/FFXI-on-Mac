@@ -147,13 +147,16 @@ enum BootProfile {
         return TextFile.join(lines, terminator: TextFile.terminator(of: text))
     }
 
-    /// `text` with `[section] key` set to `value`, added if absent. For the launcher's own seed only:
-    /// an existing profile's values are never rewritten by this file.
+    /// `text` with `[section] key` set to `value`, added if absent, the line's own spacing kept
+    /// (`k=v` stays `k=v`). For the launcher's own seed, and for the keys the Graphics panel
+    /// applies (`GraphicsSettings.applied`): nothing else in this file rewrites a profile's values.
     static func setting(_ s: Setting, in text: String) -> String {
         var lines = TextFile.lines(of: text)
         guard let n = lineIndex(s.key, section: s.section, in: lines),
               let eq = lines[n].firstIndex(of: "=") else { return adding(s, to: text) }
-        lines[n] = String(lines[n][...eq]) + " " + s.value
+        let after = lines[n][lines[n].index(after: eq)...]
+        let gap = after.prefix { $0 == " " || $0 == "\t" }
+        lines[n] = String(lines[n][...eq]) + (gap.isEmpty && after.isEmpty ? " " : String(gap)) + s.value
         return TextFile.join(lines, terminator: TextFile.terminator(of: text))
     }
 

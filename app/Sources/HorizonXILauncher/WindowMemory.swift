@@ -71,7 +71,7 @@ enum WindowMemory {
         // only in the stored settings.
         let stored = GraphicsSettings.load(world: world)
         guard stored.rememberWindowSize else { return nil }
-        var g = GraphicsSettings.read(from: install, profile: profile) ?? stored
+        var g = GraphicsSettings.read(from: install, profile: profile, fallback: stored) ?? stored
         g.rememberWindowSize = true
         // Even numbers only: the client rounds odd back buffers and the next sample would then
         // differ by a pixel forever.
@@ -81,8 +81,14 @@ enum WindowMemory {
         let old = "\(g.width)x\(g.height)"
         g.width = w
         g.height = h
-        g.write(to: install, profile: profile)
-        g.save(world: world)
+        // The size only, in the profile and in the stored settings (b64). Every other key stays
+        // as it was: a profile an older build wrote wrong keys into must not be rewritten, nor
+        // copied into the stored choice that Setup gives a new install.
+        g.write(to: install, profile: profile, only: g.sizeKeys)
+        var s = stored
+        s.width = w
+        s.height = h
+        s.save(world: world)
         return "==> window size remembered for \(world): \(w)x\(h) (was \(old)); next Play opens at that size"
     }
 }

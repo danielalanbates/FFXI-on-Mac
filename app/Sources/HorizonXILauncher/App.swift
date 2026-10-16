@@ -336,6 +336,8 @@ struct ContentView: View {
             }
         }
         .onAppear {
+            // What builds up to b63 stored for the graphics panel, in Ashita's keys (b64).
+            for line in GraphicsSettings.migrateStored() { runner.logFileOnly("==> " + line) }
             if store.selected?.local == true { local.refresh() }
             // Off the main actor so credential-file access and possible external-volume reads
             // cannot delay the first window.
@@ -966,18 +968,27 @@ struct ContentView: View {
             }
             .help("Detail of world textures. Higher values use more graphics memory.")
             Picker("Mip mapping", selection: $graphics.mipMapping) {
-                ForEach(0...4, id: \.self) { Text($0 == 0 ? "Off" : String($0)).tag($0) }
+                ForEach(GraphicsSettings.mipMappingChoices, id: \.1) { Text($0.0).tag($0.1) }
             }
-            .help("Smooths distant textures. Higher values use stronger filtering.")
-            Picker("Textures", selection: $graphics.textureCompression) {
-                Text("Uncompressed").tag(0)
-                Text("Compressed").tag(2)
+            .help("Smooths distant textures. 6 is the best quality.")
+            Picker("Texture compression", selection: $graphics.textureCompression) {
+                ForEach(GraphicsSettings.textureCompressionChoices, id: \.1) { Text($0.0).tag($0.1) }
             }
-            .help("Compressed uses less graphics memory; uncompressed preserves texture quality.")
+            .help("Compressed textures use less graphics memory; uncompressed look best.")
+            Picker("Map compression", selection: $graphics.mapCompression) {
+                ForEach(GraphicsSettings.mapCompressionChoices, id: \.1) { Text($0.0).tag($0.1) }
+            }
+            .help("Compressed maps use less graphics memory.")
             Toggle("Bump mapping", isOn: $graphics.bumpMapping)
                 .help("Adds raised-looking detail to some surfaces.")
-            Toggle("Environmental animation", isOn: $graphics.environmentAnimation)
-                .help("Animates effects such as water and weather.")
+            Picker("Environment animations", selection: $graphics.environmentAnimations) {
+                ForEach(GraphicsSettings.environmentChoices, id: \.1) { Text($0.0).tag($0.1) }
+            }
+            .help("Animates effects such as water and weather.")
+            Picker("Sound channels", selection: $graphics.soundChannels) {
+                ForEach(GraphicsSettings.soundChannelChoices, id: \.self) { Text(String($0)).tag($0) }
+            }
+            .help("How many sounds can play at once. 20 is the most.")
             Divider()
             Toggle("Remember window size", isOn: $graphics.rememberWindowSize)
                 .help("Opens at the last window size on the next Play. Resizing during play stretches the image until then.")
@@ -1003,7 +1014,7 @@ struct ContentView: View {
                 Button("Balanced") { graphics = .balanced }
                     .help("1080p with standard texture detail.")
                 Button("Max (4K)") { graphics = .max4K }
-                    .help("4K with maximum texture detail. Uses more graphics memory.")
+                    .help("4K with every setting at its maximum. Uses more graphics memory.")
                 Spacer()
                 Button("Cancel") { showGraphics = false }
                 Button("Apply") {
@@ -2723,10 +2734,11 @@ struct ContentView: View {
     /// the boot .ini is a plain text file the user may well have edited by hand.
     private func openGraphics() {
         // Prefer what the profile actually says; fall back to this world's stored value, not
-        // to a value some other world last wrote.
+        // to a value some other world last wrote. A key the profile lacks, or holds a value the
+        // game does not have (an older build's 0018 = 4), shows the stored value.
         if let s = store.selected {
             graphics = GraphicsSettings.load(world: s.name)
-            if let i = active, let onDisk = GraphicsSettings.read(from: i, profile: s.bootProfile) {
+            if let i = active, let onDisk = GraphicsSettings.read(from: i, profile: s.bootProfile, fallback: graphics) {
                 graphics = onDisk
             }
         }
