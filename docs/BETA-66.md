@@ -2,8 +2,11 @@
 
 Branch `beta-b66`, on top of `beta-b65` (293327e). Local beta: no GitHub release, nothing pushed.
 
-Two changes: no-execute stays on under the game's Wine (the fault storm), and the remembered
-account name is no longer focused and selected when the window opens.
+Three changes:
+
+- **A.** No-execute stays on under the game's Wine (the fault storm).
+- **B.** Addons… changes reach a running client at once, through Ashita's Thirdparty plugin.
+- **C.** The remembered account name is no longer focused and selected when the window opens.
 
 ## A. The fault storm: `WINE_DISABLE_NX_COMPAT=1` on every Play
 
@@ -155,6 +158,202 @@ game running, then on the local world only, with Daniel's OK:
 Existing installs keep their `wine-coop`. `game-wine.sh` only installs one that is missing, so a
 bump reaches existing users only if Setup is made to replace an older pinned tree.
 
+## B. Addons… changes apply at once while the game runs
+
+Daniel asked whether addon loading and unloading could be instant with the game running. It can
+now. Applying the Addons… sheet still writes `scripts/default.txt` first, exactly as before. Then,
+if that world's client is running from the selected install, the lines that changed are handed
+to the running client. A changed addon appears or disappears within a frame or two. Before, it
+appeared or disappeared at the next Play.
+
+### How
+
+HorizonXI's own `default.txt` loads Ashita's **Thirdparty** plugin (in its "Horizon Launcher
+Controlled Plugins" block; Daniel's log shows "Loaded plugin: thirdparty - Version: 4.10").
+Thirdparty exposes the Windower-era keyboard block, `WindowerMMFKeyboardHandler_<pid>`. Anything
+written there as a type-3 entry, it runs through `ChatManager::ParseCommand`: the same path as a
+typed command. It runs it from the game's own keyboard read, about once a frame. The layout and
+the handshake are from AshitaXI/thirdparty-src (`src/handlers/keyboard.cpp`, 9d6d7749) and were
+checked against the installed `Thirdparty.dll`. The protocol is written out at the top of
+`tools/ashita-send.c`.
+
+- **`tools/ashita-send.c`** → `vendor/ashita-send.exe`, built by `scripts/build-ashita-send.sh`:
+  - i686 mingw, static, stripped, no PE timestamp. The same source gives the same bytes.
+  - Imports KERNEL32 and the C runtime only, with no user32, so it needs no desktop and touches
+    no window or input.
+  - Finds the client by trying `OpenFileMappingA` on the block's name for each process wine
+    lists. It never reads any process.
+  - Waits up to 3 s for `handled_ == 1`, writes the commands (';'-joined into up to 32 entries,
+    one batch), then sets `handled_ = 0`. It then waits up to 5 s for `handled_` to come back
+    to 1.
+  - Exit codes: 0 delivered, 1 bad input, 2 no client, 3 more than one client (refuses to
+    guess), 4 busy, 5 pending.
+  - Commands come from argv, or from stdin one per line.
+  - Bundled as `Contents/Resources/ashita-send.exe`. Notice and SHA-256: `vendor/NOTICE.md`. Its
+    statically linked mingw-w64 runtime is ZPL 2.1; that text now ships in
+    `ThirdPartyNotices/`.
+- **`app/Sources/HorizonXILauncher/LiveAddons.swift`**:
+  - `commands(from:to:policy:)`: the diff between the script as it was just before Apply and
+    what Apply writes. Order: addon unloads, plugin unloads, plugin loads, addon loads.
+  - `resolve(...)`: is the world's client running from this install, and under which wine?
+  - `run(...)`: runs the helper under that wine, with the commands as arguments and its output
+    to a file. Time limit 30 s.
+  - `deliver` / `apply`: runs off the main thread on one serial queue, so two helpers never
+    write the block together.
+- **`App.swift`**, the sheet's Apply: reads the script, writes it as before, then
+  `LiveAddons.apply(...)`. It logs one line per Apply to launcher.log (`logFileOnly`) and shows
+  nothing on screen.
+
+### What is sent, and what never is
+
+- Only the items that changed. Only names the world's `AddonPolicy` allows are loaded, so
+  HorizonXI never gets anything off its list or an fps monitor. Unloads go through for any name.
+- Never `/unload` or `/reload thirdparty`: the plugin would free itself in the middle of running
+  the command. Never `/load thirdparty` either, since it is the channel itself.
+- Never `/unload` or `/reload addons`: that ends every Lua addon at once. `/load addons` is sent,
+  ahead of the addon loads.
+- Never `winefix`, `vanavoice` or `vanaguide`. The sheet does not list them anyway.
+- A name with anything outside `A-Z a-z 0-9 _ - .` is not sent. **Deviation from the brief**,
+  which said "strip ';'": stripping `clo;ck` would load `clock`, a different addon, so such a name
+  is skipped instead. The plugin's `;` split can still never be reached from a name.
+- The helper refuses the never-list, `;`, control characters, and `/unload` or `/reload` with no
+  name, whoever asks. Every command is checked before anything is written, so a batch goes in
+  whole or not at all.
+- Only type 3 (command text) is ever written. The key types (1, 2, 1000) are not in the helper.
+
+### When nothing is sent
+
+The change then loads at the next Play, as it always did. Each case gets one `i ` or `!!` line in
+launcher.log.
+
+- No client of this world is running (the usual case).
+- An injector is running, so a launch is under way.
+- Another world's client is running too, so which plugin is which cannot be told from here. The
+  helper also refuses two clients on its own (exit 3).
+- No wineserver serves this install's prefix, so the client runs from another install. The
+  helper is not run then, because wine would start a fresh wineserver for it. If a wineserver
+  exits in the moment between the scan and the helper's start, that one window is left.
+  Measured in the throwaway prefix: a wineserver the helper started ends by itself about 4 s
+  after the helper exits, and leaves no wine process behind.
+- The running wineserver is not from a wine this launcher runs.
+
+How the helper joins the running game's wineserver:
+
+- **Wine:** the one whose `bin/wineserver` is the running server's executable (compared after
+  realpath, so the `lib/wine/../../bin/wineserver` form matches). The helper then speaks that
+  server's protocol.
+- **Sync mode:** read from the running wineserver (`LiveClients.wineserver(serving:among:)`, the
+  same `ps -E` read as MULTI_WORLD.md rule 6).
+- **Environment:** that prefix and sync mode, `WINEDLLOVERRIDES=mscoree,mshtml=;winemac.drv=d`
+  and `WINEDEBUG=-all`. Nothing else of the game's environment is passed.
+
+**Busy:** the plugin has not yet taken an earlier batch. It is retried, with a fresh scan and a
+fresh helper about every 3 s, for up to 2 minutes, so a second Apply made while the first is
+still waiting is not dropped. **Pending:** the batch is written but the game has not read its
+keyboard for 5 s. It is not lost, and the plugin runs it whenever the game next reads its
+keyboard. Whether FFXI under wine reads its keyboard while it is behind the launcher is **not
+known**; see the in-game check.
+
+The sheet's text is unchanged. **Correction to the brief:** it said the sheet "already says
+changes apply next Play". It does not: the sheet's only text about it is the help tooltip on its
+title ("Written to scripts/default.txt…"). No text was added either way.
+
+### By hand: `--send-ashita`
+
+```
+FFXI-on-Mac --send-ashita "/addon load clock" [--world HorizonXI]
+```
+
+- Sends one command to that world's running client (default: the selected world) the same way.
+- Refuses everything the helper refuses. On a hosted world it also refuses any `/addon load`,
+  `/addon reload`, `/load` or `/reload` whose name is not on that world's published list. A
+  hosted world with no published list gets no load at all. `/exec`, `/alias` and `/bind` are
+  refused on hosted worlds, since they can run anything.
+- Other commands pass, such as `/drawdistance setworld 5`.
+- Headless, and exempt from SingleInstance (`isExempt`), so its `--world` is never handed to a
+  running launcher window. It prints to stdout/stderr only; launcher.log is not touched.
+- Exit: the helper's code; 1 refused; 2 not sent (with why); 64 usage.
+
+### Tests
+
+- **`--selftest-addons-live`, 47 checks:**
+  - the diff (unchanged, untick, tick, order, plugins, thirdparty, the Lua host, launcher-managed
+    names, HorizonXI's list and fps, the local world, unsourced policy, newly installed, odd
+    names, duplicates, case);
+  - the `--send-ashita` refusals;
+  - exit codes;
+  - the log line;
+  - the helper's environment (exactly seven variables);
+  - `resolve` on synthetic `ps` output (found with msync and esync, no client, injector, two
+    worlds, localhost = 127.0.0.1, another install's prefix, a foreign wineserver, the
+    wrapper's wine, the `../../bin` path);
+  - the SingleInstance exemption, and that the helper is found and is a PE file.
+- **`scripts/tests/ashita-send-test.sh`, 38 checks, all pass (the final version, run twice):**
+  - The setup: the game's own wine (wine-coop, "wine-11.0"), a throwaway prefix at
+    `~/Downloads/FFXI-on-Mac-build/fixture/ashita-send/prefix`, msync on.
+  - The test refuses to start while any game client runs. It stops only that prefix's
+    wineserver.
+  - A fake plugin (`scripts/tests/ashita-send-fake-plugin.c`) creates the block under its own
+    pid. It polls every 16 ms and does what the plugin's `update()` does (the ';' split, the
+    '/' handling), writing down each command instead of running it.
+  - Measured:
+    - delivered: exact text, argv and stdin, in order, in 98-111 ms *including wine start-up*;
+    - 200 commands in one batch, packed 89+89+22, all in order;
+    - the never-list and malformed commands refused (exit 1) with nothing reaching the plugin,
+      including a refused line inside a batch;
+    - no plugin: exit 2;
+    - two plugins: exit 3, nothing written to either; `--pid` picks one;
+    - busy: exit 4 after 3.12-3.14 s; pending: exit 5 after 5.12-5.15 s; a send during a
+      pending batch is busy.
+  - The launcher's own path: the release build's `--selftest-addons-live` with
+    `HXI_LIVE_ADDONS_WINE_PREFIX` set. It found the fake (filed under `--server fake.invalid`)
+    from the live scan, with its wineserver, wine and msync, and delivered through
+    `LiveAddons.run` in 0.14-0.16 s. The helper refused `/unload thirdparty`. In a second run, an
+    earlier batch held for 6 s gave busy and then delivered, after 2 tries and 5.8 s, and the
+    fake ran the two batches in order.
+- All 25 suites pass. launcher.log was identical (inode, mtime, size) before and after.
+
+None of this ran against a real client. That was not allowed while Daniel was playing, and the
+helper has never touched his prefix.
+
+### Risks
+
+- **Never run against a real Thirdparty.** The layout and the handshake are from the source and
+  the disassembly. The fake mirrors the source's `update()`. The first real test is the in-game
+  check below.
+- **Background reads:** if the game does not read its keyboard while unfocused, an Apply made
+  from the launcher is "pending" and runs the moment the game window is clicked back into.
+  Applies made meanwhile are retried for 2 minutes and then left for the next Play.
+- **How the command arrives:** Thirdparty passes mode -1 (AshitaParse), not Typed. Plugins and
+  addons see `injected = true`. `/addon load` and `/load` are Ashita's own commands and ignore
+  both.
+- **Frame hitch:** an addon loads inside one game frame, the same hitch as typing the command.
+- **HorizonXI's rules:** Thirdparty ships in HorizonXI's own script but is not on its published
+  plugin list. It is used here only to send what the player could type, and only for names on
+  HorizonXI's list; no packet is sent.
+- **Two clients in one prefix** (HorizonXI plus the local world): nothing is sent; it waits for
+  the next Play. Matching a client by process start time, the research's suggestion, is not
+  built.
+- **Busy retries:** each retry starts a short wine process (about 0.1 s of work), every 3 s for
+  at most 2 minutes, and only while the plugin is still busy.
+
+### In-game check (Daniel)
+
+This needs b66 installed. It is not installed yet: `bundle.sh` was not run, because it
+re-registers the bundle with Launch Services.
+
+1. Play HorizonXI from the b66 launcher and log in. `clock` is on in your script now.
+2. In the launcher: **Addons…** → untick **clock** → **Apply**. The clock disappears at once.
+   If it only goes when you click back into the game window, that is the "pending" case and is
+   worth telling me.
+3. **Addons…** → tick **clock** → **Apply**. It comes back.
+4. `~/Library/Application Support/HorizonXI-on-Mac/launcher.log` should have one line per
+   Apply. For example, `==> addons, live in HorizonXI: /addon unload clock: delivered (0.2 s)`,
+   or `i  … handed over, not taken yet …` for pending.
+5. Optional, from Terminal:
+   `/Applications/FFXI-on-Mac.app/Contents/MacOS/FFXI-on-Mac --send-ashita "/addon unload clock" --world HorizonXI`
+   prints `delivered`. Running it again with `"/addon load clock"` brings the clock back.
+
 ## C. The account field when the window opens
 
 ### What happened
@@ -240,7 +439,8 @@ Release build (`swift build -c release`, `nice -n 19`, scratch path
 Nothing was running during the builds, the suites or the probe. Only the two old warnings
 (LocalServer.swift:251, Runner.swift:1971).
 
-- All 24 `--selftest-*` suites pass:
+- All 25 `--selftest-*` suites pass (re-run after B; B's suite and wine test are in section B):
+  - addons-live: 47, all new (B);
   - perf: 45, of which 6 are new (A);
   - ui-text: 33, of which 9 are new (C);
   - primary-action 77/77, install-location 107/107, install-selection 21/21,
