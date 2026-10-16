@@ -216,6 +216,10 @@ struct ContentView: View {
     @State private var hiddenAddonCount = 0
     @State private var installingExtra = ""
     @State private var addonWarning = ""
+    /// The Addons… sheet is open and its scan has not come back yet (spinner, Apply disabled).
+    @State private var addonsScanning = false
+    /// Bumped by every scan the sheet starts: a result for an older one is dropped.
+    @State private var addonScanGeneration = 0
     @State private var notice = ""
     /// What about the Mac slows the game just started (PlayCheck), one line each. Shown only while
     /// true: cleared when that game exits, on a world change, and when Low Power Mode or the heat
@@ -392,6 +396,9 @@ struct ContentView: View {
             // The preflight checks are per world now (each has its own game folder): CatsEye's
             // "no client" verdict must not keep Play grey after switching back to HorizonXI.
             recheck()
+            // A world picked while Addons… is open (a forwarded --world): the sheet lists the new
+            // world's addons, never the old one's, which Apply would write into the new world.
+            rescanAddons()
         }
         // Every job ends with fresh checks: a Download, Repair or Update that finished must turn
         // the button into the next step (or PLAY) without anyone pressing ↻.
@@ -847,18 +854,7 @@ struct ContentView: View {
                                     await MainActor.run {
                                         installingExtra = ""
                                         if ok {
-                                            let all = AddonSuite.scan(i, profile: store.selected?.bootProfile ?? "horizonxi.ini")
-                                            if addonPolicy.isRestricting {
-                                                addonItems = all.filter { addonPolicy.allows($0.name) }
-                                                hiddenAddonCount = all.count - addonItems.count
-                                            } else {
-                                                addonItems = all
-                                                hiddenAddonCount = 0
-                                            }
-                                            if let idx = addonItems.firstIndex(where: {
-                                                !$0.isPlugin && $0.name.lowercased() == e.name }) {
-                                                addonItems[idx].enabled = true
-                                            }
+                                            scanAddons(i, enabling: e.name)
                                             info("\(e.title) installed — Apply to enable")
                                         } else {
                                             notice = "\(e.title) couldn't be installed — Open log in Setup & Diagnostics"
@@ -874,49 +870,59 @@ struct ContentView: View {
                 }
             }
 
-            // Why the screen is empty, when it is. A blank list is the one outcome that
-            // tells the player nothing: it reads the same whether the world has no client
-            // installed, the folder is on a drive that is not mounted, or the server's list
-            // hid everything. Each of those needs a different thing done about it.
-            if addonItems.isEmpty {
-                Text(emptyAddonReason)
-                    .font(.system(size: 12)).foregroundStyle(Vana.ember)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.vertical, 6)
-            }
+            // While the scan runs (off the main actor, see scanAddons): a spinner where the list
+            // will be, and nothing that could read as "nothing installed".
+            if addonsScanning {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text(AddonSuite.scanningLabel).font(.system(size: 12)).foregroundStyle(Vana.muted)
+                }
+                .frame(maxWidth: .infinity, minHeight: 320, maxHeight: 320)
+            } else {
+                // Why the screen is empty, when it is. A blank list is the one outcome that
+                // tells the player nothing: it reads the same whether the world has no client
+                // installed, the folder is on a drive that is not mounted, or the server's list
+                // hid everything. Each of those needs a different thing done about it.
+                if addonItems.isEmpty {
+                    Text(emptyAddonReason)
+                        .font(.system(size: 12)).foregroundStyle(Vana.ember)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.vertical, 6)
+                }
 
-            List {
-                Section("Plugins") {
-                    ForEach($addonItems.filter {
-                        $0.wrappedValue.isPlugin && addonPolicy.allows($0.wrappedValue.name)
-                    }) { $item in
-                        addonRow($item)
-                    }
-                }
-                Section("Addons") {
-                    ForEach($addonItems.filter {
-                        !$0.wrappedValue.isPlugin && addonPolicy.allows($0.wrappedValue.name)
-                    }) { $item in
-                        addonRow($item)
-                    }
-                }
-                // Shown only on unrestricted/unfiltered worlds where no published allowlist exists.
-                // When an allowlist is in effect (e.g. HorizonXI), unapproved addons are strictly
-                // excluded from the list to prevent accidental loading or confusion.
-                if !addonPolicy.isRestricting && addonItems.contains(where: { !addonPolicy.allows($0.name) }) {
-                    Section("Not on \(store.selected?.name ?? "this server")'s approved list") {
-                        Text(unlistedNote)
-                            .font(.system(size: 12)).foregroundStyle(Vana.ember)
-                            .fixedSize(horizontal: false, vertical: true)
+                List {
+                    Section("Plugins") {
                         ForEach($addonItems.filter {
-                            !addonPolicy.allows($0.wrappedValue.name)
+                            $0.wrappedValue.isPlugin && addonPolicy.allows($0.wrappedValue.name)
                         }) { $item in
                             addonRow($item)
                         }
                     }
+                    Section("Addons") {
+                        ForEach($addonItems.filter {
+                            !$0.wrappedValue.isPlugin && addonPolicy.allows($0.wrappedValue.name)
+                        }) { $item in
+                            addonRow($item)
+                        }
+                    }
+                    // Shown only on unrestricted/unfiltered worlds where no published allowlist exists.
+                    // When an allowlist is in effect (e.g. HorizonXI), unapproved addons are strictly
+                    // excluded from the list to prevent accidental loading or confusion.
+                    if !addonPolicy.isRestricting && addonItems.contains(where: { !addonPolicy.allows($0.name) }) {
+                        Section("Not on \(store.selected?.name ?? "this server")'s approved list") {
+                            Text(unlistedNote)
+                                .font(.system(size: 12)).foregroundStyle(Vana.ember)
+                                .fixedSize(horizontal: false, vertical: true)
+                            ForEach($addonItems.filter {
+                                !addonPolicy.allows($0.wrappedValue.name)
+                            }) { $item in
+                                addonRow($item)
+                            }
+                        }
+                    }
                 }
+                .frame(height: 320)
             }
-            .frame(height: 320)
 
             HStack {
                 // "All" means all the ones this server permits. Enabling something the server
@@ -926,12 +932,17 @@ struct ContentView: View {
                         addonItems[i].enabled = true
                     }
                 }
+                .disabled(addonsScanning)
                 Button("Disable all") {
                     for i in addonItems.indices { addonItems[i].enabled = false }
                 }
+                .disabled(addonsScanning)
                 Spacer()
                 Button("Cancel") { showAddons = false }
                 Button("Apply") {
+                    // The list is empty until the scan is back; writing it would turn every
+                    // addon off (itemsToWrite below is exactly addonItems).
+                    guard !addonsScanning else { return }
                     // Refuse to write a block that would disable everything.
                     //
                     // On 2026-08-22 a broken fetch made the policy reject every installed addon
@@ -969,6 +980,7 @@ struct ContentView: View {
                     showAddons = false
                 }
                 .keyboardShortcut(.defaultAction)
+                .disabled(addonsScanning)
             }
         }
         .padding(20).frame(width: 460)
@@ -1388,6 +1400,8 @@ struct ContentView: View {
                     Toggle("Keep awake (no App Nap)", isOn: $perf.disableAppNap)
                     Toggle("Follow the Mac's sound output", isOn: $perf.followSoundOutput)
                         .help("Game audio follows your Mac's output device.")
+                    Toggle("Keep the game window's shape and title", isOn: $perf.keepWindowShape)
+                        .help("Resizing keeps the picture in proportion; the title stays FFXI on Mac.")
                     Toggle("Read cutscenes aloud (VanaVoice)", isOn: $perf.narrateCutscenes)
                         .disabled(!Narration.isAvailable || !Narration.allowed(by: addonPolicy))
                         .help(narrationHelp)
@@ -1447,6 +1461,7 @@ struct ContentView: View {
                 .onChange(of: perf.silenceWineDebug) { _ in perf.save() }
                 .onChange(of: perf.disableAppNap) { _ in perf.save() }
                 .onChange(of: perf.followSoundOutput) { _ in perf.save() }
+                .onChange(of: perf.keepWindowShape) { _ in perf.save() }
                 .onChange(of: perf.largeAddressAware) { _ in perf.save() }
                 .onChange(of: perf.narrateCutscenes) { _ in perf.save() }
                 .onChange(of: perf.enableVanaguide) { _ in perf.save() }
@@ -2865,22 +2880,60 @@ struct ContentView: View {
             notice = "No install selected — choose your wrapper with the folder button"
             return
         }
-        let all = AddonSuite.scan(i, profile: store.selected?.bootProfile ?? "horizonxi.ini")
-        if addonPolicy.isRestricting {
-            addonItems = all.filter { addonPolicy.allows($0.name) }
-            hiddenAddonCount = all.count - addonItems.count
-        } else {
-            addonItems = all
-            hiddenAddonCount = 0
-        }
-        let bad = AddonSuite.mismatchedPlugins(i)
-        addonWarning = bad.isEmpty ? "" :
-            "Ashita refused these plugins on the last run because they are built for a different "
-            + "interface version than this Ashita core: \(bad.joined(separator: ", ")). "
-            + (bad.contains { $0.lowercased() == "addons" }
-               ? "That includes the Lua host, so no addon below can run until it is fixed."
-               : "")
         showAddons = true
+        scanAddons(i)
+    }
+
+    /// Fill the Addons… sheet from `i` off the main actor: the plugin and addon folders and the
+    /// newest client log are slow to read on an external drive, and reading them first made the
+    /// button look dead. The sheet shows a spinner until then and Apply waits for it. A result
+    /// for a sheet that has been closed, or rescanned since, is dropped. `enabling` (an addon
+    /// just fetched by Get) is switched on in the new list.
+    private func scanAddons(_ i: Install, enabling: String? = nil) {
+        addonScanGeneration &+= 1
+        let generation = addonScanGeneration
+        let profile = store.selected?.bootProfile ?? "horizonxi.ini"
+        let policy = addonPolicy
+        let key = AddonSuite.SheetKey(i, profile: profile, policy: policy)
+        addonItems = []
+        hiddenAddonCount = 0
+        addonWarning = ""
+        addonsScanning = true
+        Task.detached(priority: .utility) {
+            let found = AddonSuite.sheetContents(i, profile: profile, policy: policy)
+            await MainActor.run {
+                guard generation == addonScanGeneration, showAddons else { return }
+                // The world, its folder or its server's list changed while this ran: the result is
+                // not what the sheet now stands for, and Apply would write it there. Scan again.
+                guard let now = active,
+                      AddonSuite.SheetKey(now, profile: store.selected?.bootProfile ?? "horizonxi.ini",
+                                          policy: addonPolicy) == key else {
+                    rescanAddons()
+                    return
+                }
+                addonItems = found.items
+                hiddenAddonCount = found.hidden
+                addonWarning = found.warning
+                if let name = enabling,
+                   let idx = addonItems.firstIndex(where: { !$0.isPlugin && $0.name.lowercased() == name }) {
+                    addonItems[idx].enabled = true
+                }
+                addonsScanning = false
+            }
+        }
+    }
+
+    /// The open Addons… sheet, filled again for what is selected now (world, folder, server list).
+    /// No install: an empty list, so the sheet's empty-list line says why; a scan still running
+    /// for the old world is dropped.
+    private func rescanAddons() {
+        guard showAddons else { return }
+        if let i = active { scanAddons(i); return }
+        addonScanGeneration &+= 1
+        addonItems = []
+        hiddenAddonCount = 0
+        addonWarning = ""
+        addonsScanning = false
     }
 
     private func color(_ s: Check.State) -> Color {

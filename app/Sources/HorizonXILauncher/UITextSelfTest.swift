@@ -99,6 +99,48 @@ extension Headless {
         checks.append(("strip: a chunk with no errors adds nothing",
                        Runner.errorLines(in: "Successfully logged in as someone!\n==> game exited\n").isEmpty))
 
+        // The Addons… sheet (b69): opens at once with a short word and a spinner while it scans
+        // off the main actor; what the scan gives the sheet.
+        checks.append(("Addons… while scanning: one short word, never a sentence",
+                       !AddonSuite.scanningLabel.isEmpty && AddonSuite.scanningLabel.count <= 16
+                           && AddonSuite.scanningLabel.split(separator: " ").count <= 2))
+        let addonInstall = Install(wrapper: tmp.appendingPathComponent("addons.app"), prefixName: "prefix")
+        let ag = addonInstall.gameDir
+        for dir in ["plugins", "addons/bar", "addons/fps", "addons/nolua", "logs"] {
+            try? fm.createDirectory(at: ag.appendingPathComponent(dir), withIntermediateDirectories: true)
+        }
+        for f in ["plugins/Foo.dll", "plugins/winefix.dll", "addons/bar/bar.lua", "addons/fps/fps.lua"] {
+            fm.createFile(atPath: ag.appendingPathComponent(f).path, contents: Data("addon.name = 'x';\n".utf8))
+        }
+        try? "[x] Failed to load plugin 'addons'; plugin is compiled with a different interface version.\n"
+            .write(to: ag.appendingPathComponent("logs/ashita.txt"), atomically: true, encoding: .utf8)
+        let scanned = AddonSuite.sheetContents(addonInstall, profile: "horizonxi.ini", policy: .unrestricted(reason: "local"))
+        checks.append(("Addons… scan, unrestricted: every plugin and addon (never winefix, never a folder without its .lua), none hidden",
+                       scanned.items.map { "\($0.isPlugin ? "p" : "a"):\($0.name)" } == ["p:Foo", "a:bar", "a:fps"]
+                           && scanned.hidden == 0))
+        let listed = AddonSuite.sheetContents(addonInstall, profile: "horizonxi.ini",
+                                              policy: .allowlist(["bar"], source: "test"))
+        checks.append(("Addons… scan, allowlist: only what it allows, the rest counted as hidden (fps is local-only)",
+                       listed.items.map(\.name) == ["bar"] && listed.hidden == 2))
+        checks.append(("Addons… scan, no published list: everything, none hidden",
+                       AddonSuite.sheetItems(scanned.items, policy: .unknown).items == scanned.items
+                           && AddonSuite.sheetItems(scanned.items, policy: .unknown).hidden == 0))
+        checks.append(("Addons… scan: the refused-plugin line comes with it, naming the Lua host",
+                       scanned.warning.contains("addons") && scanned.warning.contains("Lua host")
+                           && AddonSuite.mismatchWarning([]).isEmpty
+                           && !AddonSuite.mismatchWarning(["foo"]).contains("Lua host")))
+        // A scan's result fills the sheet only while it is still for what is selected: the local
+        // world and HorizonXI share a folder but not the profile or the list.
+        let allowBar = AddonPolicy.allowlist(["bar"], source: "test")
+        let scanKey = AddonSuite.SheetKey(addonInstall, profile: "horizonxi.ini", policy: allowBar)
+        var otherClient = addonInstall
+        otherClient.gameDirOverride = tmp.appendingPathComponent("other-client")
+        checks.append(("Addons… scan result: kept for the same world; dropped for another profile, list or folder",
+                       scanKey == AddonSuite.SheetKey(addonInstall, profile: "horizonxi.ini", policy: allowBar)
+                           && scanKey != AddonSuite.SheetKey(addonInstall, profile: "lsb.ini", policy: allowBar)
+                           && scanKey != AddonSuite.SheetKey(addonInstall, profile: "horizonxi.ini", policy: .unknown)
+                           && scanKey != AddonSuite.SheetKey(otherClient, profile: "horizonxi.ini", policy: allowBar)))
+
         // Quit question.
         checks.append(("quit alert names the work",
                        LauncherDelegate.quitQuestion("Updating Wine").message == "Quit while updating Wine?"
