@@ -1272,6 +1272,22 @@ final class Runner: ObservableObject {
             appendLine("==> local world: no graphics settings yet, seeding 640x480 "
                        + "(change them in Graphics; they will be kept)")
         }
+        // A size remembered on a bigger display, or by an older build, can be wider or taller than
+        // this screen. macOS then cuts the window down on that side only, and FFXI, which never
+        // resizes its back buffer, draws everything squeezed (2026-10-16: a 2074x784 profile on a
+        // 1440-point-wide screen). Scale both sides down together so the window opens whole and the
+        // picture keeps its shape. Only ever smaller; the profile is not touched when it fits.
+        if let g = GraphicsSettings.read(from: install, profile: profile),
+           let limit = WindowMemory.screenLimit(scale: WindowMemory.scale(for: install)) {
+            let fit = WindowMemory.fitted(.init(width: g.width, height: g.height), into: limit)
+            if fit.width != g.width || fit.height != g.height {
+                var n = g
+                n.width = fit.width
+                n.height = fit.height
+                n.write(to: install, profile: profile, only: n.sizeKeys)
+                logFileOnly("==> game window \(g.width)x\(g.height) does not fit this screen; opening at \(fit.width)x\(fit.height)")
+            }
+        }
         // Cutscene narration, if the user asked for it: install VanaVoice's addon and start the
         // narrator. Never fatal -- a failure here leaves the game exactly as silent as before.
         Narration.prepare(install, enabled: perf.narrateCutscenes, policy: addonPolicy,

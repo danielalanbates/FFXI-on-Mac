@@ -358,6 +358,33 @@ extension Headless {
         check("WindowMemory with nothing saved for the world: the profile gets the size, and no stored value is made from the fallback",
               rememberedFresh != nil && BootProfile.value("0001", section: "ffxi.registry", in: read(profileURL(wmFresh))) == "1600"
                 && G.stored(forWorld: "HorizonXI") == nil)
+        // The window macOS cut down on one side at creation (2026-10-16): the first sample is not
+        // the profile's size, so the delta would keep the wrong shape; the window's own size wins,
+        // even when it never changed while the game ran.
+        let wmCut = client("windowmemory-cut")
+        write(damaged, profileURL(wmCut))
+        let rememberedCut = WindowMemory.remember(first: .init(width: 1100, height: 720), last: .init(width: 1100, height: 720),
+                                                  install: wmCut, profile: "horizonxi.ini", world: "HorizonXI")
+        check("WindowMemory: a 1280 × 720 profile whose window opened at 1100 × 720 and stayed there is remembered as 1100 × 720",
+              rememberedCut != nil && BootProfile.value("0001", section: "ffxi.registry", in: read(profileURL(wmCut))) == "1100"
+                && BootProfile.value("0002", section: "ffxi.registry", in: read(profileURL(wmCut))) == "720")
+        let wmSame = client("windowmemory-same")
+        write(damaged, profileURL(wmSame))
+        check("WindowMemory: a window that opened at the profile's size (frame slack included) and never changed writes nothing",
+              WindowMemory.remember(first: .init(width: 1282, height: 716), last: .init(width: 1282, height: 716),
+                                    install: wmSame, profile: "horizonxi.ini", world: "HorizonXI") == nil
+                && read(profileURL(wmSame)) == damaged)
+        let squeezed = WindowMemory.fitted(.init(width: 2074, height: 784), into: .init(width: 1438, height: 848))
+        check("fitted: 2074 × 784 on a 1438 × 848 screen keeps its shape and fits (\(squeezed.width) × \(squeezed.height))",
+              squeezed.width <= 1438 && squeezed.height <= 848 && squeezed.width >= 1430
+                && abs(Double(squeezed.width) / Double(squeezed.height) - 2074.0 / 784.0) < 0.01
+                && squeezed.width % 2 == 0 && squeezed.height % 2 == 0)
+        let tall = WindowMemory.fitted(.init(width: 2560, height: 1440), into: .init(width: 1438, height: 848))
+        check("fitted: 2560 × 1440 is held by the width and stays 16:9 (\(tall.width) × \(tall.height))",
+              tall.width <= 1438 && tall.width >= 1430 && tall.height <= 848 && abs(Double(tall.width) / Double(tall.height) - 16.0 / 9.0) < 0.01)
+        check("fitted: a size that fits is left alone, and one that would go under 640 × 480 is not shrunk",
+              WindowMemory.fitted(.init(width: 1280, height: 720), into: .init(width: 1438, height: 848)) == .init(width: 1280, height: 720)
+                && WindowMemory.fitted(.init(width: 4000, height: 3000), into: .init(width: 600, height: 400)) == .init(width: 4000, height: 3000))
 
         // MARK: 5. Setup's fresh profile, and one that is already there
         guard let horizon = Server.all.first(where: { $0.name == "HorizonXI" }),

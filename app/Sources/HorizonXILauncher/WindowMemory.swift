@@ -64,19 +64,27 @@ enum WindowMemory {
     /// numbers plus the *delta* between the two samples is the new size. That sidesteps wine's
     /// window frame (a 1-point border either side of the content, on top of the title bar):
     /// subtracting a guessed frame drifted by a few pixels and re-wrote the profile every run.
+    ///
+    /// The delta only holds when the window first appeared at the profile's size. When it did
+    /// not, macOS had already shrunk it -- a window bigger than the screen is cut down on the
+    /// side that does not fit, and only that side -- and the profile plus the delta keeps a shape
+    /// the window never had (2026-10-16: a 2560x1440 profile on a 1440-point-wide screen was
+    /// remembered as 2074x784, and the next session drew every name about 30% too narrow).
+    /// The window's own last size is the truth then, even when it never changed.
     @discardableResult
     static func remember(first: Size, last: Size, install: Install, profile: String, world: String) -> String? {
-        guard first != last else { return nil }
         // The profile is the truth for sizes; the preference itself has no ini key and lives
         // only in the stored settings.
         let stored = GraphicsSettings.load(world: world)
         guard stored.rememberWindowSize else { return nil }
         var g = GraphicsSettings.read(from: install, profile: profile, fallback: stored) ?? stored
         g.rememberWindowSize = true
+        let openedAsAsked = opened(first, matches: Size(width: g.width, height: g.height))
+        guard first != last || !openedAsAsked else { return nil }
         // Even numbers only: the client rounds odd back buffers and the next sample would then
         // differ by a pixel forever.
-        let w = (g.width + last.width - first.width) & ~1
-        let h = (g.height + last.height - first.height) & ~1
+        let w = (openedAsAsked ? g.width + last.width - first.width : last.width) & ~1
+        let h = (openedAsAsked ? g.height + last.height - first.height : last.height) & ~1
         guard w >= 640, h >= 480, w != g.width || h != g.height else { return nil }
         let old = "\(g.width)x\(g.height)"
         g.width = w
@@ -94,5 +102,33 @@ enum WindowMemory {
             s.save(world: world)
         }
         return "==> window size remembered for \(world): \(w)x\(h) (was \(old)); next Play opens at that size"
+    }
+
+    /// Whether the first sample is the profile's size, give or take wine's frame (a point either
+    /// side, and a title bar that `currentSize` takes off by a guess).
+    static func opened(_ first: Size, matches profile: Size) -> Bool {
+        abs(first.width - profile.width) <= 8 && abs(first.height - profile.height) <= 8
+    }
+
+    /// The biggest client, in game pixels, that opens whole on the screen wine's Mac driver puts
+    /// it on (the one with the menu bar): that screen's visible frame, less wine's title bar and
+    /// frame. Nil without a screen.
+    @MainActor
+    static func screenLimit(scale: Int) -> Size? {
+        guard let screen = NSScreen.screens.first else { return nil }
+        let titleBar = Int(NSWindow.frameRect(forContentRect: .zero, styleMask: [.titled]).height.rounded())
+        let v = screen.visibleFrame
+        return Size(width: (Int(v.width) - 2) * scale, height: (Int(v.height) - titleBar - 2) * scale)
+    }
+
+    /// `size` scaled down, both sides by one factor, until it fits `limit`, so the picture keeps
+    /// its shape; even numbers. Unchanged when it already fits, or when fitting would go below
+    /// the client's 640x480 floor.
+    static func fitted(_ size: Size, into limit: Size) -> Size {
+        guard size.width > limit.width || size.height > limit.height,
+              size.width > 0, size.height > 0 else { return size }
+        let f = min(Double(limit.width) / Double(size.width), Double(limit.height) / Double(size.height))
+        let out = Size(width: Int(Double(size.width) * f) & ~1, height: Int(Double(size.height) * f) & ~1)
+        return out.width >= 640 && out.height >= 480 ? out : size
     }
 }
