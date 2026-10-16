@@ -27,6 +27,7 @@ ends) are in `archive/docs-2026-08/`.
 | Public release | v3.9 = 3.9 build 57 (tag at 90d77ba), Developer ID signed, **not notarized** |
 | Installed `/Applications` | 3.9 b58 = PR #36 `quiet-wine-update` |
 | Local beta | 3.9 b59, branch `beta-b59` on top of #36: not installed, not pushed |
+| Latest local beta | 3.9 b67, branch `beta-b67` on `beta-b66`: Setup carries the previous install's macros, equipment sets and addon settings into a new one ([`BETA-67.md`](BETA-67.md)); not installed, not pushed |
 | Version source | `app/VERSION` (`SHORT`, `BUILD`) |
 | GitHub | `danielalanbates/FFXI-on-Mac`. v3.9 clients still ask for `HorizonXI-on-Mac` and arrive by GitHub's rename redirect: never create a repo with the old name. The local `origin` URL still uses the old name. |
 | Working copy | `~/Downloads/hxi-work/HorizonXI-on-Mac`; siblings `vanaguide` (e2c1609) and `vanavoice` (29a8ec9) are bundled as they sit on disk (revisions recorded in Info.plist `HXIAddonRevisions`) |

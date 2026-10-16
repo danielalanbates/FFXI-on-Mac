@@ -21,7 +21,9 @@ in `archive/docs-2026-08/`.
 7. **Remaining A/Bs** from HANDOFF › Performance (`WINE_DISABLE_NX_COMPAT` is settled and on by
    default since b66; enforce-nx dll on top of it,
    `maxFrameLatency`, MVK concurrent compilation, Play-to-window time).
-8. **Public 3.10** when the gates in `RELEASE-WHEN-STABLE.md` pass, at most weekly:
+8. **b67 carry-over check** (`BETA-67.md` › Manual check): `--carryover-report` first, then a
+   Setup into an empty folder; the carry-over line in launcher.log and the macros in game.
+9. **Public 3.10** when the gates in `RELEASE-WHEN-STABLE.md` pass, at most weekly:
    `package.sh` → `publish-release.sh` (dry run, then `--yes` with Daniel's OK) → check
    `/releases/latest` → Daniel tests Restart with no game running.
 
