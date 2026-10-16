@@ -130,12 +130,42 @@ check "all 200 ran, in order" "$(lines cmd "$F1" | /usr/bin/tail -n +$((before +
 check "packed into 3 entries (89+89+22)" "$(lines raw "$F1" | /usr/bin/tail -3 | /usr/bin/awk -F';' '{printf "%d ", NF}')" "89 89 22 "
 before=$(lines raw "$F1" | /usr/bin/wc -l | /usr/bin/tr -d ' ')
 for bad in "/unload thirdparty" "/reload Thirdparty" "  //unload  ThirdParty.dll" "/unload addons" \
-           "/reload addons" "/unload" "/addon load clock;/unload thirdparty" $'/addon load clock\t'; do
+           "/reload addons" "/unload" "/addon load clock;/unload thirdparty" $'/addon load clock\t' \
+           "/unloadall" "/UnloadAll now" "/addon unloadall" "/addons  UnloadAll" "/addon exec clock print(1)" \
+           "/execstr /unload thirdparty" "/exec x.txt" "/alias /x /unload thirdparty" "/bind F1 /unloadall"; do
   send "$bad"; check "refused: '${bad//$'\t'/<tab>}' exit 1" "$RC" 1
+  check "  ...and said so with the ashita-send: marker" "$(/usr/bin/head -c 13 "$OUT/stderr.txt")" "ashita-send: "
 done
 send_stdin $'/addon load clock\n/unload thirdparty\n'
 check "a refused line in a batch refuses the whole batch: exit 1" "$RC" 1
 check "nothing reached the plugin from any refused send" "$(lines raw "$F1" | /usr/bin/wc -l | /usr/bin/tr -d ' ')" "$before"
+
+# A helper whose sync mode disagrees with the running wineserver: wine ends it before it runs.
+# The launcher must not read that as the helper's own "refused", and the client must not notice.
+export WINEMSYNC=0
+send "/addon load clock"
+export WINEMSYNC=1
+check "sync mode mismatch: not delivered (exit $RC)" "$(( RC != 0 ))" 1
+check "sync mode mismatch: no ashita-send: marker, so not a refusal" \
+  "$(/usr/bin/grep -c '^ashita-send: ' "$OUT/stderr.txt" | /usr/bin/tr -d ' ')" 0
+check "sync mode mismatch: nothing reached the plugin" "$(lines raw "$F1" | /usr/bin/wc -l | /usr/bin/tr -d ' ')" "$before"
+send "/addon load timers";                check "the plugin's process is undisturbed: the next send is delivered" "$RC" 0
+
+# Two senders at once (the launcher's Apply and a --send-ashita from Terminal): one lock between them.
+before=$(lines cmd "$F1" | /usr/bin/wc -l | /usr/bin/tr -d ' ')
+batch_a=""; batch_b=""
+for k in {1..40}; do batch_a+="$(printf '/addon load aaaa%03d' $k)"$'\n'; batch_b+="$(printf '/addon load bbbb%03d' $k)"$'\n'; done
+( print -rn -- "$batch_a" | "$WINE" "$HELPER" >/dev/null 2>&1; print -r -- $? > "$OUT/rc-a" ) &
+pa=$!
+( print -rn -- "$batch_b" | "$WINE" "$HELPER" >/dev/null 2>&1; print -r -- $? > "$OUT/rc-b" ) &
+pb=$!
+wait $pa $pb
+check "two senders at once: both delivered" "$(<"$OUT/rc-a")/$(<"$OUT/rc-b")" "0/0"
+got="$(lines cmd "$F1" | /usr/bin/tail -n +$((before + 1)))"
+check "two senders at once: all 80 commands ran, none twice" "$(print -r -- "$got" | /usr/bin/sort -u | /usr/bin/wc -l | /usr/bin/tr -d ' ')/$(print -r -- "$got" | /usr/bin/wc -l | /usr/bin/tr -d ' ')" "80/80"
+check "two senders at once: each batch whole and in order" \
+  "$(print -r -- "$got" | /usr/bin/grep aaaa | /sbin/md5 -q)/$(print -r -- "$got" | /usr/bin/grep bbbb | /sbin/md5 -q)" \
+  "$(print -rn -- "$batch_a" | /sbin/md5 -q)/$(print -rn -- "$batch_b" | /sbin/md5 -q)"
 
 echo "-- two plugins"
 F2="$OUT/second.txt"

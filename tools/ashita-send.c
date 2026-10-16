@@ -16,7 +16,10 @@
  * Exit status:
  *   0  delivered: the plugin ran every command (its handled_ flag came back)
  *   1  bad input: no command, a command that is too long, has a ';' or a control character,
- *      or is one this helper never sends (below); nothing was written
+ *      or is one this helper never sends (below); nothing was written. Every such exit prints a
+ *      line starting "ashita-send: " to stderr, so a caller can tell it from wine's own exit 1
+ *      (a WINEMSYNC/WINEESYNC that disagrees with the running wineserver ends wine that way
+ *      before this program runs)
  *   2  no client: no process in this wineserver has the plugin's keyboard block
  *   3  ambiguous: more than one client has it and no --pid was given; nothing was written
  *   4  busy: the block did not come free within --busy-ms (3000); nothing was written
@@ -34,16 +37,21 @@
  *   - a type-3 entry is command text: split on ';', each part stripped of leading '/' then ' ',
  *     given one '/', and passed to ChatManager::ParseCommand -- the same path as typed input.
  * The sender's side: wait for handled_ == 1, fill the entries, set num_commands_, barrier, set
- * handled_ = 0, wait for handled_ == 1. There is no lock; one writer at a time.
+ * handled_ = 0, wait for handled_ == 1. The plugin has no lock, so senders take one of their own
+ * (the named mutex "ashita-send-<pid>", held from the busy wait to the publish): the launcher's
+ * Apply and a --send-ashita from Terminal can never fill the block together.
  *
  * Only type 3 is ever written. The key types (1, 2, 1000) would be input automation; they are
  * not implemented here at all.
  *
  * Never sent, whatever the caller asks:
- *   /unload thirdparty, /reload thirdparty -- the plugin would free itself from inside the very
- *       callback that is running the command;
- *   /unload addons, /reload addons -- that ends every Lua addon at once;
- *   /unload or /reload with no name.
+ *   /unload thirdparty, /reload thirdparty, /unloadall -- the plugin would free itself from
+ *       inside the very callback that is running the command (/unloadall is Ashita's own
+ *       "unload every plugin", read from the client's Ashita.dll);
+ *   /unload addons, /reload addons, /addon unloadall -- that ends every Lua addon at once;
+ *   /unload or /reload with no name;
+ *   /exec, /execstr, /alias, /bind and /addon exec -- they run commands or Lua this helper
+ *       cannot see, so they would get round every rule above.
  *
  * Imports KERNEL32 and the C runtime only: no user32, so wine needs no desktop or explorer for it,
  * and it never touches a window, the keyboard or the game's memory. Finding the client is
@@ -187,6 +195,13 @@ static const char *refusal(const char *cmd)
         if (!strcmp(target, "thirdparty")) return "the plugin would free itself mid-command";
         if (!strcmp(target, "addons")) return "that ends every Lua addon";
     }
+    if (!strcmp(verb, "unloadall")) return "unloads every plugin, this one among them, mid-command";
+    if (!strcmp(verb, "addon") || !strcmp(verb, "addons")) {
+        if (!strcmp(target, "unloadall")) return "that ends every Lua addon";
+        if (!strcmp(target, "exec")) return "runs Lua this helper cannot check";
+    }
+    if (!strcmp(verb, "exec") || !strcmp(verb, "execstr") || !strcmp(verb, "alias") || !strcmp(verb, "bind"))
+        return "runs commands this helper cannot check";
     return NULL;
 }
 
@@ -204,9 +219,35 @@ static char *dup_trimmed(const char *s)
 
 static int usage(void)
 {
-    fprintf(stderr, "usage: ashita-send [--pid N] [--busy-ms N] [--wait-ms N] [--list] [\"/command\" ...]\n"
+    fprintf(stderr, "ashita-send: usage: ashita-send [--pid N] [--busy-ms N] [--wait-ms N] [--list] [\"/command\" ...]\n"
                     "       with no command arguments, one command per line on stdin\n");
     return BAD_INPUT;
+}
+
+/* The block is free for this sender: held from the busy wait to the publish. NULL when wine could
+ * not make the mutex; the send then goes ahead as it did before there was one. */
+static HANDLE take_lock(DWORD pid, DWORD ms, int *busy)
+{
+    char name[64];
+    HANDLE lock;
+    DWORD w;
+    *busy = 0;
+    _snprintf(name, sizeof name, "ashita-send-%lu", (unsigned long)pid);
+    name[sizeof name - 1] = 0;
+    lock = CreateMutexA(NULL, FALSE, name);
+    if (!lock) return NULL;
+    w = WaitForSingleObject(lock, ms);
+    if (w == WAIT_OBJECT_0 || w == WAIT_ABANDONED) return lock;
+    CloseHandle(lock);
+    *busy = 1;
+    return NULL;
+}
+
+static void drop_lock(HANDLE lock)
+{
+    if (!lock) return;
+    ReleaseMutex(lock);
+    CloseHandle(lock);
 }
 
 int main(int argc, char **argv)
@@ -218,7 +259,7 @@ int main(int argc, char **argv)
     int entry_of[MAX_CMDS];
     int nentries = 0;
     size_t used = 0;
-    HANDLE h;
+    HANDLE h, lock;
     tp_map_t *m;
     MEMORY_BASIC_INFORMATION mbi;
 
@@ -237,7 +278,7 @@ int main(int argc, char **argv)
 
     for (; i < argc; i++) {
         from_stdin = 0;
-        if (ncmds >= MAX_CMDS) { fprintf(stderr, "more than %d commands\n", MAX_CMDS); return BAD_INPUT; }
+        if (ncmds >= MAX_CMDS) { fprintf(stderr, "ashita-send: more than %d commands\n", MAX_CMDS); return BAD_INPUT; }
         if (!(cmds[ncmds++] = dup_trimmed(argv[i]))) return BAD_INPUT;
     }
     if (from_stdin && !list) {
@@ -245,10 +286,10 @@ int main(int argc, char **argv)
         while (fgets(line, sizeof line, stdin)) {
             size_t n = strlen(line);
             if (n == sizeof line - 1 && line[n - 1] != '\n') {
-                fprintf(stderr, "a line is longer than %d bytes\n", TEXT_MAX);
+                fprintf(stderr, "ashita-send: a line is longer than %d bytes\n", TEXT_MAX);
                 return BAD_INPUT;
             }
-            if (ncmds >= MAX_CMDS) { fprintf(stderr, "more than %d commands\n", MAX_CMDS); return BAD_INPUT; }
+            if (ncmds >= MAX_CMDS) { fprintf(stderr, "ashita-send: more than %d commands\n", MAX_CMDS); return BAD_INPUT; }
             if (!(cmds[ncmds] = dup_trimmed(line))) return BAD_INPUT;
             if (!cmds[ncmds][0]) { free(cmds[ncmds]); continue; }
             ncmds++;
@@ -259,14 +300,14 @@ int main(int argc, char **argv)
     /* Every command is checked before anything is written: all or nothing. */
     for (k = 0; k < ncmds; k++) {
         const char *why = refusal(cmds[k]);
-        if (why) { fprintf(stderr, "refused \"%s\": %s\n", cmds[k], why); return BAD_INPUT; }
+        if (why) { fprintf(stderr, "ashita-send: refused \"%s\": %s\n", cmds[k], why); return BAD_INPUT; }
     }
 
     /* Pack: as many ';'-joined commands per entry as fit, at most 32 entries, one batch. */
     for (k = 0; k < ncmds; k++) {
         size_t n = strlen(cmds[k]);
         if (nentries == 0 || used + 1 + n > TEXT_MAX) {
-            if (++nentries > MAX_ENTRIES) { fprintf(stderr, "too many commands for one batch\n"); return BAD_INPUT; }
+            if (++nentries > MAX_ENTRIES) { fprintf(stderr, "ashita-send: too many commands for one batch\n"); return BAD_INPUT; }
             used = n;
         } else {
             used += 1 + n;
@@ -306,10 +347,17 @@ int main(int argc, char **argv)
         return NO_CLIENT;
     }
 
-    if (!wait_handled(m, busy_ms)) {
-        fprintf(stderr, "the plugin did not free its block within %lu ms\n", (unsigned long)busy_ms);
-        UnmapViewOfFile(m); CloseHandle(h);
-        return BUSY;
+    {
+        /* Another sender first (its lock), then the plugin (handled_), within busy_ms in all. */
+        DWORD t0 = GetTickCount(), spent;
+        int locked_out;
+        lock = take_lock(pid, busy_ms, &locked_out);
+        spent = GetTickCount() - t0;
+        if (locked_out || !wait_handled(m, spent >= busy_ms ? 0 : busy_ms - spent)) {
+            fprintf(stderr, "the plugin did not free its block within %lu ms\n", (unsigned long)busy_ms);
+            drop_lock(lock); UnmapViewOfFile(m); CloseHandle(h);
+            return BUSY;
+        }
     }
 
     /* handled_ == 1: the plugin does not touch the block until it reads 0. Fill, count, publish. */
@@ -327,6 +375,8 @@ int main(int argc, char **argv)
     MemoryBarrier();
     m->handled_ = 0;
     MemoryBarrier();
+    /* Published: the next sender now waits on handled_, not on this one. */
+    drop_lock(lock);
 
     k = wait_handled(m, wait_ms);
     UnmapViewOfFile(m);
