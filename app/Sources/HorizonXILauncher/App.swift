@@ -2648,11 +2648,17 @@ struct ContentView: View {
             return (Install.dedupe([c] + found, keep: c.id), choice)
         }.value
         scanning = false
-        installs = list
-        selected = choice.install
-        if case .adopted(let i) = choice {
-            i.remember()
-            runner.logFileOnly("==> install in use: \(i.wrapper.path) [\(i.prefixName)]")
+        if let s = selected, s.id != keep {
+            // Setup, Move… or the folder button chose an install while the scan ran: it is
+            // `install.last` now, and stands over what the scan decided before that.
+            installs = [s] + list.filter { $0.id != s.id }
+        } else {
+            installs = list
+            selected = choice.install
+            if case .adopted(let i) = choice {
+                i.remember()
+                runner.logFileOnly("==> install in use: \(i.wrapper.path) [\(i.prefixName)]")
+            }
         }
         // The launcher's copy of DXVK's state cache starts from every cache the installs it knows
         // already hold (once; see DXVKStateCache.seedIfNeeded). Read-only on the installs.
