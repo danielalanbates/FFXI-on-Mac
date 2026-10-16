@@ -34,6 +34,7 @@ struct PerfSettings: Codable {
     /// `gamewindow.dylib` (see `window/gamewindow.c` and `GameWindow`) is inserted into wine and
     /// sets the window's content aspect ratio to the size the client was started at, so AppKit keeps
     /// every drag in proportion. Harmless if it fails: the window resizes freely, as before.
+    /// The same dylib keeps the window's title "FFXI on Mac" (b69), so this one setting covers both.
     var keepWindowShape = true
     /// FFXI limits itself to 60/n fps, n=2 by default (30 fps) -- but under wine the limiter
     /// overshoots and the client spends more than the 33.3ms budget per frame even while only
@@ -228,8 +229,9 @@ struct PerfSettings: Codable {
         if followSoundOutput, let dylib = AudioFollow.dylib() {
             InsertedLibrary.insert(dylib.path, into: &env)
         }
-        // The game window keeps its shape when resized (b69): gamewindow.dylib, same rules, and
-        // the ratio the client is started at. Joined to audiofollow's with ':' when both are on.
+        // The game window keeps its shape when resized and its title "FFXI on Mac" (b69):
+        // gamewindow.dylib, same rules, the ratio the client is started at and the title. Joined
+        // to audiofollow's with ':' when both are on.
         if keepWindowShape {
             GameWindow.apply(to: &env, dylib: GameWindow.dylib(), size: gameSize)
         }

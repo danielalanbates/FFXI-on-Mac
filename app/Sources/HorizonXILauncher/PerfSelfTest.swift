@@ -178,6 +178,8 @@ extension Headless {
         GameWindow.apply(to: &gwEnv, dylib: fakeWindow, size: nil)
         checks.append(("window shape: launch size unknown => dylib inserted alone, no ratio",
                        gwEnv[InsertedLibrary.key] == fakeWindow.path && gwEnv[gw] == nil))
+        checks.append(("window title: HXI_WINDOW_TITLE=FFXI on Mac wherever the dylib goes, ratio or not",
+                       gwEnv[GameWindow.titleKey] == "FFXI on Mac"))
         checks.append(("window shape: the ratio is refused exactly where the dylib refuses it",
                        GameWindow.aspect(.init(width: 640, height: 480)) == "640x480"
                            && GameWindow.aspect(.init(width: 2074, height: 784)) == "2074x784"
@@ -206,8 +208,9 @@ extension Headless {
         let size1440 = GameWindow.launchSize(gwInstall, profile: "both.ini")
         try? fm.removeItem(at: gwRoot)
         let offEnv = off.environment(for: install, gameSize: size1440)
-        checks.append(("window shape off: no gamewindow.dylib and no HXI_GAME_ASPECT",
-                       offEnv[gw] == nil && !(offEnv[InsertedLibrary.key] ?? "").contains("gamewindow")))
+        checks.append(("window shape off: no gamewindow.dylib, no HXI_GAME_ASPECT, no HXI_WINDOW_TITLE",
+                       offEnv[gw] == nil && offEnv[GameWindow.titleKey] == nil
+                           && !(offEnv[InsertedLibrary.key] ?? "").contains("gamewindow")))
         var bothOn = PerfSettings()
         bothOn.followSoundOutput = true
         let onEnv = bothOn.environment(for: install, gameSize: size1440)
@@ -216,6 +219,8 @@ extension Headless {
             let expected = [AudioFollow.dylib()?.path, dylib.path].compactMap { $0 }
             checks.append(("window shape on: gamewindow.dylib (x86_64 slice) and HXI_GAME_ASPECT=2560x1440 in the game's environment",
                            list.contains(dylib.path) && onEnv[gw] == "2560x1440"))
+            checks.append(("window shape on: HXI_WINDOW_TITLE=FFXI on Mac in the game's environment",
+                           onEnv[GameWindow.titleKey] == "FFXI on Mac"))
             checks.append(("window shape on: DYLD_INSERT_LIBRARIES is audiofollow:gamewindow when both are on",
                            list == expected))
         } else {
@@ -225,8 +230,15 @@ extension Headless {
         noAspect.extraEnv = "\(gw)="
         checks.append(("window shape: HXI_GAME_ASPECT= in extra environment removes the ratio",
                        noAspect.environment(for: install, gameSize: size1440)[gw] == nil))
-        checks.append(("last-spawn.txt records HXI_GAME_ASPECT and DYLD_INSERT_LIBRARIES",
-                       Runner.spawnDiagnosticKeys.isSuperset(of: [gw, InsertedLibrary.key])))
+        if GameWindow.dylib() != nil {
+            var noTitle = PerfSettings()
+            noTitle.extraEnv = "\(GameWindow.titleKey)="
+            let e = noTitle.environment(for: install, gameSize: size1440)
+            checks.append(("window title: HXI_WINDOW_TITLE= in extra environment removes the title only",
+                           e[GameWindow.titleKey] == nil && e[gw] == "2560x1440"))
+        }
+        checks.append(("last-spawn.txt records HXI_GAME_ASPECT, HXI_WINDOW_TITLE and DYLD_INSERT_LIBRARIES",
+                       Runner.spawnDiagnosticKeys.isSuperset(of: [gw, GameWindow.titleKey, InsertedLibrary.key])))
         let notMachO = fm.temporaryDirectory.appendingPathComponent("hxi-perf-notmacho-\(UUID().uuidString).dylib")
         try? Data("not a Mach-O file at all".utf8).write(to: notMachO)
         checks.append(("a file without an x86_64 Mach-O slice is never inserted",

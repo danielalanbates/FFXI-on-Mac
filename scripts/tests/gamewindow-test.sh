@@ -4,9 +4,10 @@
 # front), and exits by itself.
 #
 #   ./gamewindow-test.sh     window tests (arm64, then x86_64 under Rosetta) including AppKit's own
-#                            drag computation on a locked window, a process with no AppKit, and the
-#                            DYLD_INSERT_LIBRARIES carry across the x87 sidecar, with the sidecar's
-#                            real cooperative handshake and x87 hook
+#                            drag computation on a locked window, the game window's title
+#                            (HXI_WINDOW_TITLE) on wine's classes and Window menu, a process with no
+#                            AppKit, and the DYLD_INSERT_LIBRARIES carry across the x87 sidecar, with
+#                            the sidecar's real cooperative handshake and x87 hook
 #
 # Run it only when no game is running: the carry test starts a renamed copy of the x87 sidecar,
 # which attaches to the test's own probe and nothing else, but it is the same JIT the game uses.
@@ -59,6 +60,37 @@ for arch in arm64 x86_64; do
     if [[ $rc == 0 ]]; then pass "HXI_GAME_ASPECT='$v' is ignored ($arch)"
     else print -r -- "$out"; bad "HXI_GAME_ASPECT='$v' is ignored ($arch)"; fi
   done
+
+  # The title. First seen through each notification wine's game window can post; with the ratio
+  # too on the key one (both at once), the title alone on the others.
+  for first in key main shown; do
+    print "== title test, $arch, first seen on '$first', HXI_WINDOW_TITLE='FFXI on Mac'"
+    if [[ $first == key ]]; then
+      out=$( ( DYLD_INSERT_LIBRARIES="$DYLIB" HXI_GAME_ASPECT=1920x1080 HXI_WINDOW_TITLE="FFXI on Mac" \
+               FFXI_GAMEWINDOW_DEBUG=1 "$T/wt-$arch" title $first expect ) 2>&1 ); rc=$?
+    else
+      out=$( ( unset HXI_GAME_ASPECT; DYLD_INSERT_LIBRARIES="$DYLIB" HXI_WINDOW_TITLE="FFXI on Mac" \
+               FFXI_GAMEWINDOW_DEBUG=1 "$T/wt-$arch" title $first expect ) 2>&1 ); rc=$?
+    fi
+    print -r -- "$out"
+    if [[ $rc == 0 && "$out" == *"$first: window "*" now reads \"FFXI on Mac\""* ]]; then
+      pass "the game window reads 'FFXI on Mac' from its first '$first' on; other windows keep theirs ($arch)"
+    else
+      bad "the game window reads 'FFXI on Mac' from its first '$first' on; other windows keep theirs ($arch)"
+    fi
+  done
+  print "== title test, $arch, no HXI_WINDOW_TITLE (ratio set, so the dylib is watching)"
+  if ( unset HXI_WINDOW_TITLE; DYLD_INSERT_LIBRARIES="$DYLIB" HXI_GAME_ASPECT=1920x1080 "$T/wt-$arch" title key none ); then
+    pass "no HXI_WINDOW_TITLE: no title changes, nothing overridden ($arch)"
+  else
+    bad "no HXI_WINDOW_TITLE: no title changes, nothing overridden ($arch)"
+  fi
+  long=$(printf 'x%.0s' {1..256})
+  for v in "" "$long" $'\xff\xfe'; do
+    out=$( ( unset HXI_GAME_ASPECT; DYLD_INSERT_LIBRARIES="$DYLIB" HXI_WINDOW_TITLE="$v" "$T/wt-$arch" title shown none ) 2>&1 ); rc=$?
+    if [[ $rc == 0 ]]; then pass "HXI_WINDOW_TITLE of ${#v} bytes (empty, over 255, not UTF-8) is ignored ($arch)"
+    else print -r -- "$out"; bad "HXI_WINDOW_TITLE of ${#v} bytes (empty, over 255, not UTF-8) is ignored ($arch)"; fi
+  done
 done
 
 # --- Processes with no AppKit at all -------------------------------------------------------------
@@ -80,12 +112,12 @@ int main(void) {
   return 0;
 }
 PLAIN
-plain_case() {  # plain_case <label> <binary> <expected substring> <ratio, or - for none>
+plain_case() {  # plain_case <label> <binary> <expected substring> <ratio, or - for none> [title]
   local out rc
   if [[ "$4" == "-" ]]; then
-    out=$( ( unset HXI_GAME_ASPECT; DYLD_INSERT_LIBRARIES="$DYLIB" FFXI_GAMEWINDOW_DEBUG=1 "$2" ) 2>&1 ); rc=$?
+    out=$( ( unset HXI_GAME_ASPECT; DYLD_INSERT_LIBRARIES="$DYLIB" HXI_WINDOW_TITLE="${5:-}" FFXI_GAMEWINDOW_DEBUG=1 "$2" ) 2>&1 ); rc=$?
   else
-    out=$(DYLD_INSERT_LIBRARIES="$DYLIB" HXI_GAME_ASPECT="$4" FFXI_GAMEWINDOW_DEBUG=1 "$2" 2>&1); rc=$?
+    out=$( ( unset HXI_WINDOW_TITLE; DYLD_INSERT_LIBRARIES="$DYLIB" HXI_GAME_ASPECT="$4" FFXI_GAMEWINDOW_DEBUG=1 "$2" ) 2>&1 ); rc=$?
   fi
   print -r -- "$out"
   if [[ $rc == 0 && "$out" == *"gamewindow: loaded"* && "$out" == *"$3"* ]]; then pass "$1"; else bad "$1"; fi
@@ -99,6 +131,10 @@ for arch in arm64 x86_64; do
              "$T/$arch/wineserver" "appkit=0 corefoundation=0 foundation=0" 1920x1080
   plain_case "any other process with a ratio: CoreFoundation opened, never AppKit, exits 0 ($arch)" \
              "$T/plain-$arch" "appkit=0 corefoundation=1" 1920x1080
+  plain_case "named wineserver, title set: no CoreFoundation, Foundation or AppKit, exits 0 ($arch)" \
+             "$T/$arch/wineserver" "appkit=0 corefoundation=0 foundation=0" - "FFXI on Mac"
+  plain_case "any other process with only a title: CoreFoundation opened, never AppKit, exits 0 ($arch)" \
+             "$T/plain-$arch" "appkit=0 corefoundation=1" - "FFXI on Mac"
 done
 
 # --- The carry across the x87 sidecar ----------------------------------------------------------

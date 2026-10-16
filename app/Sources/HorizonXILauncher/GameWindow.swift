@@ -12,12 +12,18 @@ import Foundation
 /// the Play-time fit (`Runner.launch`), so it is exactly what the client is started with. With
 /// that and the fit, the size `WindowMemory` remembers keeps the same shape too.
 ///
+/// The same dylib keeps the window's title "FFXI on Mac" (`HXI_WINDOW_TITLE`): Ashita retitles the
+/// game window with the character's name at login, and wine shows whatever the game sets.
+///
 /// The dylib also carries `DYLD_INSERT_LIBRARIES` across the x87 sidecar's exec, which strips it
 /// (hardened runtime); without that no inserted library reaches an accelerated client. See the
 /// header of `window/gamewindow.c` and `docs/BETA-69.md`.
 enum GameWindow {
     /// The variable the dylib reads: "<width>x<height>".
     static let aspectKey = "HXI_GAME_ASPECT"
+    /// The variable the dylib reads for the game window's title, and the title.
+    static let titleKey = "HXI_WINDOW_TITLE"
+    static let title = "FFXI on Mac"
 
     /// The bundled dylib, or the repo's build of it under `swift run`; nil unless it exists and
     /// has the x86_64 slice wine runs as (see `InsertedLibrary.bundled`).
@@ -43,11 +49,13 @@ enum GameWindow {
         return .init(width: g.width, height: g.height)
     }
 
-    /// Insert the dylib into `env` and, when the launch size is known and acceptable, name the
-    /// ratio. No dylib (missing, or no x86_64 slice): `env` is left exactly as it was.
+    /// Insert the dylib into `env` with the game window's title and, when the launch size is known
+    /// and acceptable, the ratio. No dylib (missing, or no x86_64 slice): `env` is left exactly as
+    /// it was.
     static func apply(to env: inout [String: String], dylib: URL?, size: WindowMemory.Size?) {
         guard let dylib else { return }
         InsertedLibrary.insert(dylib.path, into: &env)
+        env[titleKey] = title
         if let size, let value = aspect(size) { env[aspectKey] = value }
     }
 }

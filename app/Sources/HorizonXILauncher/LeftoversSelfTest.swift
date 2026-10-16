@@ -157,6 +157,11 @@ extension Headless {
         let carriedEnv = "/Applications/FFXI-on-Mac.app/Contents/Resources/x87sidecar-coop --cooperative /bin/sh -c export DYLD_INSERT_LIBRARIES=\"$HXI_DYLD_INSERT_LIBRARIES\"; exec \"$@\" hxi-carry /x/wine .\\\\bootloader\\\\horizon-loader.exe --server play.horizonxi.com --user u --pass p HOME=/Users/x HXI_DYLD_INSERT_LIBRARIES=/A b/gamewindow.dylib HXI_GAME_ASPECT=1920x1080 WINEPREFIX=\(prefix) WINEESYNC=0 WINEMSYNC=1"
         checks.append(("WINEPREFIX is read the same from a sidecar started through the carry's /bin/sh step",
                        Leftovers.envValue("WINEPREFIX", in: carriedEnv) == prefix))
+        // b69 also sets HXI_WINDOW_TITLE, a value with spaces, next to it.
+        let titledEnv = carriedEnv.replacingOccurrences(of: " WINEPREFIX=", with: " HXI_WINDOW_TITLE=FFXI on Mac WINEPREFIX=")
+        checks.append(("WINEPREFIX and HXI_WINDOW_TITLE are read whole when the title (with spaces) comes first",
+                       Leftovers.envValue("WINEPREFIX", in: titledEnv) == prefix
+                           && Leftovers.envValue("HXI_WINDOW_TITLE", in: titledEnv) == "FFXI on Mac"))
         checks.append(("the wineserver socket folder is named as wine names it",
                        Leftovers.serverDir(dev: 0x1000016, ino: 0xd7c73b, uid: 501) == "/tmp/.wine-501/server-1000016-d7c73b"))
 

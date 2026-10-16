@@ -4,11 +4,17 @@
 //
 //   gamewindow-test lock   expects game-sized windows locked to HXI_GAME_ASPECT
 //   gamewindow-test none   expects nothing locked (no or invalid HXI_GAME_ASPECT)
+//   gamewindow-test title <key|main|shown> <expect|none>
+//                          wine's window title path (WineWindow, WineApplication, the Window menu):
+//                          with `expect`, a game window first seen through that notification and
+//                          every later title wine gives it read HXI_WINDOW_TITLE, other windows
+//                          keep theirs; with `none`, nothing changes at all
 //
 // Nothing is ever ordered front and the app may never activate (activation policy Prohibited),
 // so it is safe to run while somebody is using the Mac. Build/run: scripts/tests/gamewindow-test.sh
 #import <AppKit/AppKit.h>
 #import <objc/message.h>
+#import <objc/runtime.h>
 #include <mach-o/dyld.h>
 #include <math.h>
 #include <string.h>
@@ -86,8 +92,195 @@ static void probe_callback(CFNotificationCenterRef c, void *observer, CFNotifica
     if (delivered_ptr) (*delivered_ptr)++;
 }
 
+// KVO on a window's title (AppKit and accessibility observe windows this way): the window's
+// class is then a runtime subclass of WineWindow, which must still get the game's title.
+@interface TitleWatcher : NSObject
+@property int changes;
+@end
+@implementation TitleWatcher
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change
+                       context:(void *)context {
+    (void)keyPath; (void)object; (void)change; (void)context;
+    self.changes++;
+}
+@end
+
+static BOOL titled(NSWindow *w, NSString *t) { return [w.title isEqualToString:t]; }
+
+/// The Window menu item of `w`, or nil.
+static NSString *menu_title(NSWindow *w) {
+    for (NSMenuItem *item in NSApp.windowsMenu.itemArray)
+        if (item.target == w) return item.title;
+    return nil;
+}
+
+/// wine's title path, as winemac.drv runs it (cocoa_window.m, macdrv_set_cocoa_window_title):
+/// [window setTitle:], then, for a window that is ordered in (here: has a Window menu item),
+/// [NSApp changeWindowsItem:title:filename:NO].
+static void wine_set_title(NSWindow *w, NSString *t) {
+    [w setTitle:t];
+    if (menu_title(w)) [NSApp changeWindowsItem:w title:t filename:NO];
+}
+
+/// What wine does when it orders a window in (cocoa_window.m): [NSApp addWindowsItem:self
+/// title:[self title] filename:NO]. The window itself is never ordered in here.
+static void wine_order_in(NSWindow *w) {
+    [NSApp addWindowsItem:w title:w.title filename:NO];
+}
+
+static int title_main(const char *first, BOOL expect) {
+    NSString *want = expect ? [NSString stringWithUTF8String:getenv("HXI_WINDOW_TITLE") ?: ""] : nil;
+    if (expect && want.length == 0) { printf("FAIL  expect mode needs HXI_WINDOW_TITLE\n"); return 2; }
+    NSString *firstName = strcmp(first, "main") == 0 ? NSWindowDidBecomeMainNotification
+                        : strcmp(first, "shown") == 0 ? NSWindowDidChangeOcclusionStateNotification
+                        : NSWindowDidBecomeKeyNotification;
+    double W = 0, H = 0;
+    const char *aspectEnv = getenv("HXI_GAME_ASPECT");
+    BOOL aspect = aspectEnv && sscanf(aspectEnv, "%lfx%lf", &W, &H) == 2;
+
+    // wine's classes, made at run time under wine's names: WineApplication : NSApplication (it
+    // does not implement changeWindowsItem:title:filename:) and WineWindow : NSPanel.
+    Class wineApp = objc_allocateClassPair([NSApplication class], "WineApplication", 0);
+    objc_registerClassPair(wineApp);
+    Class wineWindow = objc_allocateClassPair([NSPanel class], "WineWindow", 0);
+    objc_registerClassPair(wineWindow);
+    [wineApp sharedApplication];
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
+    check("NSApp is a WineApplication", [NSApp class] == wineApp);
+    check("gamewindow.dylib is loaded in this process", dylib_loaded());
+    // The Window menu, as wine builds it (cocoa_app.m transformProcessToForeground). Never shown.
+    NSMenu *mainMenu = [[NSMenu alloc] initWithTitle:@""];
+    NSMenu *windowMenu = [[NSMenu alloc] initWithTitle:@"Window"];
+    [mainMenu addItemWithTitle:@"Window" action:nil keyEquivalent:@""].submenu = windowMenu;
+    NSApp.mainMenu = mainMenu;
+    NSApp.windowsMenu = windowMenu;
+
+    SEL setTitle = @selector(setTitle:), change = @selector(changeWindowsItem:title:filename:);
+    IMP wineBefore = class_getMethodImplementation(wineWindow, setTitle);
+    IMP windowBefore = class_getMethodImplementation([NSWindow class], setTitle);
+    IMP panelBefore = class_getMethodImplementation([NSPanel class], setTitle);
+    IMP appBefore = class_getMethodImplementation(wineApp, change);
+    IMP nsappBefore = class_getMethodImplementation([NSApplication class], change);
+
+    const NSWindowStyleMask gameMask = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+                                     | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable;
+    // The game window as wine makes it: titled from the Windows title, added to the Window menu
+    // when ordered in (never ordered in here).
+    NSWindow *game = make(wineWindow, gameMask, 960, 540);
+    wine_set_title(game, @"FINAL FANTASY XI");
+    wine_order_in(game);
+    // Windows that must keep their own titles: a message box (wine's too, not resizable), a
+    // titled resizable window that is not wine's, and a resizable wine window under 320x240 points.
+    NSWindow *dialog = make(wineWindow, NSWindowStyleMaskTitled | NSWindowStyleMaskClosable, 400, 300);
+    wine_set_title(dialog, @"Error");
+    wine_order_in(dialog);
+    NSWindow *plain = make([NSWindow class], gameMask, 960, 540);
+    wine_set_title(plain, @"Launcher");
+    wine_order_in(plain);
+    NSWindow *small = make(wineWindow, gameMask, 200, 150);
+    wine_set_title(small, @"Small");
+    wine_order_in(small);
+    check("before any window notification nothing is overridden or retitled",
+          titled(game, @"FINAL FANTASY XI") && [menu_title(game) isEqualToString:@"FINAL FANTASY XI"]
+          && class_getMethodImplementation(wineWindow, setTitle) == wineBefore
+          && class_getMethodImplementation(wineApp, change) == appBefore);
+
+    post(firstName, dialog);
+    post(firstName, plain);
+    post(firstName, small);
+    post(firstName, @"not a window");
+    post(firstName, nil);
+    check("a message box, a window that is not wine's, a small window and non-windows install nothing",
+          class_getMethodImplementation(wineWindow, setTitle) == wineBefore
+          && class_getMethodImplementation(wineApp, change) == appBefore
+          && titled(dialog, @"Error") && titled(plain, @"Launcher") && titled(small, @"Small"));
+
+    // First sighting of the game window, after the game already titled it.
+    NSSize ratioBefore = game.contentAspectRatio;
+    post(firstName, game);
+    if (expect) {
+        check("first sighting: the game window's title is HXI_WINDOW_TITLE at once", titled(game, want));
+        check("first sighting: its Window menu item says the same",
+              [menu_title(game) isEqualToString:want]);
+        check("-setTitle: is overridden on WineWindow only (NSPanel, NSWindow untouched)",
+              class_getMethodImplementation(wineWindow, setTitle) != wineBefore
+              && class_getMethodImplementation([NSWindow class], setTitle) == windowBefore
+              && class_getMethodImplementation([NSPanel class], setTitle) == panelBefore);
+        check("-changeWindowsItem:title:filename: is overridden on WineApplication only",
+              class_getMethodImplementation(wineApp, change) != appBefore
+              && class_getMethodImplementation([NSApplication class], change) == nsappBefore);
+    } else {
+        check("without HXI_WINDOW_TITLE the game window keeps the game's title",
+              titled(game, @"FINAL FANTASY XI") && [menu_title(game) isEqualToString:@"FINAL FANTASY XI"]);
+        check("without HXI_WINDOW_TITLE nothing is overridden",
+              class_getMethodImplementation(wineWindow, setTitle) == wineBefore
+              && class_getMethodImplementation(wineApp, change) == appBefore);
+    }
+    // The ratio is still only the key notification's business.
+    BOOL lockedNow = aspect && strcmp(first, "key") == 0;
+    check(lockedNow ? "becoming key still locks the ratio alongside the title"
+                    : "this notification does not touch the ratio",
+          same(game.contentAspectRatio, lockedNow ? NSMakeSize(W, H) : ratioBefore));
+
+    // Ashita at login: SetWindowText(character name), which wine copies to the title and the menu.
+    wine_set_title(game, @"Murn");
+    check(expect ? "the character's name at login becomes HXI_WINDOW_TITLE (title and Window menu)"
+                 : "without HXI_WINDOW_TITLE the character's name shows (title and Window menu)",
+          titled(game, expect ? want : @"Murn") && [menu_title(game) isEqualToString:expect ? want : @"Murn"]);
+    wine_set_title(game, @"Other");
+    check(expect ? "any later title becomes HXI_WINDOW_TITLE too" : "any later title shows as given",
+          titled(game, expect ? want : @"Other") && [menu_title(game) isEqualToString:expect ? want : @"Other"]);
+
+    // Observed by KVO: the window's class is now a runtime subclass of WineWindow.
+    TitleWatcher *watcher = [TitleWatcher new];
+    [game addObserver:watcher forKeyPath:@"title" options:0 context:NULL];
+    wine_set_title(game, @"Watched");
+    check(expect ? "a window observed by KVO still gets HXI_WINDOW_TITLE (and KVO still fires)"
+                 : "a window observed by KVO gets its title as given",
+          titled(game, expect ? want : @"Watched") && watcher.changes > 0);
+    [game removeObserver:watcher forKeyPath:@"title"];
+
+    // A second game window, made after the override: its first title is already the game's, and
+    // so is the Window menu item wine gives it when it is ordered in.
+    NSWindow *second = make(wineWindow, gameMask, 1280, 720);
+    wine_set_title(second, @"Second");
+    check(expect ? "a later game window reads HXI_WINDOW_TITLE from its first title"
+                 : "a later game window keeps its title",
+          titled(second, expect ? want : @"Second"));
+    // Not ordered in yet: sightings must not give it a Window menu item.
+    NSInteger items = windowMenu.numberOfItems;
+    post(NSWindowDidBecomeKeyNotification, game);
+    post(NSWindowDidBecomeMainNotification, game);
+    post(NSWindowDidChangeOcclusionStateNotification, second);
+    check("notifications never add a Window menu item", windowMenu.numberOfItems == items && menu_title(second) == nil);
+    wine_order_in(second);
+    check(expect ? "its Window menu item reads HXI_WINDOW_TITLE when it is ordered in"
+                 : "its Window menu item reads its own title when it is ordered in",
+          [menu_title(second) isEqualToString:expect ? want : @"Second"]);
+
+    // The others still pass through untouched, title and Window menu.
+    wine_set_title(dialog, @"Error 2");
+    wine_set_title(plain, @"Launcher 2");
+    wine_set_title(small, @"Small 2");
+    check("a message box keeps its own title (title and Window menu)",
+          titled(dialog, @"Error 2") && [menu_title(dialog) isEqualToString:@"Error 2"]);
+    check("a titled resizable window that is not wine's keeps its own title",
+          titled(plain, @"Launcher 2") && [menu_title(plain) isEqualToString:@"Launcher 2"]);
+    check("a resizable wine window under 320x240 points keeps its own title", titled(small, @"Small 2"));
+    wine_set_title(dialog, @"");
+    check("an empty title for a message box stays empty", titled(dialog, @""));
+
+    check("no window was ever shown",
+          !game.isVisible && !dialog.isVisible && !plain.isVisible && !small.isVisible && !second.isVisible);
+    for (NSWindow *w in @[game, dialog, plain, small, second]) [w close];
+    printf("%s: %d failure(s)\n", failures ? "FAILED" : "ok", failures);
+    return failures ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
     @autoreleasepool {
+        if (argc > 3 && strcmp(argv[1], "title") == 0)
+            return title_main(argv[2], strcmp(argv[3], "expect") == 0);
         BOOL expectLock = argc > 1 && strcmp(argv[1], "lock") == 0;
         double W = 0, H = 0;
         const char *env = getenv("HXI_GAME_ASPECT");

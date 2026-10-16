@@ -62,9 +62,26 @@
 //     process without AppKit windows (services.exe, a plain command-line tool) nothing is ever
 //     posted and nothing happens;
 //   * every Objective-C call is guarded (class check, respondsToSelector:), on the main thread only,
-//     and the only thing ever changed is the content aspect ratio of a qualifying window;
+//     and the only things ever changed are the content aspect ratio of a qualifying window and,
+//     with HXI_WINDOW_TITLE, the title and Window menu item of a game window (see The title);
 //   * full-screen windows are left alone;
 //   * no allocation on the notification path; the carry builds its argv on the stack.
+//
+// The title
+// ---------
+// Ashita sets the game window's title to the character's name at login (SetWindowText), and
+// wine's Mac driver copies every Windows title to the Cocoa window (macdrv_set_cocoa_window_title:
+// [window setTitle:], then [NSApp changeWindowsItem:title:filename:] for the Window menu). With
+// HXI_WINDOW_TITLE set ("FFXI on Mac"), the first time a game window of wine's (class WineWindow,
+// titled, resizable, at least 320x240 points) becomes key or main or comes on screen, this:
+//   * overrides -setTitle: once on WineWindow, so a game window's title is always HXI_WINDOW_TITLE
+//     and every other window of that class (a message box is not resizable) keeps its own;
+//   * overrides -changeWindowsItem:title:filename: once on NSApp's class, the same way, so the
+//     Window menu says the same as the title bar;
+//   * sets the title, and the Window menu item if the window has one, at once.
+// Both overrides call the implementation they replaced. Only windows whose class is or descends
+// from WineWindow are touched (never AppKit's own panels). The Windows side is not changed:
+// GetWindowText still returns what the game set.
 //
 // Debug output: set FFXI_GAMEWINDOW_DEBUG=1 to get one stderr line per action, and one at the end
 // of every live resize of a locked window saying whether it really kept the ratio.
@@ -103,6 +120,15 @@ static const char gw_carry_script[] =
 static int gw_debug = 0;
 static int gw_carry = 0;
 static double gw_aspect_w = 0, gw_aspect_h = 0;   // 0 = no target, nothing observed
+
+// HXI_WINDOW_TITLE: the text (for the log) and the string the overrides hand AppKit (a CFString,
+// toll-free bridged to NSString; made once, kept for the life of the process). NULL = off.
+#define GW_TITLE_MAX 255
+static char gw_title_text[GW_TITLE_MAX + 1];
+static id gw_title = NULL;
+static Class gw_title_class = Nil;   // WineWindow, once a game window of it has been seen
+static IMP gw_title_orig = NULL;     // the -setTitle: WineWindow had before the override
+static IMP gw_menu_orig = NULL;      // the -changeWindowsItem:title:filename: NSApp's class had
 
 /// One line on stderr, written with a single write(2): no stdio lock is taken, because the carry
 /// logs from wine's forked child, where a FILE lock held by another thread at fork() would never
@@ -240,6 +266,131 @@ static void gw_report(const void *object) {
            gw_aspect_w, gw_aspect_h);
 }
 
+// ---------------------------------------------------------------------------------------------
+// The title (see the header)
+// ---------------------------------------------------------------------------------------------
+
+/// The class named WineWindow in `win`'s ancestry (wine's window class), or Nil.
+static Class gw_wine_class(id win) {
+    for (Class c = object_getClass(win); c; c = class_getSuperclass(c))
+        if (strcmp(class_getName(c), "WineWindow") == 0) return c;
+    return Nil;
+}
+
+/// A window shaped like the game's: titled, resizable, content at least 320x240 points. Read-only.
+static int gw_game_shaped(id win) {
+    SEL styleMask = sel_registerName("styleMask"), contentView = sel_registerName("contentView");
+    if (!gw_responds(win, styleMask) || !gw_responds(win, contentView)) return 0;
+    unsigned long mask = ((unsigned long (*)(id, SEL))objc_msgSend)(win, styleMask);
+    if ((mask & GW_TITLED) == 0 || (mask & GW_RESIZABLE) == 0) return 0;
+    id view = ((id (*)(id, SEL))objc_msgSend)(win, contentView);
+    if (!view) return 0;
+    gw_rect c = gw_frame(view);
+    return c.width >= GW_MIN_W && c.height >= GW_MIN_H;
+}
+
+/// A game window whose title is HXI_WINDOW_TITLE: of the overridden WineWindow class (subclasses
+/// included) and game-shaped. Main thread only.
+static int gw_titled_game(id win) {
+    if (!win || !gw_title || !gw_title_class || !pthread_main_np()) return 0;
+    if (!((BOOL (*)(id, SEL, Class))objc_msgSend)(win, sel_registerName("isKindOfClass:"), gw_title_class))
+        return 0;
+    return gw_game_shaped(win);
+}
+
+/// WineWindow's -setTitle: from the first sighting on: a game window gets HXI_WINDOW_TITLE, any
+/// other window the title it was given.
+static void gw_set_title(id self, SEL cmd, id title) {
+    if (gw_titled_game(self)) {
+        if (title != gw_title) gw_log("title: window %p asked for another title; it stays \"%s\"",
+                                      (void *)self, gw_title_text);
+        title = gw_title;
+    }
+    ((void (*)(id, SEL, id))gw_title_orig)(self, cmd, title);
+}
+
+/// NSApp's -changeWindowsItem:title:filename:, the same way: wine calls it with the Windows title
+/// right after setTitle:, for the Window menu.
+static void gw_change_windows_item(id self, SEL cmd, id win, id title, BOOL filename) {
+    if (gw_titled_game(win)) title = gw_title;
+    ((void (*)(id, SEL, id, id, BOOL))gw_menu_orig)(self, cmd, win, title, filename);
+}
+
+/// Replace `sel` on `cls` with `imp`, keeping the implementation it had (its own or inherited) in
+/// `*orig`, which is set before the swap so no call can find it empty. Once: never over itself.
+static int gw_override(Class cls, const char *name, IMP imp, IMP *orig) {
+    SEL sel = sel_registerName(name);
+    Method m = class_getInstanceMethod(cls, sel);
+    if (!m) return 0;
+    IMP current = method_getImplementation(m);
+    if (current == imp) return 1;
+    if (*orig) return 0;   // already overridden on another class: never chain to ourselves
+    *orig = current;
+    class_replaceMethod(cls, sel, imp, method_getTypeEncoding(m));
+    gw_log("title: -%s overridden on %s", name, class_getName(cls));
+    return 1;
+}
+
+/// The Window menu override, on NSApp's class. AppKit is loaded (a window notification came), so
+/// NSApp is read, never created.
+static void gw_override_menu(void) {
+    if (gw_menu_orig) return;
+    id *app = (id *)dlsym(RTLD_DEFAULT, "NSApp");
+    if (!app || !*app) return;
+    Class cls = ((Class (*)(id, SEL))objc_msgSend)(*app, sel_registerName("class"));
+    if (cls) gw_override(cls, "changeWindowsItem:title:filename:", (IMP)gw_change_windows_item, &gw_menu_orig);
+}
+
+/// The Window menu item of `win`, if it has one, says HXI_WINDOW_TITLE. Never adds one.
+static void gw_retitle_menu_item(id win) {
+    id *app = (id *)dlsym(RTLD_DEFAULT, "NSApp");
+    if (!app || !*app) return;
+    SEL windowsMenu = sel_registerName("windowsMenu"), count = sel_registerName("numberOfItems");
+    SEL itemAt = sel_registerName("itemAtIndex:"), target = sel_registerName("target");
+    SEL title = sel_registerName("title"), equal = sel_registerName("isEqualToString:");
+    SEL change = sel_registerName("changeWindowsItem:title:filename:");
+    if (!gw_responds(*app, windowsMenu) || !gw_responds(*app, change)) return;
+    id menu = ((id (*)(id, SEL))objc_msgSend)(*app, windowsMenu);
+    if (!menu || !gw_responds(menu, count) || !gw_responds(menu, itemAt)) return;
+    long n = ((long (*)(id, SEL))objc_msgSend)(menu, count);
+    for (long i = 0; i < n; i++) {
+        id item = ((id (*)(id, SEL, long))objc_msgSend)(menu, itemAt, i);
+        if (!item || !gw_responds(item, target) || !gw_responds(item, title)) continue;
+        if (((id (*)(id, SEL))objc_msgSend)(item, target) != win) continue;
+        id t = ((id (*)(id, SEL))objc_msgSend)(item, title);
+        if (t && gw_responds(t, equal) && ((BOOL (*)(id, SEL, id))objc_msgSend)(t, equal, gw_title)) return;
+        ((void (*)(id, SEL, id, id, BOOL))objc_msgSend)(*app, change, win, gw_title, NO);
+        gw_log("title: Window menu item of window %p now reads \"%s\"", (void *)win, gw_title_text);
+        return;
+    }
+}
+
+/// A window became key or main, or came on screen. The first game window of WineWindow seen
+/// installs the overrides; every game window's title and menu item are set to HXI_WINDOW_TITLE.
+static void gw_retitle(const void *object, const char *why) {
+    if (!object || !gw_title || !pthread_main_np()) return;
+    Class nswindow = objc_getClass("NSWindow");
+    if (!nswindow) return;
+    id win = (id)object;
+    if (!((BOOL (*)(id, SEL, Class))objc_msgSend)(win, sel_registerName("isKindOfClass:"), nswindow)) return;
+    if (!gw_title_class) {
+        Class wine = gw_wine_class(win);
+        if (!wine || !gw_game_shaped(win)) return;
+        if (!gw_override(wine, "setTitle:", (IMP)gw_set_title, &gw_title_orig)) return;
+        gw_title_class = wine;
+    }
+    gw_override_menu();
+    if (!gw_titled_game(win)) return;
+    SEL title = sel_registerName("title"), equal = sel_registerName("isEqualToString:");
+    id current = gw_responds(win, title) ? ((id (*)(id, SEL))objc_msgSend)(win, title) : NULL;
+    if (!current || !gw_responds(current, equal)
+        || !((BOOL (*)(id, SEL, id))objc_msgSend)(current, equal, gw_title)) {
+        ((void (*)(id, SEL, id))objc_msgSend)(win, sel_registerName("setTitle:"), gw_title);
+        gw_log("%s: window %p now reads \"%s\"", why, (void *)win, gw_title_text);
+    }
+    gw_retitle_menu_item(win);
+}
+
 static void gw_will_resize(CFNotificationCenterRef center, void *observer, CFNotificationName name,
                            const void *object, CFDictionaryRef info) {
     (void)center; (void)observer; (void)name; (void)info;
@@ -256,12 +407,27 @@ static void gw_became_key(CFNotificationCenterRef center, void *observer, CFNoti
                           const void *object, CFDictionaryRef info) {
     (void)center; (void)observer; (void)name; (void)info;
     gw_lock(object, "key");
+    gw_retitle(object, "key");
 }
 
-/// Open CoreFoundation and observe the two notifications. 1 on success.
+static void gw_became_main(CFNotificationCenterRef center, void *observer, CFNotificationName name,
+                           const void *object, CFDictionaryRef info) {
+    (void)center; (void)observer; (void)name; (void)info;
+    gw_retitle(object, "main");
+}
+
+// Posted when a window comes on screen (and when it is covered or uncovered): the game window is
+// seen even while the app is in the background. Not per frame.
+static void gw_occlusion(CFNotificationCenterRef center, void *observer, CFNotificationName name,
+                         const void *object, CFDictionaryRef info) {
+    (void)center; (void)observer; (void)name; (void)info;
+    gw_retitle(object, "shown");
+}
+
+/// Open CoreFoundation and observe the notifications the ratio and the title need. 1 on success.
 static int gw_observe(void) {
     void *cf = dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", RTLD_NOW | RTLD_LOCAL);
-    if (!cf) { gw_log("loaded; CoreFoundation unavailable, window shape not kept"); return 0; }
+    if (!cf) { gw_log("loaded; CoreFoundation unavailable, nothing kept"); return 0; }
     CFNotificationCenterRef (*localCenter)(void) =
         (CFNotificationCenterRef (*)(void))dlsym(cf, "CFNotificationCenterGetLocalCenter");
     void (*addObserver)(CFNotificationCenterRef, const void *, CFNotificationCallback, CFStringRef,
@@ -271,21 +437,36 @@ static int gw_observe(void) {
     CFStringRef (*makeString)(CFAllocatorRef, const char *, CFStringEncoding) =
         (CFStringRef (*)(CFAllocatorRef, const char *, CFStringEncoding))dlsym(cf, "CFStringCreateWithCString");
     if (!localCenter || !addObserver || !makeString) {
-        gw_log("loaded; CoreFoundation is missing a function, window shape not kept");
+        gw_log("loaded; CoreFoundation is missing a function, nothing kept");
         return 0;
     }
     CFNotificationCenterRef center = localCenter();
+    if (gw_title_text[0]) {
+        // Not valid UTF-8: no title rather than a wrong one.
+        gw_title = (id)makeString(NULL, gw_title_text, kCFStringEncodingUTF8);
+        if (!gw_title) gw_log("HXI_WINDOW_TITLE is not UTF-8, title left to the game");
+    }
+    int aspect = gw_aspect_w > 0 && gw_aspect_h > 0;
+    if (!aspect && !gw_title) { gw_log("loaded; nothing kept"); return 0; }
     // Kept for the life of the process: the center holds the names, and so does this.
-    CFStringRef resize = makeString(NULL, "NSWindowWillStartLiveResizeNotification", kCFStringEncodingUTF8);
     CFStringRef key = makeString(NULL, "NSWindowDidBecomeKeyNotification", kCFStringEncodingUTF8);
-    if (!center || !resize || !key) { gw_log("loaded; no notification center, window shape not kept"); return 0; }
+    if (!center || !key) { gw_log("loaded; no notification center, nothing kept"); gw_title = NULL; return 0; }
     static int token;   // observer identity; only its address matters
-    addObserver(center, &token, gw_will_resize, resize, NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
-    addObserver(center, &token, gw_became_key, key, NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
-    if (gw_debug) {
-        CFStringRef ended = makeString(NULL, "NSWindowDidEndLiveResizeNotification", kCFStringEncodingUTF8);
-        if (ended) addObserver(center, &token, gw_did_end_resize, ended, NULL,
-                               CFNotificationSuspensionBehaviorDeliverImmediately);
+    const CFNotificationSuspensionBehavior now = CFNotificationSuspensionBehaviorDeliverImmediately;
+    addObserver(center, &token, gw_became_key, key, NULL, now);
+    if (aspect) {
+        CFStringRef resize = makeString(NULL, "NSWindowWillStartLiveResizeNotification", kCFStringEncodingUTF8);
+        if (resize) addObserver(center, &token, gw_will_resize, resize, NULL, now);
+        if (gw_debug) {
+            CFStringRef ended = makeString(NULL, "NSWindowDidEndLiveResizeNotification", kCFStringEncodingUTF8);
+            if (ended) addObserver(center, &token, gw_did_end_resize, ended, NULL, now);
+        }
+    }
+    if (gw_title) {
+        CFStringRef becameMain = makeString(NULL, "NSWindowDidBecomeMainNotification", kCFStringEncodingUTF8);
+        CFStringRef shown = makeString(NULL, "NSWindowDidChangeOcclusionStateNotification", kCFStringEncodingUTF8);
+        if (becameMain) addObserver(center, &token, gw_became_main, becameMain, NULL, now);
+        if (shown) addObserver(center, &token, gw_occlusion, shown, NULL, now);
     }
     return 1;
 }
@@ -339,8 +520,16 @@ __attribute__((constructor)) static void gw_init(void) {
     const char *want = getenv("HXI_GAME_ASPECT");
     if (!gw_parse_aspect(want, &gw_aspect_w, &gw_aspect_h)) {
         gw_aspect_w = gw_aspect_h = 0;
-        if (want && *want) gw_log("loaded; HXI_GAME_ASPECT=%s is not WIDTHxHEIGHT, window shape not kept", want);
-        else gw_log("loaded; no HXI_GAME_ASPECT, window shape not kept%s", gw_carry ? " (carry on)" : "");
+        if (want && *want) gw_log("HXI_GAME_ASPECT=%s is not WIDTHxHEIGHT, window shape not kept", want);
+    }
+    // The game window's title: 1...255 bytes, else none.
+    const char *title = getenv("HXI_WINDOW_TITLE");
+    if (title && *title) {
+        if (strlen(title) <= GW_TITLE_MAX) memcpy(gw_title_text, title, strlen(title) + 1);
+        else gw_log("HXI_WINDOW_TITLE is longer than %d bytes, title left to the game", GW_TITLE_MAX);
+    }
+    if (gw_aspect_w <= 0 && !gw_title_text[0]) {
+        gw_log("loaded; no HXI_GAME_ASPECT or HXI_WINDOW_TITLE, nothing kept%s", gw_carry ? " (carry on)" : "");
         return;
     }
 
@@ -351,6 +540,9 @@ __attribute__((constructor)) static void gw_init(void) {
         return;
     }
     if (!gw_observe()) return;
-    gw_log("loaded; keeping game windows at %.0f:%.0f%s", gw_aspect_w, gw_aspect_h,
+    char shape[64] = "";
+    if (gw_aspect_w > 0) snprintf(shape, sizeof(shape), "keeping game windows at %.0f:%.0f", gw_aspect_w, gw_aspect_h);
+    gw_log("loaded; %s%s%s%s%s%s", shape, shape[0] && gw_title ? ", " : "",
+           gw_title ? "titled \"" : "", gw_title ? gw_title_text : "", gw_title ? "\"" : "",
            gw_carry ? " (carry on)" : "");
 }
