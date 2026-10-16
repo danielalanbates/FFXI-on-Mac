@@ -1249,6 +1249,10 @@ final class Runner: ObservableObject {
         Self.cleanStaleWineSockets()
         gameExe = Credentials.bootLoaderName(in: install, profile: profile) ?? "horizon-loader.exe"
         Self.currentGameExe = gameExe
+        // Start warm: the pipelines this Mac has already built, in any install, go into this
+        // prefix's DXVK state cache before DXVK reads it. Only with no client running anywhere:
+        // a running DXVK appends to that file. See DXVKStateCache.
+        if !clientsLive, perf.renderer == .metal { warmDXVKCache(install, exe: gameExe) }
         Credentials.applyIniOverrides(perf.renderer.iniOverrides, to: install, profile: profile)
         // Launching with Sandbox loaded and its interface bypass off produces the worst failure
         // this project has: a clean login followed by a silent exit, no window, no error. Put it
@@ -1548,6 +1552,7 @@ final class Runner: ObservableObject {
             self.x87Settled = true
             self.tailGameGone?.raise()
             self.appendLine("==> game exited")
+            if let i = self.currentInstall { self.keepDXVKCache(i) }
             if silent {
                 self.logFileOnly("i  the injector printed nothing and no process of this launch was ever seen: "
                                  + "wine ended before Ashita started")
@@ -1745,6 +1750,33 @@ final class Runner: ObservableObject {
             done.signal()
         }
         return done.wait(timeout: .now() + seconds) == .success
+    }
+
+    /// How long Play waits for the DXVK cache merge before starting the client without it.
+    nonisolated static let dxvkWarmLimit: Double = 3
+
+    /// `DXVKStateCache.warm`, on its own thread, waited on for at most `dxvkWarmLimit`. If it has
+    /// not finished by then it is told not to rename its file over the prefix's afterwards, so
+    /// the file DXVK opens is never replaced under it. One line to launcher.log, nothing on screen.
+    private func warmDXVKCache(_ install: Install, exe: String) {
+        let gate = DXVKStateCache.CommitGate()
+        let done = Self.finishes(within: Self.dxvkWarmLimit) {
+            gate.result = DXVKStateCache.warm(install, exe: exe, gate: gate)
+        }
+        if !done { gate.close() }
+        let name = DXVKStateCache.fileName(exe: exe)
+        logFileOnly(gate.result ?? (gate.renamed ? "dxvk cache: prefix \(name) warmed, just past the wait"
+                                                  : "dxvk cache: \(name) not warmed within \(Int(Self.dxvkWarmLimit)) s; "
+                                                    + "the client starts with the prefix's own"))
+    }
+
+    /// After a session: what DXVK built goes into the launcher's copy, off the main actor. The
+    /// prefix is only read. One line to launcher.log.
+    private func keepDXVKCache(_ install: Install) {
+        Task { [weak self] in
+            let line = await Task.detached(priority: .utility) { DXVKStateCache.keep(install) }.value
+            self?.logFileOnly(line)
+        }
     }
 
     /// See the call site in `launch`: the game must be started the way a shell starts it.

@@ -2651,6 +2651,12 @@ struct ContentView: View {
             selected = found.first
         }
         selected?.remember()
+        // The launcher's copy of DXVK's state cache starts from every cache the installs it knows
+        // already hold (once; see DXVKStateCache.seedIfNeeded). Read-only on the installs.
+        let known = installs, log = runner
+        Task.detached(priority: .utility) {
+            if let line = DXVKStateCache.seedIfNeeded(known) { await MainActor.run { log.logFileOnly(line) } }
+        }
         await recheckAsync()
         if let i = selected { await runner.syncPrefixIfStale(i) }
     }
