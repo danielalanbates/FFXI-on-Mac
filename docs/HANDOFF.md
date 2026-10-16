@@ -24,17 +24,16 @@ ends) are in `archive/docs-2026-08/`.
 
 | what | now |
 | --- | --- |
-| Public release | v3.9 = 3.9 build 57 (tag at 90d77ba), Developer ID signed, **not notarized** |
-| Installed `/Applications` | 3.9 b58 = PR #36 `quiet-wine-update` |
-| Local beta | 3.9 b59, branch `beta-b59` on top of #36: not installed, not pushed |
-| Latest local beta | 3.9 b67, branch `beta-b67` on `beta-b66`: Setup carries the previous install's macros, equipment sets and addon settings into a new one ([`BETA-67.md`](BETA-67.md)); not installed, not pushed |
+| Public release | **3.10 build 68** (tag `v3.10` at 5f3759d, published 2026-10-16), Developer ID signed, **notarized and stapled**; `/releases/latest` serves `FFXI-on-Mac-3.10-b68.dmg` (sha256 a7c9429a…067d) under both repo names. Master = 5f3759d; PRs #36–#45 merged. Release notes: `docs/RELEASE-3.10.md` |
+| Installed `/Applications` | 3.10 b68, the notarized release app (installed by hand 2026-10-16, so the b59+ in-app swap has still never run for real) |
+| Local beta | 3.10 b69, branch `beta-b69` (from 48719f6): game-window aspect lock (`gamewindow.dylib`), in progress. Queued for b69: window title always "FFXI on Mac", Addons… opens at once with a spinner while it scans. Local betas are SHORT=3.10 with BUILD ≥ 69 from now on |
 | Version source | `app/VERSION` (`SHORT`, `BUILD`) |
 | GitHub | `danielalanbates/FFXI-on-Mac`. v3.9 clients still ask for `HorizonXI-on-Mac` and arrive by GitHub's rename redirect: never create a repo with the old name. The local `origin` URL still uses the old name. |
 | Working copy | `~/Downloads/hxi-work/HorizonXI-on-Mac`; siblings `vanaguide` (e2c1609) and `vanavoice` (29a8ec9) are bundled as they sit on disk (revisions recorded in Info.plist `HXIAddonRevisions`) |
 | Test Mac | M1 MacBook Pro 8 GB, macOS 27.0.1 |
 | Play stack | athei `wine-cx-26.3.0-1` (`wine-coop`, fetched by Setup via `scripts/game-wine.sh` (pinned) or found on the Mac, not shipped) + WINEMSYNC; d3d8to9 → patched DXVK 1.10.3 → MoltenVK 1.4.2; `x87sidecar-coop` on by default (b59); Ashita v4 |
 
-## Release gates (for public 3.10)
+## Release gates (3.10 shipped 2026-10-16 with these still open; they apply to the next release)
 
 - The stability list in `RELEASE-WHEN-STABLE.md`, verified fresh, plus several real sessions on
   the current beta with no manual intervention.
