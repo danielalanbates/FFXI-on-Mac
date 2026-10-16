@@ -380,8 +380,21 @@ struct GraphicsSettings: Codable, Equatable {
     /// Map compression had no control: it follows the texture choice ("Compressed uses less
     /// graphics memory" covered the maps too, and 0019 is what a user who turned that down had
     /// been running whenever bump mapping was off).
-    static func legacy(mipMapping: Int?, textureCompression: Int?, environmentAnimation: Bool?)
+    ///
+    /// **Untouched is not a choice.** Mip 2, "Compressed", bump on and environment on were the old
+    /// panel's defaults, and every old preset (Max, Balanced, Low) stored exactly them; so did an
+    /// Apply that never moved those four, and an old panel opened on the template or max.json
+    /// (it read 0018 = 2, 0011 = 2, 0019 = 1, 0021 = 1 as those four). What such a user ran was
+    /// the template's max quality, so all four keep this build's defaults. Read in the table's
+    /// terms, they came out as high compression and mip 3 — Daniel's shared and local-server
+    /// values among them. A value the old panel could not offer (mip -1, textures 1) counts as
+    /// its default here. Any other combination moved a control and is read through the table.
+    static func legacy(mipMapping: Int?, textureCompression: Int?, environmentAnimation: Bool?,
+                       bumpMapping: Bool? = nil)
         -> (mipMapping: Int?, textureCompression: Int?, mapCompression: Int?, environmentAnimations: Int?) {
+        let offered = (mipMapping.flatMap { (0...4).contains($0) ? $0 : nil } ?? 2,
+                       textureCompression.flatMap { [0, 2].contains($0) ? $0 : nil } ?? 2)
+        if offered == (2, 2), bumpMapping ?? true, environmentAnimation ?? true { return (nil, nil, nil, nil) }
         let mip = mipMapping.flatMap { legacyMipMapping.indices.contains($0) ? legacyMipMapping[$0] : nil }
         let tex = textureCompression.flatMap { (0...2).contains($0) ? 2 - $0 : nil }
         return (mip, tex, tex.map { $0 == 2 ? 1 : 0 }, environmentAnimation.map { $0 ? 2 : 0 })
@@ -416,7 +429,8 @@ struct GraphicsSettings: Codable, Equatable {
         } else if let old = try? decoder.container(keyedBy: LegacyKeys.self) {
             let m = Self.legacy(mipMapping: try? old.decodeIfPresent(Int.self, forKey: .mipMapping),
                                 textureCompression: try? old.decodeIfPresent(Int.self, forKey: .textureCompression),
-                                environmentAnimation: try? old.decodeIfPresent(Bool.self, forKey: .environmentAnimation))
+                                environmentAnimation: try? old.decodeIfPresent(Bool.self, forKey: .environmentAnimation),
+                                bumpMapping: bool(.bumpMapping))
             mipMapping = m.mipMapping ?? mipMapping
             textureCompression = m.textureCompression ?? textureCompression
             mapCompression = m.mapCompression ?? mapCompression

@@ -131,16 +131,28 @@ extension Headless {
         check("Daniel's HorizonXI settings: mip 4 -> 6, Compressed -> 0018 = 0 and 0019 = 0, environment off -> 0011 = 0, bump off -> 0017 = 0",
               daniel?.iniOverrides == danielKeys && daniel?.rememberWindowSize == true && daniel?.uiFollowsResolution == false)
         let shared = json(sharedJSON), localS = json(localJSON)
-        check("his shared value: mip 2 -> 3, Compressed -> 0 / 0, environment on -> 2, bump on -> 1, 1920 × 1080, 2048, UI 960 × 540",
-              shared?.iniOverrides == ["0000": "3", "0001": "1920", "0002": "1080", "0003": "2048", "0004": "2048", "0011": "2",
-                                      "0017": "1", "0018": "0", "0019": "0", "0029": "12", "0037": "960", "0038": "540"])
-        check("his local-server value: the same quality keys, 4K, remember-window off kept",
-              localS?.mipMapping == 3 && localS?.textureCompression == 0 && localS?.mapCompression == 0
-                && localS?.environmentAnimations == 2 && localS?.width == 3840 && localS?.rememberWindowSize == false)
-        func oldMip(_ m: Int) -> Int? { json(#"{"mipMapping":\#(m)}"#)?.mipMapping }
+        let defaultQuality = { (g: G?) in g.map { $0.mipMapping == G().mipMapping && $0.textureCompression == G().textureCompression
+            && $0.mapCompression == G().mapCompression && $0.environmentAnimations == G().environmentAnimations
+            && $0.bumpMapping == G().bumpMapping } == true }
+        check("his shared value (the old panel's untouched four): this build's defaults for them, 1920 × 1080, 2048, UI 960 × 540",
+              defaultQuality(shared) && shared?.width == 1920 && shared?.height == 1080 && shared?.textureResolution == 2048
+                && shared?.uiFollowsResolution == false && shared?.uiWidth == 960 && shared?.soundChannels == 12
+                && shared?.iniOverrides["0018"] == "2" && shared?.iniOverrides["0019"] == "1" && shared?.iniOverrides["0000"] == "6")
+        check("his local-server value: the same, 4K, remember-window off kept",
+              defaultQuality(localS) && localS?.width == 3840 && localS?.rememberWindowSize == false)
+        // b63's own encoding of its presets: what Max / Balanced / Low stored.
+        let oldMax = #"{"width":3840,"height":2160,"uiFollowsResolution":true,"uiWidth":1920,"uiHeight":1080,"textureResolution":4096,"mipMapping":2,"textureCompression":2,"bumpMapping":true,"environmentAnimation":true,"soundChannels":20,"rememberWindowSize":true}"#
+        let oldLow = oldMax.replacingOccurrences(of: #""width":3840,"height":2160"#, with: #""width":640,"height":480"#)
+        check("an old Max / Low preset converts to this build's Max / Low; an old blob holding nothing but untouched or impossible values (mip -1, textures 1) to the defaults",
+              json(oldMax) == .max4K && json(oldLow) == .lowSpec && json(#"{"mipMapping":2}"#) == G()
+                && json(#"{"mipMapping":-1,"textureCompression":1,"bumpMapping":true}"#) == G())
+        // With one control moved (environment off), the rest is read in the old panel's terms.
+        func oldMip(_ m: Int) -> Int? { json(#"{"mipMapping":\#(m),"environmentAnimation":false}"#)?.mipMapping }
         check("old mip mapping 0, 1, 2, 3, 4 -> 0, 1, 3, 4, 6; anything else keeps the default (6)",
               [0, 1, 2, 3, 4].map(oldMip) == [0, 1, 3, 4, 6] && oldMip(5) == 6 && oldMip(-1) == 6)
-        func oldTex(_ t: Int) -> (Int, Int)? { json(#"{"textureCompression":\#(t)}"#).map { ($0.textureCompression, $0.mapCompression) } }
+        func oldTex(_ t: Int) -> (Int, Int)? {
+            json(#"{"textureCompression":\#(t),"environmentAnimation":false}"#).map { ($0.textureCompression, $0.mapCompression) }
+        }
         check("old Textures Uncompressed (0) -> 2 / maps 1; Compressed (2) -> 0 / maps 0; 1 -> 1 / maps 0; 7 -> defaults",
               oldTex(0)! == (2, 1) && oldTex(2)! == (0, 0) && oldTex(1)! == (1, 0) && oldTex(7)! == (2, 1))
         check("old environmental animation on -> 2 (smooth), off -> 0; bump mapping kept as it was",
