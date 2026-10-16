@@ -198,8 +198,10 @@ checked against the installed `Thirdparty.dll`. The protocol is written out at t
   - `resolve(...)`: is the world's client running from this install, and under which wine?
   - `run(...)`: runs the helper under that wine, with the commands as arguments and its output
     to a file. Time limit 30 s.
-  - `deliver` / `apply`: runs off the main thread on one serial queue, so two helpers never
-    write the block together.
+  - `deliver` / `apply`: runs off the main thread on one serial queue, so two of the launcher's
+    helpers never write the block together. A `--send-ashita` from Terminal is another process:
+    since the review, the helper takes a named mutex (`ashita-send-<pid>`) from its busy wait to
+    its publish, so no two senders ever fill the block at once.
 - **`App.swift`**, the sheet's Apply: reads the script, writes it as before, then
   `LiveAddons.apply(...)`. It logs one line per Apply to launcher.log (`logFileOnly`) and shows
   nothing on screen.
@@ -218,7 +220,12 @@ checked against the installed `Thirdparty.dll`. The protocol is written out at t
   is skipped instead. The plugin's `;` split can still never be reached from a name.
 - The helper refuses the never-list, `;`, control characters, and `/unload` or `/reload` with no
   name, whoever asks. Every command is checked before anything is written, so a batch goes in
-  whole or not at all.
+  whole or not at all. Since the review (below) the never-list also has `/unloadall`,
+  `/addon unloadall`, `/addon exec`, `/exec`, `/execstr`, `/alias` and `/bind`, and every
+  refusal starts with `ashita-send: ` on stderr.
+- If the Lua host (`addons`) was off when the client started, no addon is loaded and there is no
+  `/addon` command: no addon line is sent while it stays off, and when Apply turns it on,
+  `/load addons` is followed by every addon the script now loads (review fix 5).
 - Only type 3 (command text) is ever written. The key types (1, 2, 1000) are not in the helper.
 
 ### When nothing is sent
@@ -265,16 +272,22 @@ FFXI-on-Mac --send-ashita "/addon load clock" [--world HorizonXI]
 ```
 
 - Sends one command to that world's running client (default: the selected world) the same way.
-- Refuses everything the helper refuses. On a hosted world it also refuses any `/addon load`,
-  `/addon reload`, `/load` or `/reload` whose name is not on that world's published list. A
-  hosted world with no published list gets no load at all. `/exec`, `/alias` and `/bind` are
-  refused on hosted worlds, since they can run anything.
-- Other commands pass, such as `/drawdistance setworld 5`.
+- Refuses everything the helper refuses, on every world.
+- On a hosted world it sends addon and plugin management only: `/load`, `/unload`, `/reload`,
+  `/addon load|unload|reload|list`. Anything else (`/ma`, `/say`, `/terminate`, an addon's own
+  commands such as `/drawdistance`) is refused: from a script that would be automation on a
+  server that bans it. Any load or reload whose name is not on the world's published list is
+  refused; a hosted world with no published list gets no load at all.
+- On the local world, other commands pass, such as `/drawdistance setworld 5`.
 - Headless, and exempt from SingleInstance (`isExempt`), so its `--world` is never handed to a
   running launcher window. It prints to stdout/stderr only; launcher.log is not touched.
-- Exit: the helper's code; 1 refused; 2 not sent (with why); 64 usage.
+- Exit: the helper's code (0 delivered … 5 pending); 1 refused; 2 not sent (with why); 64 usage;
+  75 timed out. Wine's own failures pass their code through, or 70 when it is 0-5.
 
 ### Tests
+
+The counts below are from before the review; the review's own counts are in "Review" at the end
+of this section (addons-live 51, `ashita-send-test.sh` 71).
 
 - **`--selftest-addons-live`, 47 checks:**
   - the diff (unchanged, untick, tick, order, plugins, thirdparty, the Lua host, launcher-managed
@@ -353,6 +366,96 @@ re-registers the bundle with Launch Services.
 5. Optional, from Terminal:
    `/Applications/FFXI-on-Mac.app/Contents/MacOS/FFXI-on-Mac --send-ashita "/addon unload clock" --world HorizonXI`
    prints `delivered`. Running it again with `"/addon load clock"` brings the clock back.
+
+### Review (adversarial, 2026-10-15)
+
+`beta-b65..beta-b66` was reviewed against the Thirdparty source (`src/handlers/keyboard.cpp`)
+and against copies of the client's `Thirdparty.dll` (SHA-256 `a2c03f48…0488`, the block size
+`push 0x10488`, `handled_` at +4, entries at +8 with stride `0x824`, type 3 compared first: all
+as `tools/ashita-send.c` has them) and `Ashita.dll` (its command table). Only copies under
+`~/Downloads/FFXI-on-Mac-build/fixture/` were read; no game was running at any point.
+
+Fixed:
+
+1. **`/unloadall` crashed the client from inside the plugin.** Ashita's own `/unloadall`
+   (`PluginManager::UnloadAll`, in the client's `Ashita.dll`) unloads every plugin, Thirdparty
+   among them, from inside Thirdparty's `update()`: the same self-free as `/unload thirdparty`,
+   which was refused while this was not. The helper and `--send-ashita` now refuse it.
+2. **The never-list could be walked round.** `/execstr /unload thirdparty`, `/alias`, `/bind`,
+   `/exec <script>` and `/addon exec <addon> <lua>` (Lua that can unload plugins itself) all ran
+   commands the helper never saw. The helper refuses them, and `/addon unloadall` (the same
+   "every Lua addon at once" as `/unload addons`), on every world.
+3. **`--send-ashita` sent anything to hosted worlds.** Only loads were checked, so `/ma`,
+   `/say`, `/terminate` or an addon's own commands went to HorizonXI from a script: automation
+   on a server that bans it, and at odds with "no packet is sent" under Risks. On a hosted world
+   it now sends `/load`, `/unload`, `/reload` and `/addon load|unload|reload|list` only. The
+   Apply path never sent anything else and is unchanged.
+4. **Wine's exit 1 read as "refused by the helper".** A WINEMSYNC/WINEESYNC that disagrees with
+   the running wineserver ends wine with 1 before the helper runs (measured with wine-coop:
+   exit 1, nothing written, the fake client undisturbed and the next send delivered). Every
+   helper refusal now starts `ashita-send: ` on stderr; exit 1 without it is
+   `failed(1)` ("wine exited 1 before the helper ran …"), and `--send-ashita` exits 70 for it,
+   not 1.
+5. **The Lua host.** With `addons` off when the client started, turning it on sent only the
+   changed addons, so the others the script loads stayed unloaded until the next Play; with it
+   off throughout, `/addon …` lines went to a client with no `/addon` command. Now `/load addons`
+   is followed by every addon the script loads, and nothing is sent for addons while it stays
+   off.
+6. **Two senders.** The plugin's block has no lock, and the launcher's serial queue covers only
+   its own helpers. The helper takes a named mutex `ashita-send-<pid>` (abandoned is fine) from
+   the busy wait to the publish, still within the one 3 s busy limit.
+
+`vendor/ashita-send.exe` rebuilt: 19,456 bytes, SHA-256 `26369d6c…5604`, two builds identical,
+imports still KERNEL32 and the UCRT set only. `vendor/NOTICE.md` updated.
+
+Checked and left as they are:
+
+- **A:** `WINE_DISABLE_NX_COMPAT=1` is set in `PerfSettings.environment` whenever
+  `Runner.launch` uses the patched game Wine (the one `X87Sidecar.patchedWine()` lookup feeds the
+  environment, the command and the x87 watch), which is every Play of every world.
+  Maintenance runs (Repair, wineboot, renderer setup) do not get it; they load no Square Enix
+  DLL. The extra environment wins: `WINE_DISABLE_NX_COMPAT=0` still means on with the pinned
+  build (it only asks whether the name exists), `WINE_DISABLE_NX_COMPAT=` takes it out, and an
+  inherited value is always dropped. "1", never "0". The four docs are corrected.
+- **C:** nothing is focused or selected when a name is remembered; with none, the empty account
+  field is focused once the window first becomes key (`focus == nil`), and not on the local
+  world, whose fields are disabled. Still to check by hand (Manual check, C).
+- **Wrong client / new wineserver / sync mode:** the helper runs only when every client the scan
+  sees is this world's, a wineserver serves this install's prefix (never started, never
+  `-k`), its wine is the one whose `bin/wineserver` is running, and with that server's mode.
+  A process that disagrees exits on its own (above) and the game is not touched.
+- **Hangs:** the helper's waits are 3 s + 5 s, polling with `Sleep(5)`; the launcher stops it
+  after 30 s. No main-thread wait: Apply only reads the script and queues.
+- **Passwords:** nothing logs a command line or environment. `ps -E` of the wineserver is only
+  parsed for its prefix and sync mode; the log line holds the commands, the outcome and the
+  helper's own first lines.
+- **`--send-ashita --world`** is exempt from SingleInstance and runs (and exits) in
+  `Headless.runIfAsked`, before `SingleInstance.enforce`: it never reaches a launcher window.
+- **Gemini (gemini-2.5-flash) cross-check**, one hint: the busy retry starts a fresh helper
+  every ~3 s for up to 2 minutes. By design (Busy retries, under Risks): each start is ~0.1 s,
+  only while the plugin still holds an earlier batch, and the loop ends as soon as the client
+  is gone. Not changed.
+
+Not covered (noted, not fixed): while a helper runs it shows in the launcher's process scan as
+an unknown Windows program for its ~0.1-8 s, which errs towards "live" (a Repair or a
+`wineserver -k` waits for it). `KEY=` in the extra environment cannot remove a variable the
+launcher itself inherited (only `WINE_DISABLE_NX_COMPAT`, `ROSETTA_X87_PATH` and the
+RetroAchievements key are dropped from it); the launcher is normally started from Finder, where
+there is none.
+
+Tests after the review (release build, only the two old warnings; no game running):
+
+- `--selftest-addons-live`: 51 checks, all pass (4 new: `/unloadall` and the indirect commands
+  on every world, hosted worlds limited to addon management, exit 1 without the marker, the Lua
+  host off throughout).
+- `scripts/tests/ashita-send-test.sh`: 71 checks, all pass. New: the nine refusals above, each
+  with the `ashita-send: ` marker; the sync-mode mismatch (exit 1, no marker, nothing written,
+  next send delivered); two senders at once (80 commands, both batches whole and in order).
+  Through the launcher's own path: 58 checks with the wine section, delivered in 0.12 s, and
+  `/unloadall` and a wrong sync mode read as refused and `failed(1)`. Busy retry: delivered
+  after 2 tries, 5.8 s. Busy 3.1 s, pending 5.1 s.
+- All 25 suites pass; launcher.log identical (inode, mtime, size) before and after.
+- No wineserver left behind; the throwaway prefix's was the only one started or stopped.
 
 ## C. The account field when the window opens
 
@@ -440,7 +543,7 @@ Nothing was running during the builds, the suites or the probe. Only the two old
 (LocalServer.swift:251, Runner.swift:1971).
 
 - All 25 `--selftest-*` suites pass (re-run after B; B's suite and wine test are in section B):
-  - addons-live: 47, all new (B);
+  - addons-live: 47, all new (B); 51 after the review (B › Review);
   - perf: 45, of which 6 are new (A);
   - ui-text: 33, of which 9 are new (C);
   - primary-action 77/77, install-location 107/107, install-selection 21/21,
