@@ -5,8 +5,8 @@ tells you when there is something else to press.
 
 ## The short version
 
-1. **Drag *FFXI on Mac* into your Applications folder** and open it. Version 3.9 is signed but
-   not notarized; its release notes explain the extra first-open step if macOS blocks it.
+1. **Drag *FFXI on Mac* into your Applications folder** and open it. It is signed and notarized
+   by Apple, so it opens with no warning.
 2. **Pick your world** from the **CHANGE WORLD** menu.
 3. **Press *Setup*** — the big button where PLAY will be. It asks where to put everything first:
    choose a folder on any Mac-formatted drive with room (about 28 GB for HorizonXI). Then it
@@ -26,7 +26,7 @@ That's the whole thing. Everything below is detail you only need if something go
 game. Every world the launcher supports can get you a client for free, and the *Setup* button
 does the fetching.
 
-The game files aren't inside the launcher's 5 MB download for one reason: they're Square Enix's
+The game files aren't inside the launcher's 9 MB download for one reason: they're Square Enix's
 property and nobody may hand them out. So the launcher fetches them the same way that world's own
 Windows launcher would. You still just press a button. Anyone offering you one file with the game
 already inside it is giving away Square Enix's client, which they may not do.
@@ -35,8 +35,9 @@ already inside it is giving away Square Enix's client, which they may not do.
 
 | Piece | Size | How you get it |
 | --- | --- | --- |
-| **FFXI on Mac** (the launcher) | 5 MB | the `.dmg` you already opened |
+| **FFXI on Mac** (the launcher) | about 9 MB | the `.dmg` you already opened |
 | **Wine** (runs Windows programs on a Mac) | ~250 MB download, ~1.4 GB installed | press ***Setup*** |
+| **The game's Wine** (athei's patched CrossOver build) | 204 MB download, ~1.1 GB installed | the same ***Setup*** |
 | **The FFXI game** | 15–30 GB | the same ***Setup*** |
 
 Everything but the launcher goes in one folder you choose, *FFXI on Mac*:
@@ -97,7 +98,7 @@ inside the wrapper, into the folder you chose:
 it must be Mac-formatted (APFS or Mac OS Extended); the chooser refuses an exFAT or FAT32 drive.
 
 **A folder that already has the game.** Setup looks before it writes anything. An earlier install
-there — an *FFXI on Mac* folder, a wrapper such as *siku.app*, a HorizonXI or SquareEnix folder on
+there — an *FFXI on Mac* folder, a Sikarugir or Wineskin wrapper, a HorizonXI or SquareEnix folder on
 its own — is used, not duplicated: the chooser says what it found ("Found HorizonXI 2.0.4 in
 “siku.app” — Setup will use it.") and asks only for the room still needed. A HorizonXI folder on
 its own is moved into the install after one question (on the same drive it is one rename, nothing
@@ -110,7 +111,7 @@ checks the copy, switches to it, and then asks whether the old copy goes to the 
 
 ## Choosing a renderer
 
-**Leave it on *Metal / DXVK (recommended)*.** That's the one that draws the game correctly. The
+**Leave it on *Metal (DXVK)*** (Setup & Diagnostics → Renderer). That's the one that draws the game correctly. The
 other options exist for debugging and are known to draw wrong in various ways — the launcher says
 how under each one, and [`PATHWAYS.md`](PATHWAYS.md) has the measurements.
 
@@ -119,9 +120,10 @@ how under each one, and [`PATHWAYS.md`](PATHWAYS.md) has the measurements.
 **Being a version or two behind is normal, and the game plays fine.** Servers accept a slightly
 older client; the launcher says so in the log and lets you Play.
 
-Only use **Setup & Diagnostics › Update…** when the world has actually published an update *and*
-the game is turning you away — the login server answers *"The game's data has been updated"* and
-refuses to connect. That is the signal. Nothing else is.
+When HorizonXI publishes an update, the big button says **Update** and names the new version.
+Press it when you're ready: it downloads and applies the patch, with progress on the button and a
+Stop beside it. If you stop it or it fails, the button goes back to **Play** for this session,
+because HorizonXI's login server accepts a client one version behind.
 
 Why the caution: the update is a multi-hour download that rewrites files inside a working install.
 If it stalls part-way the client is left mid-update, which is a worse problem than being one

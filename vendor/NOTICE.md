@@ -10,7 +10,7 @@ image. `dxvk.conf` is this project's own file. Checked against the tree on 2026-
 | File | Upstream | Source | Modified | Licence |
 | --- | --- | --- | --- | --- |
 | `d3d8to9.dll` | [crosire/d3d8to9](https://github.com/crosire/d3d8to9) | v1.15.1 (a1246e6, 2026-08-09) | no | BSD 3-Clause |
-| `dxvk-1.10.3-x32-d3d9-horizonxi.dll` | [doitsujin/dxvk](https://github.com/doitsujin/dxvk) | v1.10.3 + `patches/dxvk-1.10.3-horizonxi-fencewait.patch`, rebuilt 2026-08-20 (2da0ccb) | **yes** | zlib/libpng |
+| `dxvk-1.10.3-x32-d3d9-horizonxi.dll` | [doitsujin/dxvk](https://github.com/doitsujin/dxvk) | v1.10.3 + `patches/dxvk-1.10.3-horizonxi-fencewait.patch`, rebuilt 2026-08-20 (2da0ccb) | **yes** | zlib/libpng; contains the mingw-w64 runtime (ZPL 2.1) and libstdc++/libgcc (GCC RLE) |
 | `libMoltenVK-1.4.2.dylib` | [KhronosGroup/MoltenVK](https://github.com/KhronosGroup/MoltenVK/releases/tag/v1.4.2) | v1.4.2 release (30bd913, 2026-09-26) | no (re-signed) | Apache 2.0; includes cereal (BSD 3-Clause) |
 | `x87sidecar-coop` | [athei/x87sidecar](https://github.com/athei/x87sidecar) | cooperative build of upstream 238a214 (5fe2410, 2026-08-19); Rosetta `decode_opcode` pattern changed for macOS 27's libRosettaRuntime 2026-09-24 (**3c7c2f6**) | **yes** | MIT |
 | `x87sidecar_entitled` | [athei/x87sidecar](https://github.com/athei/x87sidecar) `rosetta_loader` | upstream 238a214 + `patches/x87sidecar-attach-pid.patch` (5fe2410, 2026-08-19) | **yes** | MIT |

@@ -33,7 +33,7 @@ neither can anyone else who republishes it. Full texts of everything the app bun
 | d3d8to9 v1.15.1 | BSD 3-Clause | **bundled** |
 | MoltenVK 1.4.2 (statically includes SPIRV-Cross, SPIRV-Tools, cereal) | Apache 2.0 (cereal: BSD 3-Clause) | **bundled** |
 | x87sidecar (athei) | MIT | **bundled** |
-| mingw-w64 runtime start-up code, inside our `ashita-send.exe` | ZPL 2.1 (parts public domain / BSD) | **bundled**, as part of that program |
+| mingw-w64 runtime start-up code, inside our `ashita-send.exe` and the DXVK DLL | ZPL 2.1 (parts public domain / BSD) | **bundled**, as part of that program |
 | Vanaguide, VanaVoice | Bates LLC, each with its own `LICENSE` | **bundled**, licence beside each |
 | `addons/FFXIFriendList` (Tanyrus) | GPL-3.0 | in the repo only, **not bundled** |
 | `addons/gmtools` (SQLCommit) | MIT | in the repo only, **not bundled** |

@@ -2715,7 +2715,7 @@ struct ContentView: View {
     private func chooseInstall() {
         let panel = NSOpenPanel()
         panel.title = "Choose your HorizonXI wrapper"
-        panel.message = "Pick the wrapper app that contains the game — usually siku.app."
+        panel.message = "Pick the wrapper app that contains the game."
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
         panel.allowsMultipleSelection = false

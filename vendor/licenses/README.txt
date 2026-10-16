@@ -16,6 +16,9 @@ DXVK 1.10.3 (https://github.com/doitsujin/dxvk)
             it is not the original DXVK release.
   Licence:  zlib/libpng, Copyright (c) 2017-2021 Philip Rebohle, (c) 2019-2021 Joshua Ashton
             -> DXVK-zlib.txt
+  Also contains, statically linked (built with Homebrew mingw-w64 14.0.0 / GCC 16.2.0): the
+            mingw-w64 runtime start-up code (Zope Public License 2.1 -> mingw-w64-runtime-ZPL-2.1.txt)
+            and libstdc++/libgcc (GCC Runtime Library Exception, no notice condition).
 
 MoltenVK 1.4.2 (https://github.com/KhronosGroup/MoltenVK)
   Ships as: libMoltenVK-1.4.2.dylib (unmodified release binary, re-signed)
@@ -31,8 +34,9 @@ x87sidecar (https://github.com/athei/x87sidecar)
   Licence:  MIT, Copyright (c) 2025 Lifeisawful -> x87sidecar-MIT.txt
 
 mingw-w64 14.0.0 runtime (https://www.mingw-w64.org)
-  Ships as: part of ashita-send.exe, which is this project's own program (tools/ashita-send.c,
-            under LICENSE); its start-up code is the mingw-w64 runtime, linked in statically.
+  Ships as: part of ashita-send.exe and of dxvk-1.10.3-x32-d3d9-horizonxi.dll; ashita-send.exe is
+            this project's own program (tools/ashita-send.c, under LICENSE); in both, the start-up
+            code is the mingw-w64 runtime, linked in statically.
   Licence:  Zope Public License 2.1, Copyright (c) 2009 - 2013 by the mingw-w64 project, with the
             public-domain and BSD parts it marks -> mingw-w64-runtime-ZPL-2.1.txt
             (libgcc, also linked in, is under the GCC Runtime Library Exception, which puts no

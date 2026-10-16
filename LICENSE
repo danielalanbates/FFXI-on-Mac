@@ -12,10 +12,12 @@ with one additional term:
   Ask for one at help@batesai.org.
 
 
-Third-party components in this repository (DXVK, d3d8to9, MoltenVK, x87sidecar, and
-the addons under addons/ that carry their own LICENSE) remain under their own licences
--- see LICENSING.md and vendor/licenses/. This licence covers this project's own code
-and documentation only.
+Third-party components in this repository and in the app (DXVK, d3d8to9, MoltenVK with
+SPIRV-Cross, SPIRV-Tools and cereal, x87sidecar, the mingw-w64 runtime inside ashita-send.exe and
+the DXVK DLL, and the addons under addons/ that carry their own LICENSE) remain under their own
+licences -- see LICENSING.md and vendor/licenses/ in the source, "Third-Party Notices.txt" on the
+disk image, or FFXI-on-Mac.app/Contents/Resources/ThirdPartyNotices/. This licence covers this
+project's own code and documentation only.
 
 Contact: help@batesai.org · https://batesai.org
 
