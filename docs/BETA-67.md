@@ -184,7 +184,10 @@ starts underneath. No game client, injector or x87 sidecar of any world may be r
    - A replaced file goes in with `RENAME_SWAP`. The file that comes out must equal its backup;
      if it doesn't, it is swapped back.
    - On a file system without these flags, the same checks are made just before a plain
-     `rename(2)`.
+     `rename(2)`. **x10 is one:** it is HFS+, and its `getattrlist` volume capabilities offer
+     `RENAME_EXCL` but not `RENAME_SWAP` (read-only probe, 2026-10-15; `/`, ~/Downloads and the
+     Games drive are APFS and offer both). Any failure of either flag (other than "already
+     there") takes this path; `renamex_np` changes nothing when it fails.
 
    A file that fails here is listed, the rest go in, and the marker stays `applying`.
 5. The staging folders are removed. A staging folder left by a launcher that quit mid-copy is
@@ -247,7 +250,7 @@ stdout/stderr only. launcher.log is not touched.
 `~/Downloads/FFXI-on-Mac-build/swift-build`). Each build started only after checking that no game
 process was running. Only the two old warnings (LocalServer.swift:251, Runner.swift:1971).
 
-**`--selftest-carryover`, 61 checks, all pass.** They run on installs made up under `$TMPDIR`
+**`--selftest-carryover`, 62 checks, all pass.** They run on installs made up under `$TMPDIR`
 (removed afterwards), with a launch lock file of their own:
 
 - Reading:
@@ -305,6 +308,8 @@ process was running. Only the two old warnings (LocalServer.swift:251, Runner.sw
 - Files changed or appearing between the plan and the copy are left as they are.
 - Nothing is written, and no folder made, through a link out of the destination (a deeper
   source folder included).
+- With the rename flags off (the HFS+ path): added, replaced with a backup, and a file that
+  appeared meanwhile is kept.
 - A second backup the same day gets `-2`.
 - Case:
   - two names that differ only in case, onto a case-insensitive drive: the newer is copied;
@@ -344,7 +349,7 @@ Nothing was written there.
 
 **All 26 suites pass:**
 
-- carryover: 61, new;
+- carryover: 62, new;
 - addons-live: 51;
 - primary-action: 77/77;
 - install-location: 107/107;
@@ -358,6 +363,11 @@ Nothing was written there.
 launcher.log was identical (inode, mtime, size) before and after the suites, the CLI runs and the
 report.
 
+In the last full run, `--selftest-updater` failed 2 checks: "probe ran with the helper's five
+arguments" and "its PATH is the fixed one". Its spawned probe has 15 s to write a file, and the
+Mac's load average was about 10. It passed alone twice right after, and in both earlier full
+runs. Nothing in b67 touches the updater.
+
 ## Not verified
 
 - **The window's path has never run.** No Setup downloaded a client under b67, and no Play found
@@ -367,9 +377,8 @@ report.
   fails and that install is treated as unreadable. Whether macOS asks first (a Removable Volumes
   prompt) was not tested.
 - **The Play line** ("Close the other game first…") has not been seen in the window.
-- **`RENAME_SWAP`/`RENAME_EXCL` on HFS+.** The tests ran on APFS (`$TMPDIR`, ~/Downloads). On a
-  file system that refuses them (ENOTSUP/EINVAL), the code falls back to check-then-rename. That
-  fallback is not exercised by a test.
+- **HFS+ itself.** The tests ran on APFS. The HFS+ path (no `RENAME_SWAP`) is exercised by
+  turning the flags off in the self-test, not on an HFS+ volume. Nothing was written to x10.
 - **Real Wine/FFXI after a carry-over.** Daniel's manual restore showed that a copied USER and
   config work. This copies the same files the same way, but no session has run on a
   launcher-made copy.

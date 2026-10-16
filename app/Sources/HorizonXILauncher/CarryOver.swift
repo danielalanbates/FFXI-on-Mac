@@ -523,6 +523,10 @@ enum CarryOver {
 
     private static let stagingTag = ".carryover-"
 
+    /// Off only in the self-test, to run the path a file system without `RENAME_SWAP` /
+    /// `RENAME_EXCL` takes (HFS+ offers no swap: x10's `getattrlist` capabilities, 2026-10-15).
+    static var renameFlags = true
+
     /// Carry `p` out (see the type's comment). Throws, having changed nothing in `to`, when a
     /// copy or a backup fails or there is not room. `beforeCommit` runs once everything is copied
     /// and backed up, just before the first file goes into place; after that each file that cannot
@@ -649,7 +653,7 @@ enum CarryOver {
                     let saved = backups[a.area].map { $0 + "/" + it.target } ?? ""
                     guard facts(dst, rel: it.target) != nil else { o.skipped += 1; continue }
                     // Swapped in, and what came out must be what was backed up; else it goes back.
-                    if renamex_np(tmp, dst, UInt32(RENAME_SWAP)) == 0 {
+                    if renameFlags, renamex_np(tmp, dst, UInt32(RENAME_SWAP)) == 0 {
                         if fm.contentsEqual(atPath: tmp, andPath: saved) {
                             o.replaced += 1; o.bytes += it.size
                         } else {
@@ -658,12 +662,8 @@ enum CarryOver {
                         }
                         continue
                     }
-                    let e = errno
-                    guard e == ENOTSUP || e == EINVAL else {
-                        o.failed.append("\(a.area.rawValue)/\(it.target): \(String(cString: strerror(e)))")
-                        continue
-                    }
-                    // A file system without the swap: compared, then renamed over.
+                    // A file system without the swap (x10 is HFS+, whose volume does not offer it):
+                    // compared, then renamed over. Nothing was swapped: renamex_np is all or none.
                     guard fm.contentsEqual(atPath: dst, andPath: saved) else { o.skipped += 1; continue }
                     guard rename(tmp, dst) == 0 else {
                         o.failed.append("\(a.area.rawValue)/\(it.target): \(String(cString: strerror(errno)))")
@@ -672,13 +672,11 @@ enum CarryOver {
                     o.replaced += 1; o.bytes += it.size
                 } else {
                     // Never over something that appeared meanwhile.
-                    if renamex_np(tmp, dst, UInt32(RENAME_EXCL)) == 0 { o.added += 1; o.bytes += it.size; continue }
-                    let e = errno
-                    if e == EEXIST { o.skipped += 1; continue }
-                    guard e == ENOTSUP || e == EINVAL else {
-                        o.failed.append("\(a.area.rawValue)/\(it.target): \(String(cString: strerror(e)))")
-                        continue
+                    if renameFlags {
+                        if renamex_np(tmp, dst, UInt32(RENAME_EXCL)) == 0 { o.added += 1; o.bytes += it.size; continue }
+                        if errno == EEXIST { o.skipped += 1; continue }
                     }
+                    // A file system without the flag: checked, then renamed.
                     guard !lexists(dst) else { o.skipped += 1; continue }
                     guard rename(tmp, dst) == 0 else {
                         o.failed.append("\(a.area.rawValue)/\(it.target): \(String(cString: strerror(errno)))")

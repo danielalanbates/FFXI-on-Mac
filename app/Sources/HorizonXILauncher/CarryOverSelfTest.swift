@@ -336,6 +336,20 @@ extension Headless {
         checks.append(("changed or appeared after the plan: left as it is, never written over",
                        ro.skipped == 2 && text(user(race, "tig.dat")) == "written meanwhile"
                            && text(user(race, "99f/mcr.dat")) == "appeared meanwhile" && text(user(race, "cmb0.dat")) == "old cmb0.dat"))
+        // The same on a file system without RENAME_SWAP / RENAME_EXCL (HFS+, as x10 is).
+        C.renameFlags = false
+        let plain = install("plain-rename")
+        put(user(plain, "tig.dat"), "shipped title")
+        put(config(plain, "imgui.ini"), "shipped layout")
+        let (plu, plc) = C.readDest(C.side(plain))
+        let plp = C.plan(from: srcCand, to: C.side(plain), destUser: plu, destConfig: plc)
+        put(user(plain, "99f/mcr.dat"), "appeared meanwhile")
+        let plo = (try? C.apply(plp, from: srcCand.side, to: C.side(plain), env: env)) ?? C.Outcome(failed: ["threw"])
+        C.renameFlags = true
+        checks.append(("without the rename flags: added, replaced (backed up), and what appeared meanwhile kept",
+                       plo.failed.isEmpty && plo.replaced == 2 && plo.skipped == 1 && text(user(plain, "tig.dat")) == "old tig.dat"
+                           && text(user(plain, "99f/mcr.dat")) == "appeared meanwhile" && text(user(plain, "1410b/es0.dat")) == "old 1410b/es0.dat"
+                           && text(URL(fileURLWithPath: C.side(plain).user.path + ".bak-\(dayName)-carryover/tig.dat")) == "shipped title"))
         let escape = install("escape")
         let elsewhere = work.appendingPathComponent("elsewhere")
         try? fm.createDirectory(at: elsewhere, withIntermediateDirectories: true)
