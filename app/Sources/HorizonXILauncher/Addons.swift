@@ -224,6 +224,20 @@ struct AddonSuite {
         var warning: String
     }
 
+    /// What a sheet scan was for. A result is shown only while this still matches what is selected:
+    /// the local world and HorizonXI share one game folder but not the boot profile or the list,
+    /// and Apply writes the list on screen into the world selected when it is pressed.
+    struct SheetKey: Equatable {
+        let folder: String
+        let profile: String
+        let policy: AddonPolicy
+        init(_ i: Install, profile: String, policy: AddonPolicy) {
+            folder = i.gameDir.standardizedFileURL.path
+            self.profile = profile
+            self.policy = policy
+        }
+    }
+
     /// What the sheet says where the list will be while it scans.
     static let scanningLabel = "Searching…"
 

@@ -396,6 +396,9 @@ struct ContentView: View {
             // The preflight checks are per world now (each has its own game folder): CatsEye's
             // "no client" verdict must not keep Play grey after switching back to HorizonXI.
             recheck()
+            // A world picked while Addons… is open (a forwarded --world): the sheet lists the new
+            // world's addons, never the old one's, which Apply would write into the new world.
+            rescanAddons()
         }
         // Every job ends with fresh checks: a Download, Repair or Update that finished must turn
         // the button into the next step (or PLAY) without anyone pressing ↻.
@@ -2891,6 +2894,7 @@ struct ContentView: View {
         let generation = addonScanGeneration
         let profile = store.selected?.bootProfile ?? "horizonxi.ini"
         let policy = addonPolicy
+        let key = AddonSuite.SheetKey(i, profile: profile, policy: policy)
         addonItems = []
         hiddenAddonCount = 0
         addonWarning = ""
@@ -2899,6 +2903,14 @@ struct ContentView: View {
             let found = AddonSuite.sheetContents(i, profile: profile, policy: policy)
             await MainActor.run {
                 guard generation == addonScanGeneration, showAddons else { return }
+                // The world, its folder or its server's list changed while this ran: the result is
+                // not what the sheet now stands for, and Apply would write it there. Scan again.
+                guard let now = active,
+                      AddonSuite.SheetKey(now, profile: store.selected?.bootProfile ?? "horizonxi.ini",
+                                          policy: addonPolicy) == key else {
+                    rescanAddons()
+                    return
+                }
                 addonItems = found.items
                 hiddenAddonCount = found.hidden
                 addonWarning = found.warning
@@ -2909,6 +2921,19 @@ struct ContentView: View {
                 addonsScanning = false
             }
         }
+    }
+
+    /// The open Addons… sheet, filled again for what is selected now (world, folder, server list).
+    /// No install: an empty list, so the sheet's empty-list line says why; a scan still running
+    /// for the old world is dropped.
+    private func rescanAddons() {
+        guard showAddons else { return }
+        if let i = active { scanAddons(i); return }
+        addonScanGeneration &+= 1
+        addonItems = []
+        hiddenAddonCount = 0
+        addonWarning = ""
+        addonsScanning = false
     }
 
     private func color(_ s: Check.State) -> Color {

@@ -129,6 +129,17 @@ extension Headless {
                        scanned.warning.contains("addons") && scanned.warning.contains("Lua host")
                            && AddonSuite.mismatchWarning([]).isEmpty
                            && !AddonSuite.mismatchWarning(["foo"]).contains("Lua host")))
+        // A scan's result fills the sheet only while it is still for what is selected: the local
+        // world and HorizonXI share a folder but not the profile or the list.
+        let allowBar = AddonPolicy.allowlist(["bar"], source: "test")
+        let scanKey = AddonSuite.SheetKey(addonInstall, profile: "horizonxi.ini", policy: allowBar)
+        var otherClient = addonInstall
+        otherClient.gameDirOverride = tmp.appendingPathComponent("other-client")
+        checks.append(("Addons… scan result: kept for the same world; dropped for another profile, list or folder",
+                       scanKey == AddonSuite.SheetKey(addonInstall, profile: "horizonxi.ini", policy: allowBar)
+                           && scanKey != AddonSuite.SheetKey(addonInstall, profile: "lsb.ini", policy: allowBar)
+                           && scanKey != AddonSuite.SheetKey(addonInstall, profile: "horizonxi.ini", policy: .unknown)
+                           && scanKey != AddonSuite.SheetKey(otherClient, profile: "horizonxi.ini", policy: allowBar)))
 
         // Quit question.
         checks.append(("quit alert names the work",
