@@ -223,7 +223,7 @@ the state cache; no difference there.
 Built with `nice -n 19 swift build -c release --scratch-path ~/Downloads/FFXI-on-Mac-build/swift-build`
 (no game running; 52-59 s incremental). No new warnings from this change.
 
-`--selftest-dxvk-cache`: **all 38 checks passed**. Everything happens in
+`--selftest-dxvk-cache`: **all 38 checks passed** (39 after the review, §I). Everything happens in
 `$TMPDIR/ffxi-dxvk-cache-selftest-<uuid>` (removed afterwards); the real caches are only copied
 in (their SHA-1s are compared before and after), and the launcher's Application Support copy is
 listed before and after (unchanged). Covered: the header bytes; synthetic graphics and compute
@@ -306,3 +306,149 @@ The warm prefix is there for the next Play whichever launcher starts it; the car
 - A prefix whose `DXVK_STATE_CACHE_PATH` is overridden (Settings' extra environment) to somewhere
   other than `C:\dxvk-cache` is not followed. Daniel's override says `C:\dxvk-cache` too.
 - `install-location` self-test: 4 failures that predate this change (§F).
+
+## I. Review fixes
+
+An adversarial review of `beta-b62..beta-b63`, plus a Gemini 2.5 Flash pass over the same diff.
+
+- **A warm Play had stopped waiting for still wrote into the prefix.** The `CommitGate` only
+  blocked the final rename. A warm still waiting for the Mac copy's lock (up to 5 s, against
+  Play's 3 s), or still reading, went on to create `C:\dxvk-cache` and a temp file in the prefix
+  while the client was starting, then deleted the temp file. `writeAtomically` now checks the gate
+  before anything is written. New self-test check: a closed gate makes no folder and no file for a
+  target that does not exist yet. A rename that fails for another reason is now logged with its
+  errno, not as "not renamed in time". (0ac79a0)
+- **`--dxvk-cache-warm` did not hold the launch lock.** It checked for running clients but not for
+  a launch under way, which no process scan can see until the injector exists. If Play was pressed
+  in the window at that moment, a client could start while this renamed the prefix's cache. It
+  now takes `LaunchLock` first, as Play does, and refuses with nothing written while another holder
+  has it. (6db1ead)
+
+The format facts in §B were checked line by line against the tree (`e4fd5e9`; `git diff` there
+touches only `#include` lines in the state-cache headers). The quoted line numbers are right.
+The read loop is `while (ifile)` / `else if (ifile)` (`!fail()`), not `good()`; for this format
+that behaves the same. The sizes were checked against the bitfield classes in
+`dxvk_graphics_state.h`: ia 2, il 2, rs 4, ms 4, ds 2, om 2, stencil op 4, swizzle 1, blend 4,
+attribute 4, binding 4. `validateRenderPassFormat`'s accepted layouts are 1/3/4/0x80/0x81 for
+depth and 1/2 for colour. A separate hash-only Python reader of a copy of the live prefix file
+gives v10, 1,155 entries, 0 bad, 0 repeats, 0 tail. The file is byte-identical to the Mac copy.
+
+Checked and left as they are:
+
+- **Play blocks the main actor for up to 3 s** while it waits for the warm. This is deliberate and
+  capped. The merge takes 10-20 ms (two ~340 KB files, about 2,300 SHA-1s), and by then the x10
+  is awake because the renderer step has just written to it. The `launch` steps before and after
+  it already do synchronous disk work on the same drive.
+- **Two clients in one prefix:** the warm runs only when no client is running anywhere (any
+  Windows program under the launcher's wine counts), under the launch lock. The after-session keep
+  and the first-run seed only read the prefix. A half-appended entry reads as a tail and is left
+  for next time.
+- **A sleeping or missing drive:** the seed and keep run off the main actor. A missing drive lists
+  as empty, so the seed tries again on the next start.
+- **Self-tests:** `--selftest-dxvk-cache` passes an explicit `master:` to every seed, warm and
+  keep. The real caches are only copied, and the Application Support copy is checked to be
+  unchanged.
+- **User-visible text:** none. Every step goes to `logFileOnly`. Only the headless commands print.
+
+Gemini 2.5 Flash raised one finding: "`--dxvk-cache-warm` is `@MainActor` and can `usleep` up to
+5 s waiting for the lock." **Rejected.** It is a command-line run with no window, so a main thread
+waiting there freezes nothing. It found neither of the two defects above.
+
+Found while checking §E, **not fixed here** (outside this diff): `GraphicsSettings.iniOverrides`
+and `read(from:)` use the wrong registry keys. Ashita's own key list (`addons/lsb2.ini.example`
+lines 343-420) defines: 0000 mip mapping (0-6), 0011 environment animations (0/1/2),
+0017 bump mapping, 0018 texture compression (0 high, 1 low, 2 uncompressed), 0019 map
+compression, 0021 hardware mouse. The panel writes:
+
+| Panel setting | Key it writes | What that key really is |
+|---|---|---|
+| texture compression | 0011 | environment animations |
+| mip mapping | 0018 | texture compression |
+| bump mapping | 0019 | map compression |
+| environment animation | 0021 | hardware mouse |
+
+So "environment animation off" turns the **hardware mouse** off. `archive/README.md` and
+`docs/PATHWAYS.md` had already recorded that "0011 = 0" changed nothing about textures.
+
+Fixing this changes the panel's ranges and meaning (mip 0-6, compression order, environment
+0/1/2) and needs a migration for the values already stored. That is a change of its own. Until it
+is made, applying the panel's settings writes these four keys wrongly. The safe low-settings keys
+are 0001/0002, 0003/0004, 0037/0038 and 0029.
+
+## J. dxvk-async: not wired, not vendored
+
+The Async agent's opt-in `d3d9.dll` was built from v1.10.3 + fencewait + Sporif's
+`dxvk-async-af418dc.patch`, plus our changes:
+
+- the stock lock is back on the normal path;
+- a 32 px small-target guard for FFXI's 16×16 visibility read-back;
+- compile threads stop at teardown.
+
+Artifacts: `~/Downloads/FFXI-on-Mac-build/dxvk-async/`. The SHA-256 sums check out. It was left
+out of the launcher on purpose:
+
+- **Not shown to work.** No wine or game has ever loaded it. "Working" is inferred from a clean
+  build and matching exports.
+- **Off is not byte-for-byte stock.** Shipped in place of the current DLL, the off path reads as
+  stock 1.10.3 in the code. It still differs in its version string, an extra parameter, and
+  8 bytes more per image view. That is a reading of the code, never run. Keeping "off" truly
+  stock would mean shipping a second DLL and swapping it on the toggle.
+- **No licence.** Sporif's new code (`dxvk_pipecompiler.*`, the per-view frame counter) has no
+  licence grant. This repo has a GitHub remote and public releases.
+- **May not address the freeze.** Its own analysis points at memory (about 100 MB free, 2.3 GB
+  swap, 1920×1080 with 4096 uncompressed textures), not compiles. Async adds compile threads and
+  can raise the memory peak. With it on, a draw whose pipeline is not ready is dropped, not
+  delayed.
+
+A toggle would follow the perf-settings pattern: a `PerfSettings` field, a Setup & Diagnostics
+toggle "Smooth shader loading", and `dxvk.enableAsync = True` / `dxvk.numAsyncThreads = 2` added
+to the launcher's `dxvk.conf` only when on. `PerfSelfTest`'s "ships only the state-cache line"
+check would then apply to the off state. Prerequisites: a licence (the author's permission, the
+repo is archived, or our own ~100-line rewrite) and one in-game session on a dev bundle. The
+launcher replaces `d3d9.dll` on every Play, so a hand-copied DLL does not survive.
+
+## K. Tests after the review
+
+Release build, `nice -n 19`, no game running: 53.8 s incremental. The only warnings are the two
+existing ones, at LocalServer.swift:251 and Runner.swift:1966.
+
+| suite | result |
+|---|---|
+| dxvk-cache | 39/39 |
+| addon-install, addon-installer, addon-policy, addon-profile, addon-scrub, addon-source | all passed |
+| boot-profile 43/43, leftovers 26/26, news 36/36, primary-action 77/77, setup-progress 27/27, retroachievements 47/47 | passed |
+| cursor-fix, guide-disabled, narration-disabled, multiworld, perf, single-instance, ui-text, updater | all passed |
+| install-location | 103/107, the same 4 as on b62 (§F) |
+
+`scripts/tests/setup-scripts-test.sh` was run with `HXI_LAUNCHER_BIN` set to this build: **all
+checks passed** (100 ok). Two cases were skipped because their optional inputs were not given:
+no aria2 archive and no game Wine tarball. Section 21 ran this build's `--next-action` and `--fix`.
+
+Two environment limits shaped that run:
+
+- **The fixture is not on the internal disk.** With the default fixture there, update-client.sh
+  refuses at its real free-space check: "needs about 17 GB free; there are 12 GB". That alone
+  failed 20 checks.
+- **The fixture path has no spaces.** game-wine.sh fetches through `file://$F/...`, which breaks on
+  a space, as in "Video Games".
+
+So the run used `FIXTURE=<scratch>/fixture/setup-scripts`, a symlink to a folder on the x10. That
+folder was deleted afterwards. No refusals were seen for a running game: none was running.
+
+`--dxvk-cache-report` against the live installs: Mac copy 1,155 + 19, seeded. The new install's
+prefix has all 1,155, so Play would add nothing. siku.app's prefix would get +23 if it were played
+again. Read-only, 1.2 s.
+
+## L. Still to check in game (Daniel)
+
+1. **Install this build.** `/Applications` still has the old one. The live prefix is already warm,
+   but warm-before-Play and keep-after only run from this build.
+2. **First session on the warm cache:** does the freeze still happen when a new character, gear or
+   area appears, especially one siku.app had already drawn? launcher.log should show
+   `dxvk cache: prefix horizon-loader.dxvk-cache already has all 1155` before Play, and
+   `dxvk cache: Mac copy ... +N` after.
+3. **The resolution and textures** (§E): the new install draws 1920×1080 with 4096 uncompressed
+   background textures; siku.app used 1280×720 with 512. This is still the most likely cause of
+   the whole-Mac freezes (swap). Whether to bring the new install down is Daniel's call. Use the
+   keys listed in §I, not the Graphics panel's Apply, until the key mapping is fixed.
+4. **Memory while playing:** free memory and swap, against the same scene on siku.app's settings.
