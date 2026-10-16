@@ -8,7 +8,9 @@
 // Nothing is ever ordered front and the app may never activate (activation policy Prohibited),
 // so it is safe to run while somebody is using the Mac. Build/run: scripts/tests/gamewindow-test.sh
 #import <AppKit/AppKit.h>
+#import <objc/message.h>
 #include <mach-o/dyld.h>
+#include <math.h>
 #include <string.h>
 
 static int failures = 0;
@@ -26,11 +28,41 @@ static BOOL dylib_loaded(void) {
     return NO;
 }
 
-// winemac.drv's windows are NSPanels (WineWindow : NSPanel).
-@interface FakeWineWindow : NSPanel
+// winemac.drv's windows are NSPanels (WineWindow : NSPanel), and each is its own delegate:
+// windowWillResize:toSize: returns AppKit's size unless the game's window procedure handles
+// WM_SIZING (query_resize_size). `forced` stands in for a game that does, with its own size.
+@interface FakeWineWindow : NSPanel <NSWindowDelegate>
+@property NSSize forced;   // content size the "game" answers WM_SIZING with; zero = not handled
 @end
 @implementation FakeWineWindow
+- (NSSize)windowWillResize:(NSWindow *)sender toSize:(NSSize)frameSize {
+    (void)sender;
+    if (self.forced.width <= 0) return frameSize;
+    return [self frameRectForContentRect:NSMakeRect(0, 0, self.forced.width, self.forced.height)].size;
+}
 @end
+
+// The size AppKit's live-resize tracking computes for one drag of the right edge (private, guarded:
+// returns NO when this macOS does not have it). Pure computation on a window that is never shown.
+static BOOL drag_right_edge(NSWindow *w, CGFloat dx, NSSize *content) {
+    SEL s = NSSelectorFromString(@"_frame:resizedFromEdge:withDelta:withEvent:");
+    if (![w respondsToSelector:s]) return NO;
+#if defined(__x86_64__)
+    // A 32-byte struct comes back through memory on x86_64: the _stret entry point.
+    NSRect r = ((NSRect (*)(id, SEL, NSRect, unsigned long, NSSize, id))objc_msgSend_stret)(
+        w, s, w.frame, 4 /* right edge, as measured on macOS 27 */, NSMakeSize(dx, 0), nil);
+#else
+    NSRect r = ((NSRect (*)(id, SEL, NSRect, unsigned long, NSSize, id))objc_msgSend)(
+        w, s, w.frame, 4 /* right edge, as measured on macOS 27 */, NSMakeSize(dx, 0), nil);
+#endif
+    *content = [w contentRectForFrameRect:r].size;
+    return YES;
+}
+
+static BOOL in_ratio(NSSize c, NSSize ratio) {
+    double off = c.width * ratio.height - c.height * ratio.width;
+    return fabs(off) <= ratio.width + ratio.height;   // within one point either way
+}
 
 static NSWindow *make(Class cls, NSWindowStyleMask mask, CGFloat w, CGFloat h) {
     NSWindow *win = [[cls alloc] initWithContentRect:NSMakeRect(100, 100, w, h)
@@ -159,7 +191,45 @@ int main(int argc, char **argv) {
                          : "a window's own ratio is kept without HXI_GAME_ASPECT",
               same(other.contentAspectRatio, expectLock ? target : NSMakeSize(4, 3)));
 
-        for (NSWindow *w in @[game, keyed, floorWin, fixed, bare, tiny, bg, other]) [w close];
+        // What a drag does with the lock: AppKit's own resize computation (the one its live-resize
+        // tracking runs per mouse event), on wine-shaped windows that are their own delegate and
+        // are never shown. A right-edge drag of +300 points without the lock only widens; with it
+        // the height follows. And when the "game" answers WM_SIZING with its own size, that size
+        // wins: AppKit applies the ratio before asking the delegate, not after.
+        FakeWineWindow *dragged = (FakeWineWindow *)make([FakeWineWindow class], gameMask, 960, 540);
+        dragged.delegate = dragged;
+        post(NSWindowDidBecomeKeyNotification, dragged);
+        FakeWineWindow *control = (FakeWineWindow *)make([FakeWineWindow class], gameMask, 960, 540);
+        control.delegate = control;
+        NSSize c1, c0;
+        if (drag_right_edge(dragged, 300, &c1) && drag_right_edge(control, 300, &c0)) {
+            printf("info  right-edge drag +300: locked window -> %.0fx%.0f, unlocked -> %.0fx%.0f points\n",
+                   c1.width, c1.height, c0.width, c0.height);
+            check("an unlocked window's drag changes only the width (the squeeze this prevents)",
+                  c0.width > 960 && c0.height == 540);
+            if (expectLock) {
+                check("a locked window's drag keeps HXI_GAME_ASPECT, the height following the width",
+                      c1.width > 960 && c1.height > 540 && in_ratio(c1, target));
+                dragged.forced = NSMakeSize(1000, 400);
+                NSSize cf;
+                drag_right_edge(dragged, 300, &cf);
+                check("a game that answers WM_SIZING with its own size overrides the ratio (why the log reports it)",
+                      cf.width == 1000 && cf.height == 400);
+                dragged.forced = NSZeroSize;
+            } else {
+                check("without a valid HXI_GAME_ASPECT a drag is as free as before", same(c1, c0));
+            }
+        } else {
+            printf("info  AppKit's drag computation is not available on this macOS; drag checks skipped\n");
+        }
+        // FFXI_GAMEWINDOW_DEBUG reports the end of a live resize (the shell checks the lines):
+        // one in proportion, then one the "game" forced out of it. Never moves or shows anything.
+        post(NSWindowDidEndLiveResizeNotification, dragged);
+        [dragged setContentSize:NSMakeSize(1000, 400)];
+        post(NSWindowDidEndLiveResizeNotification, dragged);
+        check("the dragged windows were never shown", !dragged.isVisible && !control.isVisible);
+
+        for (NSWindow *w in @[game, keyed, floorWin, fixed, bare, tiny, bg, other, dragged, control]) [w close];
         printf("%s: %d failure(s)\n", failures ? "FAILED" : "ok", failures);
     }
     return failures ? 1 : 0;

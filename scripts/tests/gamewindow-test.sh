@@ -3,8 +3,13 @@
 # an app (the window test runs with activation policy Prohibited and never orders anything
 # front), and exits by itself.
 #
-#   ./gamewindow-test.sh     window tests (arm64, then x86_64 under Rosetta), a process with no
-#                            AppKit, and the DYLD_INSERT_LIBRARIES carry across the x87 sidecar
+#   ./gamewindow-test.sh     window tests (arm64, then x86_64 under Rosetta) including AppKit's own
+#                            drag computation on a locked window, a process with no AppKit, and the
+#                            DYLD_INSERT_LIBRARIES carry across the x87 sidecar, with the sidecar's
+#                            real cooperative handshake and x87 hook
+#
+# Run it only when no game is running: the carry test starts a renamed copy of the x87 sidecar,
+# which attaches to the test's own probe and nothing else, but it is the same JIT the game uses.
 #
 # GOTCHA: nothing here is run through arch(1) or env(1). Both are system binaries and dyld strips
 # DYLD_* across an exec into them; the x86_64 binaries are run directly and Rosetta takes them.
@@ -30,10 +35,18 @@ for arch in arm64 x86_64; do
     bad "build the window test ($arch)"; continue
   fi
   print "== window test, $arch, HXI_GAME_ASPECT=1920x1080"
-  if DYLD_INSERT_LIBRARIES="$DYLIB" HXI_GAME_ASPECT=1920x1080 FFXI_GAMEWINDOW_DEBUG=1 "$T/wt-$arch" lock; then
+  out=$(DYLD_INSERT_LIBRARIES="$DYLIB" HXI_GAME_ASPECT=1920x1080 FFXI_GAMEWINDOW_DEBUG=1 "$T/wt-$arch" lock 2>&1); rc=$?
+  print -r -- "$out"
+  if [[ $rc == 0 ]]; then
     pass "window test locks game windows ($arch)"
   else
     bad "window test locks game windows ($arch)"
+  fi
+  if [[ "$out" == *"resize ended: window "*" is 960x540 points, in proportion with 1920:1080"* \
+        && "$out" == *"resize ended: window "*" is 1000x400 points, OUT OF PROPORTION with"* ]]; then
+    pass "FFXI_GAMEWINDOW_DEBUG reports whether a live resize kept the ratio ($arch)"
+  else
+    bad "FFXI_GAMEWINDOW_DEBUG reports whether a live resize kept the ratio ($arch)"
   fi
   print "== window test, $arch, no HXI_GAME_ASPECT"
   if ( unset HXI_GAME_ASPECT; DYLD_INSERT_LIBRARIES="$DYLIB" FFXI_GAMEWINDOW_DEBUG=1 "$T/wt-$arch" none ); then
@@ -90,8 +103,10 @@ done
 
 # --- The carry across the x87 sidecar ----------------------------------------------------------
 # The real sidecar binary, signed with the hardened runtime as bundle.sh signs it, under a name no
-# game-process scan matches. Its cooperative service waits for a handshake the probe never sends;
-# it is killed as soon as the probe has reported.
+# game-process scan matches. The probe does wine's cooperative handshake with it (the sidecar then
+# installs its x87 JIT hook in the probe, as in the game) and runs x87 arithmetic; with a ratio set,
+# so CoreFoundation is opened before the handshake exactly as in the client. The sidecar exits with
+# the probe; anything left is killed.
 if clang -arch x86_64 -O1 -o "$T/carry" "$REPO/scripts/tests/gamewindow-carry.c"; then
   print "== direct exec (x87 off): the probe sees the dylib"
   out=$(DYLD_INSERT_LIBRARIES="$DYLIB" "$T/carry" probe x 2>&1)
@@ -103,17 +118,17 @@ if clang -arch x86_64 -O1 -o "$T/carry" "$REPO/scripts/tests/gamewindow-carry.c"
     local log="$T/carry-$1.log" pid
     if [[ $# -ge 3 ]]; then
       ROSETTA_X87_PATH="$2" FFXI_GAMEWINDOW_CARRY="$3" DYLD_INSERT_LIBRARIES="$DYLIB" FFXI_GAMEWINDOW_DEBUG=1 \
-        "$T/carry" wine "$T/carry" > "$log" 2>&1 &
+        HXI_GAME_ASPECT=1920x1080 "$T/carry" wine "$T/carry" > "$log" 2>&1 &
     else
       ( unset FFXI_GAMEWINDOW_CARRY
         ROSETTA_X87_PATH="$2" DYLD_INSERT_LIBRARIES="$DYLIB" FFXI_GAMEWINDOW_DEBUG=1 \
-          exec "$T/carry" wine "$T/carry" ) > "$log" 2>&1 &
+          HXI_GAME_ASPECT=1920x1080 exec "$T/carry" wine "$T/carry" ) > "$log" 2>&1 &
     fi
     pid=$!
     wait $pid
-    sleep 0.3
+    sleep 1
     for p in $(pgrep -f "$SERVICE_PATTERN" 2>/dev/null); do kill "$p" 2>/dev/null; done
-    grep -v '^#\|^WARNING\|^PROCESS\|^32-BIT\|rosettax87' "$log"
+    grep -v '^#\|^WARNING\|^PROCESS\|^32-BIT\|rosettax87\|^M2:' "$log"
   }
   sidecar_test() {  # sidecar_test <sidecar> <description> <resign: yes|no>
     rm -f "$T/scprobe"
@@ -127,6 +142,9 @@ if clang -arch x86_64 -O1 -o "$T/carry" "$REPO/scripts/tests/gamewindow-carry.c"
       return 3
     fi
     pass "x87 on without the carry: the hardened sidecar strips DYLD_INSERT_LIBRARIES (the problem)"
+    [[ "$off" == *"probe: x87 handshake=0 sum=249750.0"* ]] \
+      && pass "x87 on without the carry: the sidecar accepts the handshake and x87 runs (baseline)" \
+      || bad "x87 on without the carry: the sidecar accepts the handshake and x87 runs (baseline)"
     print "== x87 on, carry on ($2)"
     on=$(carry_run on "$T/scprobe")
     print -r -- "$on"
@@ -140,6 +158,11 @@ if clang -arch x86_64 -O1 -o "$T/carry" "$REPO/scripts/tests/gamewindow-carry.c"
       pass "x87 on with the carry: the client's arguments arrive unchanged"
     else
       bad "x87 on with the carry: the client's arguments arrive unchanged"
+    fi
+    if [[ "$on" == *"probe: x87 handshake=0 sum=249750.0"* ]]; then
+      pass "x87 on with the carry: the sidecar's handshake still succeeds (hook installed) and x87 runs"
+    else
+      bad "x87 on with the carry: the sidecar's handshake still succeeds (hook installed) and x87 runs"
     fi
     return 0
   }

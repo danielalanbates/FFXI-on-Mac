@@ -22,6 +22,15 @@
 //      setContentAspectRatio: with that size. AppKit then keeps every drag of an edge or a corner
 //      in that proportion.
 //
+// Wine's Mac driver does not get in the way (athei/wine cx-26-patched, dlls/winemac.drv): WineWindow
+// resizes through AppKit's own tracking ([super sendEvent:]; its sendEvent: override only handles
+// title-bar drags), its setFrame overrides call super, and constrainFrameRect:toScreen: is about
+// screens. AppKit applies the ratio *before* calling the delegate's windowWillResize:toSize: and
+// uses what the delegate returns (measured on macOS 27 through NSWindow's
+// _frame:resizedFromEdge:withDelta:withEvent:, scripts/tests/gamewindow-test.m). WineWindow is its
+// own delegate and returns that size unchanged unless the game's window procedure handles
+// WM_SIZING and returns TRUE (query_resize_size); DefWindowProc does not handle WM_SIZING.
+//
 // Without a valid HXI_GAME_ASPECT nothing is observed at all. The window's own shape is not used
 // instead: the window cannot be told apart from any other titled window in the process, and the
 // shape it has may already be wrong (a window bigger than the screen is cut down on one side only),
@@ -57,7 +66,8 @@
 //   * full-screen windows are left alone;
 //   * no allocation on the notification path; the carry builds its argv on the stack.
 //
-// Debug output: set FFXI_GAMEWINDOW_DEBUG=1 to get one stderr line per action.
+// Debug output: set FFXI_GAMEWINDOW_DEBUG=1 to get one stderr line per action, and one at the end
+// of every live resize of a locked window saying whether it really kept the ratio.
 
 #include <CoreFoundation/CoreFoundation.h>   // types only: CoreFoundation is not linked (see above)
 #include <dlfcn.h>
@@ -94,14 +104,22 @@ static int gw_debug = 0;
 static int gw_carry = 0;
 static double gw_aspect_w = 0, gw_aspect_h = 0;   // 0 = no target, nothing observed
 
+/// One line on stderr, written with a single write(2): no stdio lock is taken, because the carry
+/// logs from wine's forked child, where a FILE lock held by another thread at fork() would never
+/// be released.
 static void gw_log(const char *fmt, ...) {
     if (!gw_debug) return;
+    char line[1024];
+    int n = snprintf(line, sizeof(line), "gamewindow: ");
     va_list ap;
     va_start(ap, fmt);
-    fprintf(stderr, "gamewindow: ");
-    vfprintf(stderr, fmt, ap);
-    fprintf(stderr, "\n");
+    int m = vsnprintf(line + n, sizeof(line) - (size_t)n - 1, fmt, ap);
     va_end(ap);
+    if (m < 0) return;
+    size_t len = (size_t)n + ((size_t)m < sizeof(line) - (size_t)n - 1 ? (size_t)m : sizeof(line) - (size_t)n - 2);
+    line[len++] = '\n';
+    ssize_t w = write(STDERR_FILENO, line, len);
+    (void)w;
 }
 
 /// "<W>x<H>", both whole numbers in 1...32768 and the ratio within 1:4 ... 4:1. Anything else is
@@ -193,10 +211,45 @@ static void gw_lock(const void *object, const char *why) {
            content.width, content.height, gw_aspect_w, gw_aspect_h);
 }
 
+/// FFXI_GAMEWINDOW_DEBUG only: after a live resize, say whether the window really kept the ratio.
+/// AppKit applies contentAspectRatio *before* the delegate's windowWillResize:toSize: and takes
+/// whatever the delegate returns (measured on macOS 27, scripts/tests/gamewindow-test.m); wine's
+/// delegate returns AppKit's size unless the game's window procedure handles WM_SIZING and returns
+/// TRUE (winemac.drv query_resize_size). A window that ends a drag out of proportion therefore
+/// means the game overrode the size. Read-only.
+static void gw_report(const void *object) {
+    if (!object || gw_aspect_w <= 0 || gw_aspect_h <= 0 || !pthread_main_np()) return;
+    Class nswindow = objc_getClass("NSWindow");
+    if (!nswindow) return;
+    SEL isKind = sel_registerName("isKindOfClass:"), contentView = sel_registerName("contentView");
+    SEL aspect = sel_registerName("contentAspectRatio");
+    id win = (id)object;
+    if (!((BOOL (*)(id, SEL, Class))objc_msgSend)(win, isKind, nswindow)) return;
+    if (!gw_responds(win, contentView) || !gw_responds(win, aspect)) return;
+    gw_size current = ((gw_size (*)(id, SEL))objc_msgSend)(win, aspect);
+    if (current.width != gw_aspect_w || current.height != gw_aspect_h) return;   // not a locked window
+    id view = ((id (*)(id, SEL))objc_msgSend)(win, contentView);
+    if (!view) return;
+    gw_rect c = gw_frame(view);
+    if (!(c.width > 0 && c.height > 0)) return;
+    // Within one point either way of the ratio: what AppKit's whole-point rounding allows.
+    double off = c.width * gw_aspect_h - c.height * gw_aspect_w;
+    if (off < 0) off = -off;
+    gw_log("resize ended: window %p is %.0fx%.0f points, %s %.0f:%.0f", (void *)win, c.width, c.height,
+           off <= gw_aspect_w + gw_aspect_h ? "in proportion with" : "OUT OF PROPORTION with (the game overrode the size)",
+           gw_aspect_w, gw_aspect_h);
+}
+
 static void gw_will_resize(CFNotificationCenterRef center, void *observer, CFNotificationName name,
                            const void *object, CFDictionaryRef info) {
     (void)center; (void)observer; (void)name; (void)info;
     gw_lock(object, "resize");
+}
+
+static void gw_did_end_resize(CFNotificationCenterRef center, void *observer, CFNotificationName name,
+                              const void *object, CFDictionaryRef info) {
+    (void)center; (void)observer; (void)name; (void)info;
+    gw_report(object);
 }
 
 static void gw_became_key(CFNotificationCenterRef center, void *observer, CFNotificationName name,
@@ -229,6 +282,11 @@ static int gw_observe(void) {
     static int token;   // observer identity; only its address matters
     addObserver(center, &token, gw_will_resize, resize, NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
     addObserver(center, &token, gw_became_key, key, NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
+    if (gw_debug) {
+        CFStringRef ended = makeString(NULL, "NSWindowDidEndLiveResizeNotification", kCFStringEncodingUTF8);
+        if (ended) addObserver(center, &token, gw_did_end_resize, ended, NULL,
+                               CFNotificationSuspensionBehaviorDeliverImmediately);
+    }
     return 1;
 }
 
