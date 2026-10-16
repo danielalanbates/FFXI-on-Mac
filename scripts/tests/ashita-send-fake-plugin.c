@@ -15,8 +15,13 @@
  *           each entry's raw text as "raw <text>";
  *   busy    handled_ stays 0 (a batch the game never takes): a sender must give up as busy;
  *   stall   handled_ = 1 but never polls (a game that stopped reading its keyboard): a sender's
- *           batch stays pending.
+ *           batch stays pending;
+ *   late    starts with an earlier batch waiting ("/echo earlier", handled_ = 0) and only begins
+ *           polling, as normal, after 6 s: a game in the background that takes an earlier
+ *           pending change when it is brought back. A sender is busy until then.
  * The first line of <out-file> is "ready <pid>" once the block exists. Exits after <seconds>.
+ * Further arguments are ignored: the test passes "--server fake.invalid" so the launcher's process
+ * scan files this fake under a host of its own, like a game client.
  * Kept to KERNEL32 and the C runtime, like the helper.
  */
 #include <windows.h>
@@ -67,7 +72,7 @@ int main(int argc, char **argv)
     DWORD start, seconds;
     const char *mode;
 
-    if (argc != 4) { fprintf(stderr, "usage: fake-plugin normal|busy|stall <out-file> <seconds>\n"); return 2; }
+    if (argc < 4) { fprintf(stderr, "usage: fake-plugin normal|busy|stall <out-file> <seconds>\n"); return 2; }
     mode = argv[1];
     seconds = strtoul(argv[3], NULL, 10);
     out = fopen(argv[2], "ab");   /* binary: "\n", not "\r\n" */
@@ -81,6 +86,14 @@ int main(int argc, char **argv)
     if (!m) { fprintf(stderr, "MapViewOfFile failed %lu\n", GetLastError()); return 1; }
     m->num_commands_ = 0;
     m->handled_ = strcmp(mode, "busy") ? 1 : 0;
+    if (!strcmp(mode, "late")) {
+        memset(&m->commands_[0], 0, sizeof m->commands_[0]);
+        m->commands_[0].command_ = 3;
+        strcpy(m->commands_[0].text_, "/echo earlier");
+        m->num_commands_ = 1;
+        MemoryBarrier();
+        m->handled_ = 0;
+    }
 
     _snprintf(ready, sizeof ready, "%lu", (unsigned long)GetCurrentProcessId());
     ready[sizeof ready - 1] = 0;
@@ -89,7 +102,9 @@ int main(int argc, char **argv)
     start = GetTickCount();
     while (GetTickCount() - start < seconds * 1000) {
         Sleep(16);
-        if (strcmp(mode, "normal") || m->handled_) continue;
+        if (!strcmp(mode, "late")) { if (GetTickCount() - start < 6000) continue; }
+        else if (strcmp(mode, "normal")) continue;
+        if (m->handled_) continue;
         MemoryBarrier();
         {
             UINT32 x, n = m->num_commands_;

@@ -43,6 +43,8 @@ enum Headless {
             || a.contains("--selftest-leftovers")
             || a.contains("--selftest-dxvk-cache")
             || a.contains("--selftest-graphics")
+            || a.contains("--selftest-addons-live")
+            || a.contains("--send-ashita")
             || a.contains("--leftovers-report")
             || a.contains("--dxvk-cache-report")
             || a.contains("--dxvk-cache-warm")
@@ -125,6 +127,9 @@ enum Headless {
         if args.contains("--selftest-graphics") {
             runGraphicsSelfTest()
         }
+        if args.contains("--selftest-addons-live") {
+            runAddonsLiveSelfTest()
+        }
         if args.contains("--news-preview") { runNewsPreview() }
         if args.contains("--leftovers-report") { runLeftoversReport() }
         if args.contains("--dxvk-cache-report") { runDXVKCacheReport() }
@@ -142,6 +147,7 @@ enum Headless {
             FileHandle.standardError.write(Data("unknown self-test \(unknown)\n".utf8))
             exit(2)
         }
+        if args.contains("--send-ashita") { runSendAshita(args) }
         if args.contains("--next-action") { runNextAction() }
         if args.contains("--fix") { runFix() }
         guard args.contains("--check") else { return }

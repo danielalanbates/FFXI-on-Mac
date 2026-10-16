@@ -77,9 +77,9 @@ send_stdin() {
 }
 
 # Start a fake plugin in the background; waits for its "ready" line. Sets FAKE_PID (Mac pid).
-start_fake() {  # mode, file, seconds
+start_fake() {  # mode, file, seconds, [extra arguments]
   : > "$2"
-  "$WINE" "$FAKE" "$1" "$(winpath "$2")" "$3" >/dev/null 2>&1 &
+  "$WINE" "$FAKE" "$1" "$(winpath "$2")" "$3" "${@:4}" >/dev/null 2>&1 &
   FAKE_PID=$!
   local i
   for i in {1..600}; do
@@ -150,6 +150,36 @@ wait $FAKE_PID 2>/dev/null
 send "/addon load clock";                 check "after the second exits, one again: exit 0" "$RC" 0
 echo "     waiting for the first fake to exit"
 wait $F1PID 2>/dev/null
+
+# The launcher's own path (LiveAddons.resolve + run) against a fake filed under its own host.
+LAUNCHER="${HXI_LAUNCHER_BIN:-$HOME/Downloads/FFXI-on-Mac-build/swift-build/release/HorizonXILauncher}"
+if [[ -x "$LAUNCHER" ]]; then
+  echo "-- the launcher's own path: $LAUNCHER --selftest-addons-live"
+  F5="$OUT/launcher.txt"
+  start_fake normal "$F5" 30 --server fake.invalid || exit 1
+  HXI_LIVE_ADDONS_WINE_PREFIX="$PREFIX" HXI_LIVE_ADDONS_WINE="$WINE" "$LAUNCHER" --selftest-addons-live \
+    > "$OUT/selftest.txt" 2>&1
+  RC=$?
+  /usr/bin/grep -E ' wine: ' "$OUT/selftest.txt" | /usr/bin/sed 's/^/   /'
+  /usr/bin/tail -1 "$OUT/selftest.txt" | /usr/bin/sed 's/^/   /'
+  check "--selftest-addons-live with its wine section: exit 0" "$RC" 0
+  check "the fake got exactly what LiveAddons sent, and not the refused line" \
+    "$(lines cmd "$F5" | /usr/bin/tr '\n' '|')" "/addon unload clock|/load minimap|"
+  wait $FAKE_PID 2>/dev/null
+  echo "-- the launcher's busy retry: an earlier change waits 6 s for the game"
+  F6="$OUT/late.txt"
+  start_fake late "$F6" 20 --server fake.invalid || exit 1
+  HXI_LIVE_ADDONS_WINE_PREFIX="$PREFIX" HXI_LIVE_ADDONS_WINE="$WINE" HXI_LIVE_ADDONS_WINE_CASE=late \
+    "$LAUNCHER" --selftest-addons-live > "$OUT/selftest-late.txt" 2>&1
+  RC=$?
+  /usr/bin/grep -E ' wine: |==> |!! ' "$OUT/selftest-late.txt" | /usr/bin/sed 's/^/   /'
+  check "--selftest-addons-live, busy then delivered: exit 0" "$RC" 0
+  check "the earlier change ran first, then this one" \
+    "$(lines cmd "$F6" | /usr/bin/tr '\n' '|')" "/echo earlier|/addon load timers|"
+  wait $FAKE_PID 2>/dev/null
+else
+  echo "-- (no launcher build at $LAUNCHER: the LiveAddons path is not tested)"
+fi
 
 echo "-- busy (a batch never taken)"
 F3="$OUT/busy.txt"
