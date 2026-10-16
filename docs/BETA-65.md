@@ -66,8 +66,9 @@ When `install.last` is set but not on disk, the main button takes the b60 path
 - drive known to macOS but not mounted: **Repair** (mount);
 - drive there but folder gone: **Setup**.
 
-Reconnecting the drive brings that install back. While it is away, a mount or activation stats
-only its own prefix; it does not scan /Volumes each time.
+Reconnecting the drive brings that install back. While it is away, a recheck (mount, activation,
+world switch, a job ending) looks at its own prefix, off the main thread, and does not scan
+/Volumes each time (review fix, section F).
 
 The scan's best, used only when there is no `install.last`:
 
@@ -188,10 +189,8 @@ Not run: `scripts/tests/setup-scripts-test.sh`. No script changed.
   is still literally true.
 - **The folder button's panel still says "usually siku.app".** That text is older than Setup's
   "FFXI on Mac Wine.app". It was left as it is.
-- **A stat on the main thread.** While `install.last` is away, a mount or activation stats its
-  prefix on the main thread. On a ghost or unplugged drive that is an immediate ENOENT. A
-  spinning-up drive could hold the window briefly. Up to b64 the code scanned instead (off the main
-  thread, but the whole of /Volumes).
+- **A stat on the main thread.** Fixed in the review (section F): the look at `install.last`'s
+  prefix now happens off the main thread.
 - **"Ran last" is a proxy.** It is the modification time of the prefix's registry files. It matters
   only when there is no `install.last` (first run, or defaults cleared).
 - **`--check` exits 2 when `install.last` is away.** It no longer checks whichever install
@@ -199,3 +198,84 @@ Not run: `scripts/tests/setup-scripts-test.sh`. No script changed.
 - **Empty `org.batesai.horizonxi-on-mac.selftest-*.plist` files.** Every self-test run leaves one
   in ~/Library/Preferences (cfprefsd keeps the emptied file). That is not new; 113 were there after
   this run.
+
+## F. Review (adversarial, after db59023)
+
+Searched for any path that can still switch installs without the user, a state with nothing
+selected and no Setup, broken per-world client folders, a gap where the picker was, and headless
+commands that used the picker's choice. Three defects were found and fixed:
+
+| Commit | Defect | Fix |
+|---|---|---|
+| b00af09 | A rescan's decision is taken in its detached task. If Setup, Move… or the folder button chose an install after that (during the dedupe, or before the result reached the main actor), `selected` was set back to the older install until the next rescan, while `install.last` already named the new one. | A `selected` that changed during the scan stands; the scan only adds to the list. |
+| a839d62 | While `install.last` was away, every mount, unmount and activation stat'ed its prefix on the main thread (`autoRecheck`). On the spinning x10 waking up that holds the window. | The look happens in the recheck's detached task, next to `Primary.rememberedDrive`. A prefix that is back starts the rescan that takes it up. Any recheck (world switch, a job ending) now notices it, not only mount and activation. |
+| e3cd8e4 | `install.last` is `<wrapper path>#<prefix>` and was split at every "#". A wrapper in a folder the user named with one ("Games #2") read as no `install.last` at all, and the next rescan adopted the scan's best: another install. | Split at the last "#" (the prefix is a folder name). `rememberedWrapper` shares the parser. New self-test check. |
+
+Traced and sound:
+
+- **World change.** `onChange(of: store.selectedID)` only rechecks. `active` is still
+  `selected.forServer(world)`, so each world's `dataPath` client folder resolves as in b64.
+- **Every writer of `selected`:**
+  - the launch fast path (`install.last` on disk);
+  - `refreshAsync` (`InstallSelection`);
+  - Setup (`setupNewLocation`; G11 keeps the install that has the game);
+  - Move… (`finishMove`);
+  - the folder button (`chooseInstall`).
+  
+  Each of the last three also writes `install.last`. Leftover adoption (b62) and `--play`
+  only read `active`.
+- **No dead state.**
+  - `install.last` away: Setup (drive unplugged or ghost), Repair (mount), or Setup (folder gone).
+  - Nothing at all: Setup.
+  - While a scan runs with nothing selected, the button says Checking; it decides when the scan
+    ends.
+- **Layout.** The picker was a bare `if` inside the sidebar's `VStack(spacing: 14)`. Nothing is
+  left between "Remember me" and the main button.
+- **Headless.**
+  - `--check`, `--next-action` and `--fix` use `InstallSelection.inUse()`.
+  - `--dxvk-cache-report`, `--dxvk-cache-warm` and `--leftovers-report` use
+    `Install.remembered()` or `--prefix`.
+  - Nothing falls back to `discover().first`; no script reads `install.last`.
+
+Gemini (gemini-2.5-flash) on the b65 source diff, two notes, neither a defect:
+
+1. "Removing the picker prevents choosing another install." This is what Daniel asked for. The
+   folder button still switches wrappers, and worlds come from the world list, not the picker.
+2. "`--check`'s 'install in use isn't on disk' line is needless text." It is a CLI error on stderr,
+   shown only when something is wrong. (Gemini also called it `--play`; it is `--check`.)
+
+Tests, with the release build of e3cd8e4 (only the two old warnings). It was built
+after Daniel's game had exited (19:23); nothing was running during the build or the tests.
+
+- All 24 `--selftest-*` suites pass:
+  - install-selection: **21/21** (the "#" case added);
+  - install-location: 107/107;
+  - primary-action: 77/77;
+  - setup-progress: 27/27;
+  - graphics: 64; boot-profile: 43; dxvk-cache: 39; leftovers: 26; news: 36;
+    retroachievements: 47;
+  - all checks passed in: addon-install, addon-installer, addon-policy, addon-profile,
+    addon-scrub, addon-source, cursor-fix, guide-disabled, multiworld, narration-disabled, perf,
+    single-instance, ui-text, updater.
+- `scripts/tests/setup-scripts-test.sh` (with `HXI_LAUNCHER_BIN` and the aria2 archive): 85 ok,
+  **20 FAIL, all environment.**
+  - They are the same cases as b64: 10, 11, 12, 16, 30 and 31.
+  - `update-client.sh` refuses with "HorizonXI needs about 17 GB free; there are 14 GB".
+  - Case 21, the launcher's own `--next-action` and `--fix` on the fixture: all ok.
+- Read-only on Daniel's real defaults:
+  - `--next-action HorizonXI` gives `play | Play |` (exit 0).
+  - `--check --world HorizonXI` (only its `install:` line read) resolves
+    `/Volumes/x10/Video Games/Mac/FFXI/FFXI on Mac/FFXI on Mac Wine.app [prefix10]`, which is
+    `install.last`, not siku.app.
+  - `install.last` and `install.location` are unchanged.
+- launcher.log:
+  - Identical (inode, mtime, size) before and after the 24 suites, and before and after the
+    read-only runs.
+  - It was rotated once at 19:25:58, during setup-scripts-test.sh, by the installed
+    `/Applications/FFXI-on-Mac.app`. That app was started at 19:25:57 with launchd as its parent;
+    nothing in the test or the scripts it runs opens an app.
+
+Left as they are:
+
+- The folder panel's "usually siku.app".
+- A forwarded `--play` while `install.last` is away logs "no install found yet".
