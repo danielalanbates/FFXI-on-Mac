@@ -180,6 +180,12 @@ static int title_main(const char *first, BOOL expect) {
     NSWindow *small = make(wineWindow, gameMask, 200, 150);
     wine_set_title(small, @"Small");
     wine_order_in(small);
+    // A game window already observed by KVO before anything is overridden: its class is a KVO
+    // subclass made from WineWindow as it was, and must still get the title once the override is in.
+    NSWindow *early = make(wineWindow, gameMask, 800, 600);
+    wine_set_title(early, @"Early");
+    TitleWatcher *earlyWatcher = [TitleWatcher new];
+    [early addObserver:earlyWatcher forKeyPath:@"title" options:0 context:NULL];
     check("before any window notification nothing is overridden or retitled",
           titled(game, @"FINAL FANTASY XI") && [menu_title(game) isEqualToString:@"FINAL FANTASY XI"]
           && class_getMethodImplementation(wineWindow, setTitle) == wineBefore
@@ -239,6 +245,23 @@ static int title_main(const char *first, BOOL expect) {
                  : "a window observed by KVO gets its title as given",
           titled(game, expect ? want : @"Watched") && watcher.changes > 0);
     [game removeObserver:watcher forKeyPath:@"title"];
+    wine_set_title(early, @"Murn");
+    check(expect ? "a window observed by KVO before the override gets HXI_WINDOW_TITLE too (and KVO still fires)"
+                 : "a window observed by KVO before anything gets its title as given",
+          titled(early, expect ? want : @"Murn") && earlyWatcher.changes > 0);
+    [early removeObserver:earlyWatcher forKeyPath:@"title"];
+
+    // The Window menu still works: exactly one item for the game window, still aimed at it with
+    // AppKit's action, so choosing it brings the window forward.
+    NSInteger gameItems = 0;
+    BOOL aimed = YES;
+    for (NSMenuItem *item in windowMenu.itemArray) {
+        if (item.target != game) continue;
+        gameItems++;
+        aimed = aimed && item.action == @selector(makeKeyAndOrderFront:);
+    }
+    check("the game window keeps one Window menu item, aimed at it with makeKeyAndOrderFront:",
+          gameItems == 1 && aimed);
 
     // A second game window, made after the override: its first title is already the game's, and
     // so is the Window menu item wine gives it when it is ordered in.
@@ -271,8 +294,9 @@ static int title_main(const char *first, BOOL expect) {
     check("an empty title for a message box stays empty", titled(dialog, @""));
 
     check("no window was ever shown",
-          !game.isVisible && !dialog.isVisible && !plain.isVisible && !small.isVisible && !second.isVisible);
-    for (NSWindow *w in @[game, dialog, plain, small, second]) [w close];
+          !game.isVisible && !dialog.isVisible && !plain.isVisible && !small.isVisible && !second.isVisible
+          && !early.isVisible);
+    for (NSWindow *w in @[game, dialog, plain, small, second, early]) [w close];
     printf("%s: %d failure(s)\n", failures ? "FAILED" : "ok", failures);
     return failures ? 1 : 0;
 }

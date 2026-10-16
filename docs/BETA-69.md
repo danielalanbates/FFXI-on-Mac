@@ -438,3 +438,84 @@ No game running for any of them; release build in `swift-build-b69`, only the tw
   setup-progress 27, install-selection 21, addon-profile 16, single-instance 14, addon-policy 8,
   cursor-fix 7, addon-install 6, addon-scrub 6, narration-disabled 5, addon-installer 4,
   addon-source 4, guide-disabled 4).
+
+## Review (part 2, 2026-10-16)
+
+Adversarial review of `f95ddba..42d8c6f` (the merge, the title, the spinner): every claim above
+checked against the code, upstream athei/wine `cx-26-patched` `dlls/winemac.drv` (fetched read
+only) and the installed `wine-coop`; every test rerun. Nothing launched, installed or pushed; every
+build and process test waited until no game and no other Swift build was running.
+
+**Merge: nothing lost, nothing extra.** `git diff 48719f6 release-3.10` and `git diff f95ddba
+3175371` are the same change line for line, and so are `git diff 48719f6 f95ddba` and `git diff
+release-3.10 3175371`, except one HANDOFF row (release-3.10 already had a b69 "in progress" row;
+the merge rewrote it). At HEAD, `WindowMemory.swift`, `GraphicsSelfTest.swift` and
+`docs/RELEASE-3.10.md` are byte-identical to release-3.10; `Runner.swift` differs only by b69's
+three hunks (launch size and environment, `spawnDiagnosticKeys` as a static, its declaration);
+VERSION is 3.10/69 (release-3.10: 68). `GameWindow.launchSize` reads the profile after the Play
+fit has written it, and nothing in between writes the size keys (narration, guide, cursor fix,
+LuaJIT guard and Dock icon only read the profile). Where the profile lacks 0001/0002, 3.10's fit
+may write them from the world's stored settings, and the ratio is then what was written.
+
+**Title: no crash, hang or recursion found.**
+- Wine calls `setTitle:` and `changeWindowsItem:title:filename:NO` from
+  `macdrv_set_cocoa_window_title` (`OnMainThreadAsync`), `addWindowsItem:title:[self title]`
+  when a window is ordered in or rejoins the window cycle, and `setTitle:` from
+  `setWindowFeatures:` to restore a title `setStyleMask:` cleared. All on the main thread. Nothing
+  in wine reads the title back or finds Window-menu items by title (`validateMenuItem:` goes by
+  action).
+- In the installed `winemac.so` (both x10 copies) neither `WineWindow` nor `WineApplication`
+  implements either selector (Objective-C method lists), so both overrides are added to wine's
+  classes and NSWindow, NSPanel and NSApplication stay as they are.
+- Each override calls the stored implementation directly, never its own selector, and
+  `gw_override` refuses to store itself. Off the main thread the override passes the title
+  through untouched; AppKit itself then raises "NSWindow geometry should only be modified on the
+  main thread!" with or without the dylib (measured), so nothing changes there.
+- Plain C without ARC: nothing is retained or released on the notification path; the title is one
+  CFString made at load and kept for the life of the process.
+- AppKit's `setTitle:` alone does not rename the Window-menu item (measured); wine's explicit
+  `changeWindowsItem:` does, and that call is overridden too.
+- Renamed: any `WineWindow` in the session's wine processes that is titled and resizable (wine:
+  `WS_THICKFRAME` or a maximize box) with at least 320x240 points of content. Besides the game
+  that could be a large resizable wine dialog, such as winedbg's crash details after a crash.
+  Cosmetic only.
+- Added to `gamewindow-test.m`: a game window observed by KVO *before* the override exists still
+  gets the title (KVO's setter finds WineWindow's setter when called) and KVO still fires; the game
+  window keeps exactly one Window-menu item, aimed at it with `makeKeyAndOrderFront:`.
+
+**Addons…**
+- Sheet closed during the scan: the result is dropped. Two quick opens: the first result is
+  dropped by generation. Apply, Enable all and Disable all are disabled during the scan, and Apply
+  also refuses. Opening sets `showAddons` and the spinner in one main-actor turn, so neither the
+  old list nor the "nothing installed" line is ever drawn first.
+- **Fixed (63b1e44): a world changed during the scan.** The result for the old world filled the
+  sheet, and Apply would have written it into the new world's script. The local world and
+  HorizonXI share one game folder, so the folder alone cannot tell them apart. A result is now
+  kept only while `AddonSuite.SheetKey` (folder, boot profile, addon policy) still matches what is
+  selected; otherwise the sheet scans again. Picking another world with the sheet open (a forwarded
+  `--world`) rescans it too, which also covers the pre-b69 case of a change after the list was
+  shown. With no install left, the list empties and the existing empty-list line says why.
+- The scan is safe off the main actor: `AddonSuite.scan`, `metadata` and `mismatchedPlugins` share
+  no mutable state. `Credentials.readFile`'s fallback for an unreadable file (an osascript
+  `do shell script`) now runs off the main thread too.
+- Main-thread disk access left when opening: `active` (one stat of the Ashita folder, as
+  everywhere in the main window), `LocalWorldAddons.isInstalled` on the local world (one stat per
+  extra per redraw) and, for an empty list, `emptyAddonReason` (one stat). The slow part, the
+  folder listings, Lua headers and client log, is off it. Apply still scans on the main thread to
+  learn what a running client loaded (unchanged since before b69).
+- LocalWorldAddons: same policy gate, same installed check, same Get → install → rescan with the
+  new addon switched on. Differences: the rescan shows the spinner briefly, and is dropped if the
+  sheet was closed meanwhile.
+- On an allowlist world the policy note reads "Showing only what … approves" during the scan and
+  gains its hidden count when the scan is back; it never shows a wrong count.
+
+**Tests rerun.** The committed `gamewindow.dylib` has the same code as a fresh build of
+`window/gamewindow.c` (arm64 byte-identical without the signature; x86_64 differs in one
+`__LINKEDIT` size byte left by signing). Release build in `swift-build-b69`: only the two older
+warnings. `scripts/tests/gamewindow-test.sh`: **296 PASS, 0 FAIL** (280 before, plus the two new
+title checks in each of the 8 title runs). All 26 `--selftest-*` suites: **942 checks,
+0 failures** (ui-text 39, the rest unchanged).
+
+**Still not verified.** The title under real wine (whether the window comes on screen before
+Ashita's rename, Mission Control, the Dock). The Addons sheet in a running launcher, the
+world-change rescan included (no UI harness), and how long the spinner shows on the x10 drive.
