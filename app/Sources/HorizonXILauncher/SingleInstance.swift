@@ -70,6 +70,7 @@ enum SingleInstance {
         args.contains { $0.hasPrefix("--selftest-") } || args.contains("--check")
             || args.contains("--next-action") || args.contains("--fix")
             || args.contains("--news-preview") || args.contains("--leftovers-report")
+            || args.contains("--dxvk-cache-report") || args.contains("--dxvk-cache-warm")
     }
 
     // MARK: - The lock

@@ -40,7 +40,10 @@ enum Headless {
             || a.contains("--selftest-boot-profile")
             || a.contains("--selftest-news")
             || a.contains("--selftest-leftovers")
+            || a.contains("--selftest-dxvk-cache")
             || a.contains("--leftovers-report")
+            || a.contains("--dxvk-cache-report")
+            || a.contains("--dxvk-cache-warm")
             || a.contains("--news-preview")
             || a.contains("--progress-trace")
             || a.contains("--next-action")
@@ -111,8 +114,13 @@ enum Headless {
         if args.contains("--selftest-leftovers") {
             runLeftoversSelfTest()
         }
+        if args.contains("--selftest-dxvk-cache") {
+            runDXVKCacheSelfTest()
+        }
         if args.contains("--news-preview") { runNewsPreview() }
         if args.contains("--leftovers-report") { runLeftoversReport() }
+        if args.contains("--dxvk-cache-report") { runDXVKCacheReport() }
+        if args.contains("--dxvk-cache-warm") { runDXVKCacheWarm() }
         if args.contains("--progress-trace") { runProgressTrace() }
         if let at = args.firstIndex(of: "--selftest-single-instance-probe") {
             runSingleInstanceProbe(Array(args[(at + 1)...]))
