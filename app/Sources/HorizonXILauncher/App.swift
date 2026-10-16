@@ -265,6 +265,12 @@ struct ContentView: View {
     @State private var websiteOpened: Set<String> = []
     /// Move… is measuring what it would copy (the button says "Checking…").
     @State private var moveChecking = false
+    /// Where a new install's macros and settings may come from (CarryOver): HorizonXI's client in
+    /// the install in use and in every install found, as they were when Setup was pressed, and a
+    /// client found in the chosen folder that the user chose not to use.
+    @State private var carryHints: [URL] = []
+    /// A carry-over is copying; Play waits for it.
+    @State private var carryingOver = false
     private var fdaBlocked: Bool { checks.contains(where: { $0.id == "fda" && $0.state == .bad }) }
 
     /// The drive the selected world's files are on (or link to), when it is not there.
@@ -1748,6 +1754,7 @@ struct ContentView: View {
             guard let i = active else { return }
             PrimaryFixer.perform(a, install: i, server: s, runner: runner) { _ in recheck() }
         case .play, .playAnother:
+            guard !carryingOver else { return }
             // Registry and COM entries Preflight found missing are written by Play itself
             // (GameRegistry.point); forget its cache so it really does write them. Never under a
             // running client: its registry must not change (Runner.gate).
@@ -1759,7 +1766,12 @@ struct ContentView: View {
                !Preflight.registryPointed(i) {
                 GameRegistry.invalidate(i)
             }
-            play()
+            // A carry-over Setup could not do (a game was running then) goes first.
+            if a == .play, sessions.live.isEmpty, let i = active, CarryOver.isPending(i) {
+                Task { await carryOver(.play); play() }
+            } else {
+                play()
+            }
         case .stop:
             let alert = NSAlert()
             alert.messageText = "Stop \(s.name)?"
@@ -1867,6 +1879,15 @@ struct ContentView: View {
         setupAt = nil
         bootstrapStep = nil
         notice = ""
+        // The installs as they are before Setup changes anything: where a client it downloads
+        // gets its macros and settings from (CarryOver), HorizonXI's in the install in use first.
+        // Kept from earlier presses too: a rescan between them can drop an install the folder
+        // button chose.
+        let horizon = store.servers.first { $0.name == "HorizonXI" }
+        for u in CarryOver.knownRoots(base: selected ?? Install.lastChosen(), horizon: horizon, installs: installs)
+        where !carryHints.contains(u) {
+            carryHints.append(u)
+        }
         let r = runner
         defer {
             setupRunning = false
@@ -1925,6 +1946,9 @@ struct ContentView: View {
             case .game:
                 setupStep(.game)
                 guard await setupGameStep(r) else { return }
+                // The macros, equipment sets and addon settings of the install played before, as
+                // soon as the client is there (a configure step that fails must not lose them).
+                await carryOver(.setup)
                 // Step 5 right away: a fresh prefix has no registry, COM or library links yet.
                 await recheckSettled()
                 guard await configureIfNeeded() else { return }
@@ -1936,6 +1960,20 @@ struct ContentView: View {
                 guard await setupLocalServerStep(r) else { return }
             }
         }
+    }
+
+    /// CarryOver for the install in use, off the main thread: right after Setup downloaded its
+    /// client (`.setup`), or before its first Play when Setup could not do it then (`.play`).
+    /// One line in launcher.log when it did or decided anything; nothing on screen.
+    private func carryOver(_ trigger: CarryOver.Trigger) async {
+        guard let i = active, !carryingOver else { return }
+        carryingOver = true
+        defer { carryingOver = false }
+        let known = carryHints + installs.map(\.gameDir)
+        let line = await Task.detached(priority: .userInitiated) {
+            CarryOver.automatic(trigger, dest: i, known: known)
+        }.value
+        if let line { runner.logFileOnly(line) }
     }
 
     /// The chain's recheck: back once the newest checks are on screen. A job ending also
@@ -2015,6 +2053,7 @@ struct ContentView: View {
                       "Setup can download a fresh copy into “\(f.home.path)” instead. Nothing on the '\(d)' drive is changed.",
                       yes: "Download Fresh", no: "Cancel") else { return false }
             found = ExistingInstall.fresh(f)
+            if let c = f.client { carryHints.append(c.url) }
         }
         // A HorizonXI (or SquareEnix) folder on its own: moved or copied in, on a yes.
         var bring: ExistingInstall.Client?
@@ -2027,6 +2066,7 @@ struct ContentView: View {
                 bring = c
             } else {
                 found = ExistingInstall.fresh(f)
+                carryHints.append(c.url)
             }
         }
         let home = found?.home ?? choice.folder
@@ -2413,6 +2453,7 @@ struct ContentView: View {
                 }
             }
             runner.appendLine("==> --play\(from): \(store.selected?.name ?? "?") as \(user.isEmpty ? "(no account)" : user)")
+            if sessions.live.isEmpty, let i = active, CarryOver.isPending(i) { await carryOver(.play) }
             play()
             if !notice.isEmpty { runner.logFileOnly("!! \(notice)") }
         }
