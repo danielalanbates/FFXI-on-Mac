@@ -35,10 +35,13 @@ enum LiveAddons {
         /// The helper was still running after the launcher's limit and was stopped.
         case timedOut
 
-        init(exitCode: Int32) {
+        /// `output` is what the helper and wine printed. Exit 1 is the helper's refusal only when
+        /// the helper said so ("ashita-send: " on stderr): wine itself exits 1, before the helper
+        /// runs, when its WINEMSYNC/WINEESYNC disagree with the running wineserver.
+        init(exitCode: Int32, output: String) {
             switch exitCode {
             case 0: self = .delivered
-            case 1: self = .refused
+            case 1: self = output.contains(LiveAddons.refusalMarker) ? .refused : .failed(1)
             case 2: self = .noClient
             case 3: self = .ambiguous
             case 4: self = .busy
@@ -47,6 +50,7 @@ enum LiveAddons {
             }
         }
 
+        /// `--send-ashita`'s exit status. A failure never reuses one of the helper's own codes.
         var exitCode: Int32 {
             switch self {
             case .delivered: return 0
@@ -55,7 +59,7 @@ enum LiveAddons {
             case .ambiguous: return 3
             case .busy: return 4
             case .pending: return 5
-            case .failed(let c): return c == 0 ? 70 : c
+            case .failed(let c): return (0...5).contains(c) ? 70 : c
             case .timedOut: return 75
             }
         }
@@ -69,11 +73,15 @@ enum LiveAddons {
             case .ambiguous: return "not sent: more than one client has the Thirdparty plugin, and which is this world's cannot be told"
             case .busy: return "not sent: the plugin was still busy with an earlier change"
             case .pending: return "handed over, not taken yet: the game has not read its keyboard for 5 s; it runs when it does"
+            case .failed(1): return "not sent: wine exited 1 before the helper ran (likely a sync mode that disagrees with the running wineserver)"
             case .failed(let c): return "not sent: the helper exited \(c)"
             case .timedOut: return "not sent: the helper was still running after the time limit and was stopped"
             }
         }
     }
+
+    /// How every one of the helper's own refusals (exit 1) begins on stderr.
+    static let refusalMarker = "ashita-send: "
 
     // MARK: - What to send
 
@@ -96,12 +104,21 @@ enum LiveAddons {
     /// are not touched: the sheet hides what the world's policy does not allow, and those are
     /// neither written nor sent. Order: addon unloads, plugin unloads, plugin loads (the Lua host
     /// `addons` among them), addon loads.
+    ///
+    /// The Lua host decides what addon lines can do. Started with it off, the client has no addon
+    /// loaded (the script's `/addon load` lines failed) and no `/addon` command: then nothing is
+    /// sent for addons while it stays off, and when Apply turns it on, `/load addons` is followed
+    /// by every addon the script now loads, not only the changed ones.
     static func commands(from before: [AddonSuite.Item], to after: [AddonSuite.Item],
                          policy: AddonPolicy) -> [String] {
         var was: [String: Bool] = [:]
         for item in before where was[item.id] == nil { was[item.id] = item.enabled }
         var addonOff: [String] = [], pluginOff: [String] = [], pluginOn: [String] = [], addonOn: [String] = []
         var seen = Set<String>()
+        func isHost(_ item: AddonSuite.Item) -> Bool { item.isPlugin && AddonPolicy.normalize(item.name) == "addons" }
+        // A script that does not list the host (not a managed item) leaves it as it was: on.
+        let hostWasOn = before.first(where: isHost).map(\.enabled) ?? true
+        var hostComesOn = false
         for item in after {
             guard seen.insert(item.id).inserted else { continue }
             guard (was[item.id] ?? false) != item.enabled else { continue }
@@ -112,9 +129,22 @@ enum LiveAddons {
                 if neverSent.contains(key) { continue }
                 if !item.enabled, key == "addons" { continue }
                 if item.enabled { pluginOn.append(name) } else { pluginOff.append(name) }
+                if item.enabled, key == "addons", !hostWasOn { hostComesOn = true }
             } else {
                 if launcherManaged.contains(key) { continue }
                 if item.enabled { addonOn.append(name) } else { addonOff.append(name) }
+            }
+        }
+        if !hostWasOn {
+            addonOff = []
+            addonOn = []
+            if hostComesOn {
+                var listed = Set<String>()
+                for item in after where !item.isPlugin && item.enabled && listed.insert(item.id).inserted {
+                    guard let name = sendableName(item.name), policy.allows(name),
+                          !launcherManaged.contains(AddonPolicy.normalize(name)) else { continue }
+                    addonOn.append(name)
+                }
             }
         }
         return addonOff.map { "/addon unload \($0)" } + pluginOff.map { "/unload \($0)" }
@@ -129,10 +159,16 @@ enum LiveAddons {
     }
 
     /// `--send-ashita`: why `command` must not go to a client of a world with `policy`, or nil.
-    /// On a hosted world (`hosted`), anything that loads must be on the world's published
-    /// allowlist; a hosted world with no sourced policy has no allowlist, so nothing loads there
-    /// from here. `/exec`, `/alias` and `/bind` can run any command, so they are not sent to a
-    /// hosted world either.
+    ///
+    /// - Everywhere, what the helper refuses (tools/ashita-send.c): `/unload|/reload` of
+    ///   thirdparty or addons, `/unloadall` (every plugin, Thirdparty among them, from inside its
+    ///   own callback: a crash), `/addon unloadall`, and the commands that run other commands or
+    ///   Lua nothing here can see (`/exec`, `/execstr`, `/alias`, `/bind`, `/addon exec`).
+    /// - On a hosted world (`hosted`), only addon and plugin management is sent: `/load`,
+    ///   `/unload`, `/reload`, `/addon load|unload|reload|list`. Anything else can act in the
+    ///   game (`/ma`, `/say`, an addon's own commands), which from a script is automation, so it
+    ///   is typed in the game instead. Anything that loads must be on the world's published
+    ///   allowlist; a hosted world with no sourced policy has none, so nothing loads there.
     static func refusal(_ command: String, policy: AddonPolicy, hosted: Bool) -> String? {
         // Checked on the command as given, which is what is sent: a tab is a control character
         // to the helper, not whitespace to trim.
@@ -155,6 +191,7 @@ enum LiveAddons {
                 ? "\(name) is not on this world's approved list"
                 : "this world publishes no approved list, so nothing is loaded on it from here"
         }
+        let hostedOnly = "on a hosted world only addon and plugin loads and unloads are sent from here; type /\(verb) in the game"
         switch verb {
         case "unload", "reload":
             let target = word(1)
@@ -162,15 +199,22 @@ enum LiveAddons {
             if target == "thirdparty" { return "never: Thirdparty would free itself in the middle of the command" }
             if target == "addons" { return "never: that ends every Lua addon at once" }
             if verb == "reload" { return notAllowed(target) }
+        case "unloadall":
+            return "never: that unloads every plugin, Thirdparty among them, in the middle of the command"
         case "load":
             return notAllowed(word(1))
         case "addon", "addons":
-            let sub = words.count > 1 ? words[1] : ""
-            if sub == "load" || sub == "reload" { return notAllowed(word(2)) }
-        case "exec", "alias", "bind":
-            if hosted { return "/\(verb) can run any command; type it in the game instead" }
+            switch word(1) {
+            case "load", "reload": return notAllowed(word(2))
+            case "unload", "list": return nil
+            case "unloadall": return "never: that ends every Lua addon at once"
+            case "exec": return "never: /\(verb) exec runs Lua that cannot be checked; type it in the game"
+            default: return hosted ? hostedOnly : nil
+            }
+        case "exec", "execstr", "alias", "bind":
+            return "never: /\(verb) runs other commands that cannot be checked; type it in the game"
         default:
-            break
+            return hosted ? hostedOnly : nil
         }
         return nil
     }
@@ -289,16 +333,14 @@ enum LiveAddons {
         p.terminationHandler = { _ in done.signal() }
         let start = Date()
         do { try p.run() } catch { return (.failed(-1), error.localizedDescription, 0) }
-        var outcome: Outcome
-        if done.wait(timeout: .now() + limit) == .timedOut {
+        let finished = done.wait(timeout: .now() + limit) == .success
+        if !finished {
             p.terminate()
             _ = done.wait(timeout: .now() + 2)
-            outcome = .timedOut
-        } else {
-            outcome = Outcome(exitCode: p.terminationStatus)
         }
         let seconds = Date().timeIntervalSince(start)
         let text = (try? String(contentsOf: outFile, encoding: .utf8)) ?? ""
+        let outcome: Outcome = finished ? Outcome(exitCode: p.terminationStatus, output: text) : .timedOut
         let firstLines = text.split(whereSeparator: \.isNewline).prefix(4).joined(separator: " / ")
         return (outcome, String(firstLines.prefix(300)), seconds)
     }

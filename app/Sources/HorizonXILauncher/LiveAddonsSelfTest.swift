@@ -49,7 +49,10 @@ extension Headless {
                        cmds(base, flip(base, ["addons"]), horizon).isEmpty
                            && cmds(base, flip(base, ["addons", "distance"]), horizon) == ["/addon load distance"]
                            && cmds(flip(base, ["addons"]), flip(base, ["distance"]), horizon)
-                               == ["/load addons", "/addon load distance"]))
+                               == ["/load addons", "/addon load clock", "/addon load distance", "/addon load timers"]))
+        checks.append(("the Lua host off before and after: no addon line is sent (there is no /addon to take it)",
+                       cmds(flip(base, ["addons"]), flip(base, ["addons", "clock", "distance"]), horizon).isEmpty
+                           && cmds(flip(base, ["addons"]), flip(base, ["addons", "toon"]), horizon) == ["/load toon"]))
         checks.append(("winefix, vanavoice and vanaguide are never sent",
                        cmds([item("winefix", plugin: true, false), item("vanavoice", false), item("vanaguide", false)],
                             [item("winefix", plugin: true, true), item("vanavoice", true), item("vanaguide", true)],
@@ -96,20 +99,34 @@ extension Headless {
                            && !refused("/addon unload clock", unknown) && !refused("/unload minimap", unknown)))
         checks.append(("the local world: any load", !refused("/addon load gmtools", local, hosted: false)
                            && !refused("/load fps", local, hosted: false)))
-        checks.append(("/exec, /alias, /bind: refused on hosted worlds, sent on the local one",
-                       ["/exec x", "/alias /x /addon load gmtools", "/bind F1 /addon load gmtools"].allSatisfy {
-                           refused($0) && !refused($0, local, hosted: false) }))
+        checks.append(("never, on any world: /unloadall (Thirdparty would unload itself), /addon unloadall",
+                       ["/unloadall", "//UnloadAll now", "/addon unloadall", "/addons \"UnloadAll\""].allSatisfy {
+                           refused($0) && refused($0, local, hosted: false) }))
+        checks.append(("never, on any world: /exec, /execstr, /alias, /bind, /addon exec (they run what nobody checked)",
+                       ["/exec x", "/execstr /unload thirdparty", "/alias /x /addon load gmtools",
+                        "/bind F1 /addon load gmtools", "/addon exec clock print(1)"].allSatisfy {
+                           refused($0) && refused($0, local, hosted: false) }))
         checks.append(("';', control characters, non-ASCII, empty: refused everywhere",
                        ["/addon load clock;/unload thirdparty", "/addon load clock\t", "/echo café", "", "  ", "/"]
                            .allSatisfy { refused($0, local, hosted: false) }))
-        checks.append(("other commands pass (/drawdistance setworld 5, /addon unload x)",
-                       !refused("/drawdistance setworld 5") && !refused("/addon unload anything")))
+        checks.append(("hosted: only addon and plugin management (/ma, /say, /terminate, addon commands refused)",
+                       ["/ma \"Cure\" <me>", "/say hi", "/terminate", "/drawdistance setworld 5", "/addon kill clock"]
+                           .allSatisfy { refused($0) }
+                           && !refused("/addon unload anything") && !refused("/addons list") && !refused("/unload minimap")))
+        checks.append(("the local world: other commands pass (/drawdistance setworld 5, /addon unload x)",
+                       !refused("/drawdistance setworld 5", local, hosted: false)
+                           && !refused("/addon unload anything", local, hosted: false)))
 
         // MARK: exit codes and the log line
+        let said = "ashita-send: refused \"/unloadall\": unloads every plugin, this one among them, mid-command"
         let codes: [(Int32, LiveAddons.Outcome)] = [(0, .delivered), (1, .refused), (2, .noClient), (3, .ambiguous),
                                                     (4, .busy), (5, .pending), (53, .failed(53))]
-        checks.append(("the helper's exit codes", codes.allSatisfy { LiveAddons.Outcome(exitCode: $0.0) == $0.1
+        checks.append(("the helper's exit codes", codes.allSatisfy { LiveAddons.Outcome(exitCode: $0.0, output: said) == $0.1
                                                                      && $0.1.exitCode == $0.0 }))
+        checks.append(("exit 1 with no ashita-send: line is wine's (sync mismatch), not a refusal, and exits 70",
+                       LiveAddons.Outcome(exitCode: 1, output: "") == .failed(1)
+                           && LiveAddons.Outcome(exitCode: 1, output: "").exitCode == 70
+                           && LiveAddons.Outcome.failed(1).text.contains("sync mode")))
         let two = ["/addon unload clock", "/addon load distance"]
         let delivered = LiveAddons.logLine(two, world: "HorizonXI", outcome: .delivered, seconds: 0.21)
         let busy = LiveAddons.logLine(two, world: "HorizonXI", outcome: .busy, output: "the plugin did not free its block")
@@ -255,6 +272,12 @@ extension Headless {
                                    sent.outcome == .delivered))
                     let refusedSend = LiveAddons.run(["/unload thirdparty"], target: t, helper: h)
                     checks.append(("wine: the helper refuses /unload thirdparty even if asked", refusedSend.outcome == .refused))
+                    let unloadAll = LiveAddons.run(["/unloadall"], target: t, helper: h)
+                    checks.append(("wine: and /unloadall", unloadAll.outcome == .refused))
+                    var wrongSync = t; wrongSync.sync = t.sync == .msync ? .off : .msync
+                    let mismatch = LiveAddons.run(["/addon load clock"], target: wrongSync, helper: h)
+                    checks.append(("wine: a sync mode that disagrees with the wineserver reads as wine's failure, not a refusal",
+                                   mismatch.outcome == .failed(1)))
                 }
             }
         }
@@ -270,9 +293,12 @@ extension Headless {
 
     /// `--send-ashita "<command>" [--world <name>]`: hand one command to that world's running
     /// client, the way an Addons… Apply does, and say what happened. For checking by hand; it
-    /// refuses what LiveAddons.refusal refuses (on a hosted world, any load that is not on the
-    /// world's published list). Prints to stdout/stderr only; launcher.log is not touched.
-    /// Exit: the helper's code (0 delivered … 5 pending), 1 refused, 2 not sent, 64 usage.
+    /// refuses what LiveAddons.refusal refuses (on a hosted world, anything but addon and plugin
+    /// management, and any load that is not on the world's published list). Prints to
+    /// stdout/stderr only; launcher.log is not touched.
+    /// Exit: the helper's code (0 delivered … 5 pending), 1 refused, 2 not sent, 64 usage,
+    /// 75 timed out; wine's own failure passes its code through, or 70 when that code is 0-5
+    /// (a sync-mode mismatch ends wine with 1, which is not a refusal).
     @MainActor static func runSendAshita(_ args: [String]) -> Never {
         func fail(_ s: String, _ code: Int32) -> Never {
             FileHandle.standardError.write(Data((s + "\n").utf8))
