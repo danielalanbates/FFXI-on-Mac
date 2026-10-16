@@ -41,6 +41,7 @@ enum Headless {
             || a.contains("--selftest-news")
             || a.contains("--selftest-leftovers")
             || a.contains("--selftest-dxvk-cache")
+            || a.contains("--selftest-graphics")
             || a.contains("--leftovers-report")
             || a.contains("--dxvk-cache-report")
             || a.contains("--dxvk-cache-warm")
@@ -116,6 +117,9 @@ enum Headless {
         }
         if args.contains("--selftest-dxvk-cache") {
             runDXVKCacheSelfTest()
+        }
+        if args.contains("--selftest-graphics") {
+            runGraphicsSelfTest()
         }
         if args.contains("--news-preview") { runNewsPreview() }
         if args.contains("--leftovers-report") { runLeftoversReport() }
