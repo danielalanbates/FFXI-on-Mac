@@ -390,10 +390,19 @@ extension Headless {
         check("Play: an earlier fit grows back toward the stored 2560 × 1440 on a bigger screen (\(regrown?.width ?? 0) × \(regrown?.height ?? 0)), still 16:9",
               regrown.map { $0.width > firstFit.width && $0.width <= 2558 && $0.height <= 1410 && abs(Double($0.width) / Double($0.height) - 16.0 / 9.0) < 0.01 } == true
                 && WindowMemory.playSettings(shrunk, stored: chosen, limit: screen) == nil)
+        var handSized = G(); handSized.width = 1438; handSized.height = 810
+        var bigChoice = handSized; bigChoice.width = 2560; bigChoice.height = 1440
+        check("Play: a profile that fits is never cut toward a same-shape stored choice (1438 × 810 stays)",
+              WindowMemory.playSettings(handSized, stored: bigChoice, limit: screen) == nil)
         var bigUI = G(); bigUI.width = 2560; bigUI.height = 1440; bigUI.uiFollowsResolution = false; bigUI.uiWidth = 1920; bigUI.uiHeight = 1080
         let bigUIFit = WindowMemory.playSettings(bigUI, stored: nil, limit: screen)
         check("Play: an own-size interface bigger than the fitted window is scaled to fit inside it",
               bigUIFit.map { $0.uiWidth <= $0.width && $0.uiHeight <= $0.height && $0.uiWidth >= 640 } == true)
+        if let small = bigUIFit {
+            let back = WindowMemory.playSettings(small, stored: bigUI, limit: .init(width: 3838, height: 2158))
+            check("Play: growing back on a bigger screen brings the stored 1920 × 1080 interface back too",
+                  back.map { $0.width == 2560 && $0.height == 1440 && $0.uiWidth == 1920 && $0.uiHeight == 1080 } == true)
+        }
 
         // MARK: 5. Setup's fresh profile, and one that is already there
         guard let horizon = Server.all.first(where: { $0.name == "HorizonXI" }),

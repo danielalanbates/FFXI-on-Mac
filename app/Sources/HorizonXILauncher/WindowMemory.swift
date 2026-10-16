@@ -136,16 +136,24 @@ enum WindowMemory {
     /// - An interface drawn at its own size (0037/0038) that is bigger than the new window is
     ///   scaled down to fit inside it.
     static func playSettings(_ g: GraphicsSettings, stored: GraphicsSettings?, limit: Size) -> GraphicsSettings? {
-        var want = Size(width: g.width, height: g.height)
+        let size = Size(width: g.width, height: g.height)
+        var want = size
+        var storedUI: Size?
+        // Same shape within what rounding both sides down to even numbers can move it.
         if let s = stored, s.width > g.width, s.height > g.height, s.height > 0, g.height > 0,
-           abs(Double(s.width) / Double(s.height) - Double(g.width) / Double(g.height)) < 0.01 {
+           (-2 * s.width ... 2 * s.height).contains(s.width * g.height - s.height * g.width) {
             want = Size(width: s.width, height: s.height)
+            if !s.uiFollowsResolution, !g.uiFollowsResolution { storedUI = Size(width: s.uiWidth, height: s.uiHeight) }
         }
         let fit = fitted(want, into: limit)
-        guard fit != Size(width: g.width, height: g.height) else { return nil }
+        guard fit != size else { return nil }
+        // A profile that fits is only ever grown back toward the stored choice, never cut.
+        if size.width <= limit.width, size.height <= limit.height,
+           !(fit.width > size.width && fit.height > size.height) { return nil }
         var n = g
         n.width = fit.width
         n.height = fit.height
+        if let ui = storedUI { n.uiWidth = ui.width; n.uiHeight = ui.height }
         if !n.uiFollowsResolution, n.uiWidth > fit.width || n.uiHeight > fit.height, n.uiWidth > 0, n.uiHeight > 0 {
             let f = min(Double(fit.width) / Double(n.uiWidth), Double(fit.height) / Double(n.uiHeight))
             n.uiWidth = max(640, Int(Double(n.uiWidth) * f) & ~1)
