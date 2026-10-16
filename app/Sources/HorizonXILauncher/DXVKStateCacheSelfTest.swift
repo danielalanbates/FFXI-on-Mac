@@ -347,9 +347,15 @@ extension Headless {
     /// `--dxvk-cache-warm`: what the window does with the DXVK cache, now, without a window: seed
     /// the launcher's copy (first run only) from the installs it knows, then merge it into the
     /// install in use (or `--prefix <path>`), as Play does before the client starts. Refuses, and
-    /// writes nothing, while any FFXI client is running.
+    /// writes nothing, while any FFXI client is running -- or while a launch is under way, which
+    /// no scan can see yet: it holds the launch lock throughout, as Play does.
     @MainActor static func runDXVKCacheWarm() -> Never {
         typealias C = DXVKStateCache
+        // Never released by hand: exit() closes the fd, and with it the flock.
+        guard LaunchLock.acquire() != nil else {
+            print("a launch, Repair or Stop is under way: nothing written")
+            exit(1)
+        }
         guard LiveClients.snapshot().clients.isEmpty else {
             print("a client is running: nothing written (Play warms the cache only with no client running)")
             exit(1)
