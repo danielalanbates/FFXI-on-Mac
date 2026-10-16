@@ -1014,7 +1014,7 @@ struct ContentView: View {
                 Button("Balanced") { graphics = .balanced }
                     .help("1080p with standard texture detail.")
                 Button("Max (4K)") { graphics = .max4K }
-                    .help("4K with every setting at its maximum. Uses more graphics memory.")
+                    .help("4K with maximum texture detail. Uses more graphics memory.")
                 Spacer()
                 Button("Cancel") { showGraphics = false }
                 Button("Apply") {

@@ -103,18 +103,18 @@ extension Headless {
               presets.allSatisfy { Set($0.1.iniOverrides.keys) == panelKeys && $0.1.iniOverrides[G.hardwareMouse] == nil })
         func docMax(_ k: String) -> Int { doc[k]?.values.max() ?? G.range(k)!.upperBound }
         let mx = G.max4K.iniOverrides
-        check("Max: every quality key at its documented maximum (mip 6, environment 2, bump 1, textures 2, maps 1, sounds 20, background 4096)",
-              ["0000", "0011", "0017", "0018", "0019", "0029"].allSatisfy { mx[$0] == String(docMax($0)) }
+        check("Max: every quality key at its documented maximum (mip 6, environment 2, textures 2, maps 1, sounds 20, background 4096); bump mapping 0, as the template",
+              ["0000", "0011", "0018", "0019", "0029"].allSatisfy { mx[$0] == String(docMax($0)) }
                 && mx["0003"] == "4096" && mx["0004"] == "4096" && mx["0001"] == "3840" && mx["0002"] == "2160"
-                && mx["0000"] == "6" && mx["0029"] == "20")
+                && mx["0000"] == "6" && mx["0029"] == "20" && mx["0017"] == "0")
         var low = G.lowSpec; low.width = 3840; low.height = 2160
         var bal = G.balanced; bal.width = 3840; bal.height = 2160; bal.textureResolution = 4096; bal.soundChannels = 20
         check("Low is Max at 640 × 480; Balanced is Max at 1080p with 2048 textures and 12 sounds",
               low == .max4K && G.lowSpec.width == 640 && bal == .max4K && G.balanced.width == 1920
                 && G.balanced.textureResolution == 2048 && G.balanced.soundChannels == 12)
         let dflt = G().iniOverrides
-        check("the defaults' quality keys are at max (mip 6, environment 2, bump 1, textures 2, maps 1)",
-              dflt["0000"] == "6" && dflt["0011"] == "2" && dflt["0017"] == "1" && dflt["0018"] == "2" && dflt["0019"] == "1")
+        check("the defaults' quality keys are at max (mip 6, environment 2, textures 2, maps 1); bump mapping 0, as the template",
+              dflt["0000"] == "6" && dflt["0011"] == "2" && dflt["0017"] == "0" && dflt["0018"] == "2" && dflt["0019"] == "1")
         var odd = G.max4K; odd.mipMapping = 9; odd.textureCompression = 4; odd.soundChannels = 40
         check("a value outside Ashita's range is never written (left out)",
               odd.iniOverrides["0000"] == nil && odd.iniOverrides["0018"] == nil && odd.iniOverrides["0029"] == nil
@@ -155,10 +155,11 @@ extension Headless {
         }
         check("old Textures Uncompressed (0) -> 2 / maps 1; Compressed (2) -> 0 / maps 0; 1 -> 1 / maps 0; 7 -> defaults",
               oldTex(0)! == (2, 1) && oldTex(2)! == (0, 0) && oldTex(1)! == (1, 0) && oldTex(7)! == (2, 1))
-        check("old environmental animation on -> 2 (smooth), off -> 0; bump mapping kept as it was",
+        check("old environmental animation on -> 2 (smooth), off -> 0; an old bump mapping, on or off, never turns 0017 on",
               json(#"{"environmentAnimation":true}"#)?.environmentAnimations == 2
                 && json(#"{"environmentAnimation":false}"#)?.environmentAnimations == 0
-                && json(#"{"bumpMapping":false}"#)?.bumpMapping == false && json(#"{"bumpMapping":true}"#)?.bumpMapping == true)
+                && json(#"{"bumpMapping":false}"#)?.bumpMapping == false && json(#"{"bumpMapping":true}"#)?.bumpMapping == false
+                && json(#"{"bumpMapping":true,"environmentAnimation":false}"#)?.bumpMapping == false)
         check("an old value missing a field keeps the default for it",
               json(#"{"width":1600,"height":900}"#).map { $0.width == 1600 && $0.mipMapping == 6 && $0.textureCompression == 2
                   && $0.environmentAnimations == 2 && $0.soundChannels == 12 } == true)
@@ -185,7 +186,7 @@ extension Headless {
               json("not json") == nil && json("[]") == nil && json("null") == nil && json("42") == nil && G.decoded(Data()) == nil)
         let typed = json(#"{"width":"big","bumpMapping":"yes","environmentAnimation":1,"schema":"two","mipMapping":4,"soundChannels":16}"#)
         check("wrong types: each such field keeps its default, the rest is read (a non-number schema is the old one)",
-              typed.map { $0.width == 1280 && $0.bumpMapping && $0.environmentAnimations == 2 && $0.mipMapping == 6
+              typed.map { $0.width == 1280 && !$0.bumpMapping && $0.environmentAnimations == 2 && $0.mipMapping == 6
                   && $0.soundChannels == 16 } == true && json("{}") == G())
 
         // load(world:) on the throwaway suite.
@@ -248,8 +249,10 @@ extension Headless {
                 return name == "LF" ? !out.contains("\r") : !out.replacingOccurrences(of: "\r\n", with: "").contains("\n")
             }
             check("template (\(name)): write then read gives the same keys, only the panel's lines change, keeps \(name), a second write is a no-op", ok)
-            check("template (\(name)): 0021 and the account line stay as they were",
+            check("template (\(name)): 0021, 0017 = 0 and the account line stay as they were",
                   BootProfile.value("0021", section: "ffxi.registry", in: G.max4K.applied(to: text)) == "1"
+                    && BootProfile.value("0017", section: "ffxi.registry", in: text) == "0"
+                    && BootProfile.value("0017", section: "ffxi.registry", in: G.max4K.applied(to: text)) == "0"
                     && BootProfile.value("command", section: "ashita.boot", in: G.max4K.applied(to: text))
                         == BootProfile.value("command", section: "ashita.boot", in: text))
         }

@@ -41,8 +41,11 @@ struct GraphicsSettings: Codable, Equatable {
     var mipMapping: Int = 6
     /// Environment animations (water, weather), `0011`: 0 off, 1 normal, 2 smooth.
     var environmentAnimations: Int = 2
-    /// Bump mapping, `0017`.
-    var bumpMapping: Bool = true
+    /// Bump mapping, `0017`. Off by default, as the template, HorizonXI's stock profile and every
+    /// profile this project measured ship it (max.json and max4k.json leave it at the template's
+    /// 0). Never turned on behind the user's back: with it on, the client asks for D3D8's bump
+    /// format 65, which DXVK cannot convert (docs/PATHWAYS.md), and nothing here was measured so.
+    var bumpMapping: Bool = false
     /// Texture compression, `0018`: 0 high, 1 low, 2 uncompressed (best, most memory).
     var textureCompression: Int = 2
     /// Map compression, `0019`: 0 compressed, 1 uncompressed.
@@ -137,13 +140,14 @@ struct GraphicsSettings: Codable, Equatable {
 
     // MARK: - Presets
 
-    /// Every quality key at the top of Ashita's range, 4K. The configuration every performance
-    /// measurement in this project was taken against (`scripts/max4k.json`, `docs/X87-WALL.md`).
+    /// Every quality key at the top of Ashita's range, 4K, bump mapping as the template ships it
+    /// (off; see `bumpMapping`). The configuration every performance measurement in this project
+    /// was taken against (`scripts/max4k.json` on the template, `docs/X87-WALL.md`).
     static var max4K: GraphicsSettings {
         var g = GraphicsSettings()
         g.width = 3840; g.height = 2160; g.uiFollowsResolution = true
         g.textureResolution = 4096
-        g.mipMapping = 6; g.environmentAnimations = 2; g.bumpMapping = true
+        g.mipMapping = 6; g.environmentAnimations = 2; g.bumpMapping = false
         g.textureCompression = 2; g.mapCompression = 1
         g.soundChannels = 20
         return g
@@ -375,7 +379,7 @@ struct GraphicsSettings: Codable, Equatable {
     /// | Textures "Compressed" (2)          | 0018 = 0 high, 0019 = 0 compressed          |
     /// | (1, only ever read from a profile) | 0018 = 1 low, 0019 = 0 compressed           |
     /// | Environmental animation on / off   | 0011 = 2 smooth / 0 off                     |
-    /// | Bump mapping on / off              | 0017 = 1 / 0 (same meaning, same JSON key)  |
+    /// | Bump mapping on / off              | 0017 = 0 either way (the default)           |
     ///
     /// Map compression had no control: it follows the texture choice ("Compressed uses less
     /// graphics memory" covered the maps too, and 0019 is what a user who turned that down had
@@ -389,6 +393,9 @@ struct GraphicsSettings: Codable, Equatable {
     /// terms, they came out as high compression and mip 3 — Daniel's shared and local-server
     /// values among them. A value the old panel could not offer (mip -1, textures 1) counts as
     /// its default here. Any other combination moved a control and is read through the table.
+    ///
+    /// The old bump toggle wrote 0019, never 0017, and every profile this launcher made or measured
+    /// has 0017 = 0, so an old value never turns bump mapping on (`bumpMapping`).
     static func legacy(mipMapping: Int?, textureCompression: Int?, environmentAnimation: Bool?,
                        bumpMapping: Bool? = nil)
         -> (mipMapping: Int?, textureCompression: Int?, mapCompression: Int?, environmentAnimations: Int?) {
@@ -418,15 +425,16 @@ struct GraphicsSettings: Codable, Equatable {
         uiWidth = int(.uiWidth, r("0037")) ?? uiWidth
         uiHeight = int(.uiHeight, r("0038")) ?? uiHeight
         textureResolution = int(.textureResolution, r("0003")) ?? textureResolution
-        bumpMapping = bool(.bumpMapping) ?? bumpMapping
         soundChannels = int(.soundChannels, r("0029")) ?? soundChannels
         rememberWindowSize = bool(.rememberWindowSize) ?? rememberWindowSize
         if (try? c.decodeIfPresent(Int.self, forKey: .schema)).map({ $0 >= 2 }) == true {
+            bumpMapping = bool(.bumpMapping) ?? bumpMapping
             mipMapping = int(.mipMapping, r("0000")) ?? mipMapping
             environmentAnimations = int(.environmentAnimations, r("0011")) ?? environmentAnimations
             textureCompression = int(.textureCompression, r("0018")) ?? textureCompression
             mapCompression = int(.mapCompression, r("0019")) ?? mapCompression
         } else if let old = try? decoder.container(keyedBy: LegacyKeys.self) {
+            // An old `bumpMapping` is only looked at, never taken (`legacy`): it stays off.
             let m = Self.legacy(mipMapping: try? old.decodeIfPresent(Int.self, forKey: .mipMapping),
                                 textureCompression: try? old.decodeIfPresent(Int.self, forKey: .textureCompression),
                                 environmentAnimation: try? old.decodeIfPresent(Bool.self, forKey: .environmentAnimation),
