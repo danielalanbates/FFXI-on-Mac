@@ -1021,7 +1021,7 @@ struct ContentView: View {
                     graphics.save(world: store.selected?.name)
                     if let i = selected, let s = store.selected {
                         Credentials.ensureProfile(s.bootProfile, in: i, loader: s.loader,
-                                                  template: s.bootTemplate, host: s.host)
+                                                  template: s.bootTemplate, host: s.host, world: s.name)
                         graphics.write(to: i, profile: s.bootProfile)
                     }
                     showGraphics = false
@@ -2501,7 +2501,7 @@ struct ContentView: View {
         // A world the install has no boot profile for — the local one, on every machine — needs
         // that file to exist before anything can be written into it.
         if !Credentials.ensureProfile(server.bootProfile, in: i, loader: server.loader,
-                                      template: server.bootTemplate, host: server.host) {
+                                      template: server.bootTemplate, host: server.host, world: server.name) {
             notice = "Could not create config/boot/\(server.bootProfile)."
             r.logFileOnly("!! " + notice)
             return

@@ -156,10 +156,11 @@ enum Credentials {
     /// Needed for the local server, whose profile no HorizonXI install ships.
     ///
     /// A world with its own template (`Server.bootTemplate`: HorizonXI) is made from that instead,
-    /// and every new profile then boots the world's own loader when it is there (`loader`).
+    /// with the graphics the user saved for `world` (b64), and every new profile then boots the
+    /// world's own loader when it is there (`loader`).
     @discardableResult
     static func ensureProfile(_ profile: String, in install: Install, loader: String = "",
-                              template: String = "", host: String = "") -> Bool {
+                              template: String = "", host: String = "", world: String = "") -> Bool {
         let fm = FileManager.default
         let dir = install.gameDir.appendingPathComponent("config/boot")
         let name = install.bootProfileName(profile)
@@ -203,7 +204,12 @@ enum Credentials {
         // Ashita's examples boot the wrong loader: its own profile comes from the app (b61).
         // Without the template (a damaged bundle) the copies below still apply, and Play's
         // `prepareProfile` adds what HorizonXI needs.
-        if name.hasSuffix(".ini"), let text = BootProfile.seed(template, for: install, host: host) {
+        if name.hasSuffix(".ini"), var text = BootProfile.seed(template, for: install, host: host) {
+            // The graphics the user saved for this world go in with it. Setup's fresh install on
+            // 2026-10-15 got the template's 1920 × 1080 and 4096 textures while Daniel's own saved
+            // 1280 × 720 / 512 never reached it, and the 8 GB Mac swapped. Only here, where the
+            // file is being made: a profile that exists is the user's, and is not rewritten.
+            if let g = GraphicsSettings.stored(forWorld: world) { text = g.applied(to: text) }
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
             if writeFile(text, to: target) {
                 fixBootLoader(profile, in: install, loader: loader)
