@@ -9,14 +9,22 @@
 //                          with `expect`, a game window first seen through that notification and
 //                          every later title wine gives it read HXI_WINDOW_TITLE, other windows
 //                          keep theirs; with `none`, nothing changes at all
+//   gamewindow-test hang <close|quit|cmdq|cmdqopt> <polls|wakes|frames|stops|hung|dialog|raised>
+//                          not responding (FFXI_GAMEWINDOW_HANG): wine's event queue, window,
+//                          application controller and Metal layer under wine's class names, a
+//                          stand-in for the game's thread (`model`) and one request; the shell
+//                          judges from the exit status and the log (a Force Quit is SIGKILL)
 //
 // Nothing is ever ordered front and the app may never activate (activation policy Prohibited),
 // so it is safe to run while somebody is using the Mac. Build/run: scripts/tests/gamewindow-test.sh
 #import <AppKit/AppKit.h>
+#import <Metal/Metal.h>
+#import <QuartzCore/QuartzCore.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
 #include <mach-o/dyld.h>
 #include <math.h>
+#include <stdatomic.h>
 #include <string.h>
 
 static int failures = 0;
@@ -301,10 +309,225 @@ static int title_main(const char *first, BOOL expect) {
     return failures ? 1 : 0;
 }
 
+// --- Not responding ------------------------------------------------------------------------------
+// wine's classes as the dylib relies on them (athei/wine cx-26-patched, dlls/winemac.drv); the
+// runtime subclasses made in hang_main carry wine's names.
+
+// WineEventQueue (cocoa_event.m): -getEventMatchingMask:, called only by the thread that owns the
+// queue. -post stands in for postEvent:, which writes the queue's pipe and so wakes that thread.
+@interface HangQueue : NSObject {
+@public
+    dispatch_semaphore_t wake;
+    _Atomic int polls, posted;
+}
+- (id)getEventMatchingMask:(uint64_t)mask;
+- (void)post;
+@end
+@implementation HangQueue
+- (instancetype)init {
+    if ((self = [super init])) wake = dispatch_semaphore_create(0);
+    return self;
+}
+- (id)getEventMatchingMask:(uint64_t)mask { (void)mask; atomic_fetch_add(&polls, 1); return nil; }
+- (void)post { atomic_fetch_add(&posted, 1); dispatch_semaphore_signal(wake); }
+@end
+
+// WineWindow (cocoa_window.m): an NSPanel that is its own delegate (:1049) with its thread's queue
+// (:1053); -windowShouldClose: posts the close there and answers NO (:3202-3208).
+@interface HangWindow : NSPanel <NSWindowDelegate>
+@property (strong) HangQueue *queue;
+@property int closeRequests;
+@end
+@implementation HangWindow
+- (BOOL)windowShouldClose:(NSWindow *)sender {
+    (void)sender;
+    self.closeRequests++;
+    [self.queue post];
+    return NO;
+}
+@end
+
+// WineApplicationController (cocoa_app.m:2655-2696): the quit goes to every queue, and AppKit is
+// told NSTerminateLater while the Windows side decides.
+@interface HangController : NSObject <NSApplicationDelegate>
+@property (strong) HangQueue *queue;
+@property int quitRequests;
+@end
+@implementation HangController
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
+    (void)sender;
+    self.quitRequests++;
+    [self.queue post];
+    return NSTerminateLater;
+}
+@end
+
+// WineMetalLayer (d3dmetal_objc.m:38-71): -nextDrawable ends in CAMetalLayer's, through super.
+@interface HangLayer : CAMetalLayer
+@end
+@implementation HangLayer
+- (id<CAMetalDrawable>)nextDrawable { return [super nextDrawable]; }
+@end
+
+// A window wine raised (a topmost game window at NSFloatingWindowLevel, or one above the screen
+// shield while the displays are captured): it only says it is on screen at level 1000, so the
+// question's level can be checked without showing anything.
+@interface RaisedWindow : NSWindow
+@end
+@implementation RaisedWindow
+- (BOOL)isVisible { return YES; }
+- (NSWindowLevel)level { return 1000; }
+- (BOOL)reallyVisible { return [super isVisible]; }
+@end
+
+static _Atomic int model_stop;
+
+/// One request to a stand-in game whose thread does `model`: polls = reads its queue every 33 ms
+/// (playing); wakes = blocked until something is posted, then reads it (idle in GetMessage);
+/// frames = draws at 30 fps and reads nothing; stops = reads and draws, then stops just before the
+/// request; hung = nothing at all; dialog = hung, and the close is a message box's; raised = hung,
+/// beside a window at level 1000.
+static int hang_main(const char *path, const char *model) {
+    BOOL quit = strcmp(path, "quit") == 0, cmdq = strncmp(path, "cmdq", 4) == 0;
+    BOOL option = strcmp(path, "cmdqopt") == 0, dialog = strcmp(model, "dialog") == 0;
+    BOOL raised = strcmp(model, "raised") == 0;
+    BOOL silent = strcmp(model, "hung") == 0 || strcmp(model, "stops") == 0 || dialog || raised;
+    const char *h = getenv("FFXI_GAMEWINDOW_HANG");
+    BOOL off = h && strcmp(h, "0") == 0;
+    double T = off ? 1 : (h && atoi(h) > 0 ? atoi(h) : 5);
+
+    Class wq = objc_allocateClassPair([HangQueue class], "WineEventQueue", 0);
+    objc_registerClassPair(wq);
+    Class ww = objc_allocateClassPair([HangWindow class], "WineWindow", 0);
+    objc_registerClassPair(ww);
+    Class wc = objc_allocateClassPair([HangController class], "WineApplicationController", 0);
+    objc_registerClassPair(wc);
+    [NSApplication sharedApplication];
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
+    check("gamewindow.dylib is loaded in this process", dylib_loaded());
+
+    HangQueue *q = [wq new];
+    HangController *controller = [wc new];
+    controller.queue = q;
+    NSApp.delegate = controller;
+    const NSWindowStyleMask gameMask = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+                                     | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable;
+    // Not deferred for Cmd-Q, so the key event can name the window. Never shown either way.
+    HangWindow *game = [[ww alloc] initWithContentRect:NSMakeRect(100, 100, 960, 540) styleMask:gameMask
+                                               backing:NSBackingStoreBuffered defer:!cmdq];
+    HangWindow *box = [[ww alloc] initWithContentRect:NSMakeRect(100, 100, 400, 300)
+                                            styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+                                              backing:NSBackingStoreBuffered defer:YES];
+    for (HangWindow *w in @[game, box]) { w.releasedWhenClosed = NO; w.queue = q; w.delegate = w; }
+    RaisedWindow *top = nil;
+    if (raised) {
+        top = [[RaisedWindow alloc] initWithContentRect:NSMakeRect(0, 0, 200, 100) styleMask:NSWindowStyleMaskBorderless
+                                                backing:NSBackingStoreBuffered defer:NO];
+        top.releasedWhenClosed = NO;
+    }
+
+    SEL shouldClose = @selector(windowShouldClose:), getEvent = @selector(getEventMatchingMask:);
+    IMP closeBefore = class_getMethodImplementation(ww, shouldClose);
+    IMP pollBefore = class_getMethodImplementation(wq, getEvent);
+    post(NSWindowDidBecomeKeyNotification, box);
+    check("a message box (not resizable) installs nothing", class_getMethodImplementation(ww, shouldClose) == closeBefore);
+    // In a pool of its own, as one pass of wine's run loop: what the dylib sets up there (the
+    // Cmd-Q key monitor) must outlive the pool.
+    @autoreleasepool { post(NSWindowDidBecomeKeyNotification, game); }
+    BOOL installed = class_getMethodImplementation(ww, shouldClose) != closeBefore
+                  && class_getMethodImplementation(wq, getEvent) != pollBefore;
+    check(off ? "FFXI_GAMEWINDOW_HANG=0: nothing is overridden"
+              : "the game window's first sighting overrides -windowShouldClose: and -getEventMatchingMask:",
+          off ? !installed : installed);
+
+    // The game's thread.
+    HangLayer *layer = [HangLayer layer];
+    layer.device = MTLCreateSystemDefaultDevice();
+    layer.drawableSize = CGSizeMake(16, 16);
+    BOOL reads = strcmp(model, "polls") == 0 || strcmp(model, "stops") == 0;
+    BOOL draws = strcmp(model, "frames") == 0 || strcmp(model, "stops") == 0;
+    BOOL waits = strcmp(model, "wakes") == 0;
+    NSThread *thread = [[NSThread alloc] initWithBlock:^{
+        while (!atomic_load(&model_stop)) {
+            @autoreleasepool {
+                if (waits) {
+                    if (dispatch_semaphore_wait(q->wake, dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC)) == 0)
+                        (void)[q getEventMatchingMask:~0ULL];
+                    continue;
+                }
+                if (reads) (void)[q getEventMatchingMask:~0ULL];
+                if (draws) (void)[layer nextDrawable];
+                usleep(33000);
+            }
+        }
+    }];
+    if (reads || draws || waits) [thread start];
+    [NSThread sleepForTimeInterval:0.3];
+    if (strcmp(model, "stops") == 0) {
+        atomic_store(&model_stop, 1);
+        while (!thread.isFinished) [NSThread sleepForTimeInterval:0.01];
+    }
+
+    // The request, the way AppKit makes it, then the run loop for longer than the threshold: in
+    // NSModalPanelRunLoopMode for a quit (where AppKit waits after NSTerminateLater).
+    NSRunLoopMode mode = quit ? NSModalPanelRunLoopMode : NSDefaultRunLoopMode;
+    [[NSRunLoop currentRunLoop] addPort:[NSMachPort port] forMode:mode];   // so an idle mode still waits
+    HangWindow *target = dialog ? box : game;
+    void (^request)(void) = ^{
+        if (quit) {
+            // What -[NSApplication terminate:] asks first (the app menu's Quit, the Dock's Quit).
+            NSApplicationTerminateReply r = [controller applicationShouldTerminate:NSApp];
+            check("wine's -applicationShouldTerminate: still runs and answers NSTerminateLater", r == NSTerminateLater);
+        } else if (cmdq) {
+            NSEventModifierFlags flags = NSEventModifierFlagCommand | (option ? NSEventModifierFlagOption : 0);
+            NSEvent *ev = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:flags
+                                          timestamp:0 windowNumber:game.windowNumber context:nil
+                                         characters:@"q" charactersIgnoringModifiers:@"q" isARepeat:NO keyCode:12];
+            [NSApp postEvent:ev atStart:YES];
+            NSEvent *got = [NSApp nextEventMatchingMask:NSEventMaskKeyDown
+                                              untilDate:[NSDate dateWithTimeIntervalSinceNow:1]
+                                                 inMode:NSDefaultRunLoopMode dequeue:YES];
+            check("the key event comes through unchanged",
+                  got.type == NSEventTypeKeyDown && got.modifierFlags == ev.modifierFlags
+                  && [got.charactersIgnoringModifiers isEqualToString:@"q"]);
+            if (got) [NSApp sendEvent:got];
+            [q post];   // what wine's keyDown: does with it next (cocoa_window.m:2917-2928)
+        } else {
+            // What the red button's performClose: asks the delegate (WineWindow is its own).
+            (void)[target.delegate windowShouldClose:target];
+        }
+    };
+    void (^spin)(double) = ^(double secs) {
+        NSDate *until = [NSDate dateWithTimeIntervalSinceNow:secs];
+        while ([until timeIntervalSinceNow] > 0) [[NSRunLoop currentRunLoop] runMode:mode beforeDate:until];
+    };
+    request();
+    spin(T + 1.5);
+    check("the request went to wine's own handler and the game's queue once",
+          atomic_load(&q->posted) == 1
+          && (quit ? controller.quitRequests == 1 : cmdq ? YES : target.closeRequests == 1));
+    if (silent && !dialog && !option && !off) {
+        // Still here: Wait was the answer. The next request is judged afresh (two questions).
+        request();
+        spin(T + 1.5);
+        check("a request after Wait is watched again", atomic_load(&q->posted) == 2);
+    }
+    atomic_store(&model_stop, 1);
+    while (thread.executing) [NSThread sleepForTimeInterval:0.01];
+    check("no window was ever shown", !game.isVisible && !box.isVisible && (!top || !top.reallyVisible));
+    [top close];
+    [game close];
+    [box close];
+    printf("%s: %d failure(s)\n", failures ? "FAILED" : "ok", failures);
+    return failures ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
     @autoreleasepool {
         if (argc > 3 && strcmp(argv[1], "title") == 0)
             return title_main(argv[2], strcmp(argv[3], "expect") == 0);
+        if (argc > 3 && strcmp(argv[1], "hang") == 0)
+            return hang_main(argv[2], argv[3]);
         BOOL expectLock = argc > 1 && strcmp(argv[1], "lock") == 0;
         double W = 0, H = 0;
         const char *env = getenv("HXI_GAME_ASPECT");

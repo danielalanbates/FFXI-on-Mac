@@ -7,7 +7,8 @@
 #                            drag computation on a locked window, the game window's title
 #                            (HXI_WINDOW_TITLE) on wine's classes and Window menu, a process with no
 #                            AppKit, and the DYLD_INSERT_LIBRARIES carry across the x87 sidecar, with
-#                            the sidecar's real cooperative handshake and x87 hook
+#                            the sidecar's real cooperative handshake and x87 hook, and the
+#                            not-responding check (FFXI_GAMEWINDOW_HANG) on close, quit and Cmd-Q
 #
 # Run it only when no game is running: the carry test starts a renamed copy of the x87 sidecar,
 # which attaches to the test's own probe and nothing else, but it is the same JIT the game uses.
@@ -32,7 +33,7 @@ bad()  { print -r -- "FAIL  $1"; fails=$((fails + 1)); }
 # --- Window tests --------------------------------------------------------------------------------
 for arch in arm64 x86_64; do
   if ! clang -arch $arch -fobjc-arc -O1 -Wall -o "$T/wt-$arch" "$REPO/scripts/tests/gamewindow-test.m" \
-       -framework AppKit; then
+       -framework AppKit -framework QuartzCore -framework Metal; then
     bad "build the window test ($arch)"; continue
   fi
   print "== window test, $arch, HXI_GAME_ASPECT=1920x1080"
@@ -91,6 +92,44 @@ for arch in arm64 x86_64; do
     if [[ $rc == 0 ]]; then pass "HXI_WINDOW_TITLE of ${#v} bytes (empty, over 255, not UTF-8) is ignored ($arch)"
     else print -r -- "$out"; bad "HXI_WINDOW_TITLE of ${#v} bytes (empty, over 255, not UTF-8) is ignored ($arch)"; fi
   done
+
+  # Not responding (FFXI_GAMEWINDOW_HANG, 1 s here). A close, quit or Cmd-Q the game neither reads
+  # nor answers with a frame is asked about; anything else is left to the game. The answer
+  # "force" is Force Quit without showing anything, so a question where none belongs kills the
+  # test (137) instead of passing quietly.
+  hang_case() {  # hang_case <label> <request> <model> <answer> <left|asked|raised|killed|none|off> [FFXI_GAMEWINDOW_HANG]
+    local out rc asks ok=0
+    out=$( ( unset HXI_GAME_ASPECT; DYLD_INSERT_LIBRARIES="$DYLIB" HXI_WINDOW_TITLE="FFXI on Mac" \
+             FFXI_GAMEWINDOW_DEBUG=1 FFXI_GAMEWINDOW_HANG="${6:-1}" FFXI_GAMEWINDOW_HANG_ANSWER="$4" \
+             "$T/wt-$arch" hang "$2" "$3" ) 2>&1 ); rc=$?
+    asks=$(print -r -- "$out" | grep -c '; asking$')
+    case $5 in
+      left)   [[ $rc == 0 && $asks == 0 && "$out" == *"left to the game"* ]] && ok=1 ;;
+      asked)  [[ $rc == 0 && $asks == 2 && "$out" == *"Wait chosen; the game keeps running"* \
+                 && "$out" == *"nothing shown (window level 8)"* ]] && ok=1 ;;
+      raised) [[ $rc == 0 && $asks == 2 && "$out" == *"Wait chosen; the game keeps running"* \
+                 && "$out" == *"nothing shown (window level 1001)"* ]] && ok=1 ;;
+      killed) [[ $rc == 137 && $asks == 1 && "$out" == *"Force Quit chosen; ending the game"* ]] && ok=1 ;;
+      none)   [[ $rc == 0 && $asks == 0 && "$out" != *"watching the game for"* ]] && ok=1 ;;
+      off)    [[ $rc == 0 && $asks == 0 && "$out" == *"hang check off"* && "$out" != *"hang: -"* ]] && ok=1 ;;
+    esac
+    if (( ok )); then pass "$1 ($arch)"; else print -r -- "$out"; bad "$1 ($arch)"; fi
+  }
+  hang_case "close, game playing (reads its input): left to the game"              close   polls  force left
+  hang_case "close, game idle in GetMessage (the close wakes it): left to the game" close  wakes  force left
+  hang_case "close, game drawing but reading nothing: left to the game"           close   frames force left 2
+  hang_case "close, game hung: asked; Wait keeps it; the next close asks again"   close   hung   wait  asked
+  hang_case "close: reads and frames from before the close do not count"          close   stops  wait  asked
+  hang_case "close, game hung, Force Quit: the process ends by SIGKILL"           close   hung   force killed
+  hang_case "close, game hung beside a window at level 1000: the question goes to 1001" close raised wait raised
+  hang_case "close on a message box: never watched"                               close   dialog force none
+  hang_case "FFXI_GAMEWINDOW_HANG=0: nothing overridden, the close still reaches wine" close hung force off 0
+  hang_case "quit, game idle (the quit wakes it): left to the game"               quit    wakes  force left
+  hang_case "quit, game hung: judged in AppKit's NSTerminateLater mode; Force Quit" quit   hung   force killed
+  hang_case "quit, game hung: asked; Wait keeps it"                               quit    hung   wait  asked
+  hang_case "Cmd-Q, game playing: left to the game, the key goes on unchanged"    cmdq    polls  force left
+  hang_case "Cmd-Q, game hung, Force Quit"                                        cmdq    hung   force killed
+  hang_case "Cmd-Option-Q is wine's menu Quit, never watched as Cmd-Q"            cmdqopt hung   force none
 done
 
 # --- Processes with no AppKit at all -------------------------------------------------------------
@@ -135,6 +174,17 @@ for arch in arm64 x86_64; do
              "$T/$arch/wineserver" "appkit=0 corefoundation=0 foundation=0" - "FFXI on Mac"
   plain_case "any other process with only a title: CoreFoundation opened, never AppKit, exits 0 ($arch)" \
              "$T/plain-$arch" "appkit=0 corefoundation=1" - "FFXI on Mac"
+  # FFXI_GAMEWINDOW_HANG: 0 off, 1...600 seconds, anything else the default 5 s.
+  for v want in "" "after 5 s" abc "after 5 s" 601 "after 5 s" -3 "after 5 s" 1.5 "after 5 s" \
+                0 "off" 3 "after 3 s" 600 "after 600 s"; do
+    out=$( ( unset HXI_GAME_ASPECT; DYLD_INSERT_LIBRARIES="$DYLIB" HXI_WINDOW_TITLE="FFXI on Mac" \
+             FFXI_GAMEWINDOW_DEBUG=1 FFXI_GAMEWINDOW_HANG="$v" "$T/plain-$arch" ) 2>&1 )
+    if [[ "$out" == *"hang check $want"* && "$out" == *"appkit=0"* ]]; then
+      pass "FFXI_GAMEWINDOW_HANG='$v': hang check $want, no AppKit ($arch)"
+    else
+      print -r -- "$out"; bad "FFXI_GAMEWINDOW_HANG='$v': hang check $want, no AppKit ($arch)"
+    fi
+  done
 done
 
 # --- The carry across the x87 sidecar ----------------------------------------------------------
