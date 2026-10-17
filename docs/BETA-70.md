@@ -2,8 +2,9 @@
 
 Branch `beta-b70`, from `beta-b69` (5716690). Local beta: no GitHub release, nothing pushed, not
 installed. Written while Daniel was playing; **built and self-tested 2026-10-17** with no game
-running (release build, all 26 `--selftest-*` suites: 1014 checks, 0 failures; the window harness
-`scripts/tests/gamewindow-test.sh`: 342 PASS, 0 FAIL). Nothing in it has run in a game yet.
+running (release build, all 26 `--selftest-*` suites: 1016 checks, 0 failures; the window harness
+`scripts/tests/gamewindow-test.sh`: 342 PASS, 0 FAIL), then reviewed end to end (§9). Nothing in
+it has run in a game yet.
 
 Launcher changes from the freeze on 2026-10-16 at 14:15 (§1-§4), and renderer, launcher and
 game-window changes from the second freeze that evening (§5-§8):
@@ -27,6 +28,8 @@ game-window changes from the second freeze that evening (§5-§8):
 - The game window's close button and Quit work on a frozen game: 5 s after either, if the game has
   neither read its input nor drawn, it asks "The game isn't responding." with **Force Quit** and
   **Wait** ([Closing a frozen game from its window](#8-closing-a-frozen-game-from-its-window)).
+- An adversarial review of everything above found one defect, in Stop's wineserver step, fixed
+  ([Review](#9-review-2026-10-17)).
 
 The invisible in-game cursor reported the same day is a separate bug with its own write-up:
 [`CURSOR-DXVK.md`](CURSOR-DXVK.md). Only the rebuilt DXVK DLL in §5 touches it: it carries the fix.
@@ -292,13 +295,13 @@ source):
   stall it for long, because the finish queue now drains. The readback fence wait on a lost
   device returns at once from `vkWaitForFences` and falls back to the normal wait, which returns
   once the lists are retired.
-- **One caveat, harmless with MoltenVK.** `PresentImage` bumps `m_frameId` before the acquire
-  loop. The new early return there skips that frame's latency signal.
-  - If acquire later succeeded, the next `SyncFrameLatency` would wait for a signal that never
-    comes.
-  - MoltenVK's acquire returns `VK_ERROR_DEVICE_LOST` only for a lost device
-    (`MVKSwapchain.mm:83`), and a lost device stays lost, so that frame never comes. Revisit if
-    the MoltenVK version changes.
+- **One caveat, harmless.** `PresentImage` bumps `m_frameId` before the acquire loop. The new
+  early return there skips that frame's latency signal.
+  - That cannot hang a later frame (corrected in the §9 review): the latency signal is a counter
+    (`sync::Fence::wait(v)` returns once the value is at least `v`), so any later frame's signal
+    satisfies a wait for the skipped one. At worst one frame waits on its own submission.
+  - In any case MoltenVK's acquire returns `VK_ERROR_DEVICE_LOST` only for a lost device
+    (`MVKSwapchain.mm:83`), and a lost device stays lost, so no later frame comes.
 - Upstream v2.3 (5d119673, checked in an upstream clone) also stopped calling `waitForIdle` on
   `DEVICE_LOST` in the submit thread.
 
@@ -365,7 +368,8 @@ that ignored SIGTERM waited 8 s for SIGKILL.
    - every client on the Mac is one of this session's pids;
    - no other session of this launcher plays;
    - the launch lock is free (taken here and held until the signals are done, so no Play starts
-     against the dying server);
+     against the dying server). It is taken *before* the scan that decides the rest
+     (`Runner.serverToInterrupt`, §9);
    - the process holding the session's server folder lock is a wineserver in the scan, and the
      one first seen holding it, if one was.
 
@@ -681,11 +685,13 @@ These add 46 checks to b69's 942 (26 suites), and §5 adds 1: 989, as run.
 §8 changes no Swift code. The same 26 suites, run again with its dylib in `app/Resources`: 1014
 checks, 0 failures, launcher.log untouched. Its own tests are in the window harness (§8, 342 PASS).
 
+§9's fix adds 2 to `--selftest-leftovers` (66): 1016. The final runs are in §9.
+
 ## Not verified
 
 - **Nothing has run outside the self-tests.** The release build compiles (two warnings, both in
-  older code: LocalServer.swift:251, Runner.swift:2198) and every suite passes; no part of it has
-  been seen in the app or in a game.
+  older code from 2026-08-13: LocalServer.swift:251, Runner.swift:2374) and every suite passes; no
+  part of it has been seen in the app or in a game.
 - That `--leftovers-report` lists nothing to end during a healthy session (read-only, safe to run
   during play).
 - That the Dock menu reaches the launcher's delegate through SwiftUI's
@@ -751,6 +757,112 @@ checks, 0 failures, launcher.log untouched. Its own tests are in the window harn
    (`WS_EX_TOPMOST`).
 8. On the local LSB world, with `FFXI_GAMEWINDOW_DEBUG=1` in Extra environment: zone a few times
    and read the `gap:` lines in the game log. They show what 5 s has to cover.
+9. **The GPU-reset path, live** (§5, §7; the 2026-10-16 21:31 conditions). Nothing can force a
+   Metal GPU recovery, so this only shows something if one happens; repeat it on a few evenings.
+   - Before: the b70 app installed (its `d3d9.dll` is copied beside the client on Play; check
+     `last-spawn.txt` shows `MVK_CONFIG_RESUME_LOST_DEVICE=1`). For this test only, add
+     `MVK_CONFIG_LOG_LEVEL=2` in Extra environment, so a reset MoltenVK rides out leaves its
+     `[mvk-warn] … Resumed VkDevice …` line in the game log (level 2 is noisy; `RepeatCap` keeps
+     launcher.log to 20 copies of a line). Take it out afterwards.
+   - Play on the **local LSB world** (never HorizonXI for a test), log in and stand somewhere.
+     Plug in AC, close the lid, leave it 30-120 minutes, then open it.
+   - launcher.log should have `i  display off at …` and `i  display on at …` and no `i  sleep at`
+     line between them: the Mac stayed awake with the displays off, as on 2026-10-16 from 20:13 to
+     22:10. A `sleep at` line means the Mac slept instead, which is not the 21:31 condition.
+   - Then: `grep -nE "Resumed VkDevice|Lost VkDevice|DEVICE_LOST|horizonxi: GPU device lost"` on the
+     game log (`$TMPDIR/ffxi-on-mac-game-<launcher pid>-Local-server.log`) and on launcher.log.
+     - Nothing: no reset happened (the usual case); only the display lines are tested.
+     - `Resumed VkDevice`: a reset happened and fix 1 worked. The game must still draw and respond
+       (move, open a menu); note any wrong textures until the next zone.
+     - `Lost VkDevice` / `horizonxi: GPU device lost`: a real loss. The picture stays frozen but the
+       game must still answer its close button and Quit, and within ~2 s launcher.log has
+       `the game's GPU device was lost at …` and the button reads Stop with "The game's graphics
+       stopped at …" under it. Stop must end it at once, with no question. Send the game log.
+     - The game frozen with none of these lines: a new failure. Before Stop, take
+       `sample <loader pid> 5 -file ~/Downloads/hang.txt` (read-only) and keep launcher.log.
+
+## 9. Review (2026-10-17)
+
+Everything on `beta-b70` since 5716690 was read again against the sources the sections cite
+(DXVK 1.10.3 with the patch applied, the build tree the DLL came from, MoltenVK 1.4.2, athei/wine
+cx-26-patched), looking for ways each part could hang, signal the wrong process or speak when
+nothing is wrong.
+
+**Fixed: Stop's wineserver step scanned before it took the launch lock** (b21871f). The SIGINT
+gate (§6) read the clients on the Mac first and took the launch lock after. The wineserver flush
+after a Stop already does it the other way round, for this reason: another launcher can finish a
+launch and let go of the lock in between, and its client is then neither in the scan nor under
+way, so the SIGINT would end it. `Runner.serverToInterrupt` now takes the lock, then scans, then
+reads the folder's holder; refused, it lets the lock go. `--selftest-leftovers` +2: the order
+(lock, scan, holder) and the server and held lock handed back; a lock held elsewhere scans nothing;
+a client seen by the scan under the lock, or a holder that is not a wineserver, is refused with the
+lock let go; another session playing or no folder is refused.
+
+**Checked and left as they are:**
+
+- **The DLL is the patch.** The build tree the DLL came from is v1.10.3 plus exactly
+  `dxvk-1.10.3-horizonxi-fencewait.patch` (its 165 files, line for line); its `d3d9.dll` is
+  `70ba5664…`, the vendored one. `strings` finds both new log lines in the vendored DLL.
+- **DXVK device-lost hunks** (§5). No thread waits for idle holding `m_mutex`; every command list,
+  refused ones included, is pushed to the finish queue exactly once and gets `notifyObjects`,
+  `m_pending -= 1`, the `m_finishCond` notify, `reset` and recycle once; `submitResult` is written
+  under `m_mutex` before the push and read after the pop; `m_lostRetired` is the finish thread's
+  alone. The one wait for idle cannot deadlock: `synchronize()` needs only the submit thread, which
+  after a loss refuses without touching `m_mutexQueue`, and the CS thread stops at the queue bound.
+  MoltenVK's `vkDeviceWaitIdle` commits on the real Metal queue even on a lost device (`MVKQueue::
+  waitIdle` has no lost check), so it does wait for earlier work. `Present`'s early return calls
+  `Flush()`, which takes the device lock itself; `Reset` makes new back buffers but leaves the swap
+  chain to `Present` (it only marks it dirty), so nothing re-creates the swap chain after a loss.
+  The missed frame-latency signal in the acquire loop cannot hang a later frame either: the signal
+  is a counter and any later frame's signal satisfies the wait (§5's caveat said otherwise; it is
+  corrected there).
+  A race in the submit thread can overwrite `DEVICE_LOST` with another error for one submission
+  (stock DXVK has the same race); the next refused submit puts it back. Not changed.
+- **The frozen-graphics lines** (§7). Matched by the line's start: DXVK writes `err:   `, wine's own
+  lines start with a thread id (`0024:err:`), Ashita's with a `[` time stamp, MoltenVK's warning
+  with `[mvk-warn]`, so chat or a warning never matches. With `MVK_CONFIG_RESUME_LOST_DEVICE=1`,
+  MoltenVK prints `Lost VkDevice` only when it really marks the device lost. The state is cleared on
+  every launch, adopt and exit (`clearStopState`), the output cap is new for every spawn, and a
+  line is read once, so a past session's loss never carries over.
+- **PrimaryAction order.** Stopping… only for the selected world's own running session, after the
+  launcher's own work (restart, Setup, the world's job), which a running game cannot start; the
+  RUNNING list keeps every other session's Stop. Never a greyed-out Play.
+- **Kill safety of Stop.** `escalateStop` only signals `signalable`'s pids, re-checks each with
+  `stillSignalable` before SIGKILL, and the SIGINT needs every FFXI client on the Mac to be the
+  session's, no other session of this launcher playing, the launch lock (so no launch or Repair,
+  which hold it, is under way) and the session's own wineserver. Another Wine install's clients
+  are served by another wineserver and are out of reach either way.
+- **gamewindow's hang check** (§8). Nothing is judged without a close, Quit or Cmd-Q, so play,
+  zoning, a minimized or covered window and a locked screen are never asked about. A message box
+  or a modal loop of the game's own reads the queue and counts as alive. Every override is
+  installed only when its class and method exist (`class_getInstanceMethod`), and every other call
+  into wine's classes is behind `respondsToSelector:` or a class check, so a missing wine selector
+  turns the check off instead of crashing. The committed `gamewindow.dylib` is the source: rebuilt in a scratch folder,
+  arm64 is byte-identical and x86_64 has the same LC_UUID (only the signature differs), no warnings.
+- **The earlier b70 parts** (§1-§4): unchanged by §5-§8 and by this fix, and their checks still
+  pass (`--selftest-leftovers`, `--selftest-multiworld`). The cursor fix is in the DLL.
+- **Not changed, noted:** the watch loop now wakes every 0.5 s for the whole session to notice a
+  Stop quickly (each wake reads one flag); Force Quit stays on Return, as the brief asked, with
+  the zone-load risk in §8.
+
+**Final runs, 2026-10-17, no game running at any of them:**
+
+- `swift build -c release` after `swift package clean`: built, the same two old warnings only.
+- All 26 `--selftest-*` suites, one at a time: 1016 checks, 0 failures (leftovers 66). launcher.log
+  untouched. In the first full run after the fix, `--selftest-updater` failed the same two checks
+  as before (its probe's output not seen within 15 s); it passed five times on its own and after
+  the suites before it, and in the full run after. It is not touched by b70.
+- `scripts/tests/gamewindow-test.sh`, arm64 and x86_64: 342 PASS, 0 FAIL (from a copy whose
+  sidecar fallback to /Applications points nowhere; the vendor sidecar passed).
+- `scripts/tests/setup-scripts-test.sh` with `HXI_LAUNCHER_BIN`: 80 ok, 20 FAIL, all environment,
+  the same six cases as b64 and b65 (10, 11, 12, 16, 30, 31: `update-client.sh` wants 17 GB free
+  for the base client's unzip, the Mac has 14 GB). Case 21, the launcher's `--next-action` and
+  `--fix`: all ok. No script changed in b70.
+- `zsh -n` on `scripts/tests/gamewindow-test.sh`, `scripts/build-gamewindow.sh` and
+  `app/bundle.sh`: clean. `cursorprobe.c` compiles with no warnings (i686 mingw).
+- Not run: `apply-update-test.sh` (needs one of the team's notarized apps, which live in
+  /Applications), `ashita-send-test.sh` (starts wine), `audiofollow-test.sh` (switches the Mac's
+  sound output); none is touched by b70.
 
 ## Deviations from the plan
 
