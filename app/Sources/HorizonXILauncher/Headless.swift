@@ -57,6 +57,7 @@ enum Headless {
             || a.contains("--fix")
             || a.contains("--selftest-single-instance")
             || a.contains("--selftest-single-instance-probe")
+            || a.contains("--selftest-lock-probe")
     }
 
     @MainActor static func runIfAsked() {
@@ -143,6 +144,9 @@ enum Headless {
         if args.contains("--progress-trace") { runProgressTrace() }
         if let at = args.firstIndex(of: "--selftest-single-instance-probe") {
             runSingleInstanceProbe(Array(args[(at + 1)...]))
+        }
+        if let at = args.firstIndex(of: "--selftest-lock-probe") {
+            runLockProbe(Array(args[(at + 1)...]))
         }
         if args.contains("--selftest-single-instance") {
             runSingleInstanceSelfTest()
@@ -1157,6 +1161,120 @@ enum Headless {
             FileHandle.standardError.write(Data("  \(error.localizedDescription)\n".utf8))
         }
         try? fm.removeItem(at: root)
+
+        // b70: Wine that died under a session. Pure, or injected: no process is read or
+        // signalled; the launch lock and the stand-in volumes are temporary files of their own.
+        let me = getuid()
+        let folder = "/tmp/.wine-\(me)/server-1000016-d7c73b"
+        let playing = LiveClients.parse("""
+            44464 44464 /x/wine-coop/wine/bin/wineserver
+            44474 44474 C:\\windows\\system32\\services.exe
+            44482 44482 C:\\windows\\system32\\explorer.exe /desktop
+            44487 44470 .\\\\bootloader\\\\horizon-loader.exe --server play.horizonxi.com --user fixture --pass fixture
+            44489 44470 /Applications/FFXI-on-Mac.app/Contents/Resources/x87sidecar-coop --cooperative /x/wine-coop/wine/lib/wine/x86_64-unix/wine .\\\\bootloader\\\\horizon-loader.exe --server play.horizonxi.com --user fixture --pass fixture
+            77783 77783 C:\\windows\\system32\\plugplay.exe
+            77785 77785 C:\\windows\\system32\\explorer.exe /desktop
+            77793 77790 .\\\\bootloader\\\\horizon-loader.exe --server play.horizonxi.com --user fixture --pass fixture
+            """)
+        let startOf: [pid_t: UInt64] = [44474: 1792193860, 44482: 1792193861, 77783: 1792175494, 77785: 1792175495]
+        let identity: (pid_t) -> Leftovers.ProcID? = { p in startOf[p].map { Leftovers.ProcID(startSec: $0, uid: me, ppid: 1) } }
+        let liveServer = Leftovers.ServerLock.held(44464, Leftovers.ProcID(startSec: 1792193859, uid: me, ppid: 1))
+        checks.append(("b70: a session playing beside a dead session's programs: only those are flagged, never a loader or the sidecar",
+                       Leftovers.stale(playing, dirs: [folder], identity: identity, lock: { _ in liveServer },
+                                       maps: { _, _, _ in true }).map(\.pid) == [77783, 77785]
+                           && MultiWorld.sessionPIDs(group: 44470, groupHeldLoader: true, host: "play.horizonxi.com",
+                                                     preexisting: [], otherGroups: [], in: playing) == [44487, 44489]))
+        // The drive back under another device number: the prefix has a new server folder, and
+        // the dead session's programs map the old one, which a session of this run recorded.
+        let oldFolder = "/tmp/.wine-\(me)/server-1000019-d7c73b"
+        let byFolder: (String, pid_t, Leftovers.ProcID) -> Bool = { dir, pid, _ in (pid > 77000) == (dir == oldFolder) }
+        let lockOf: (String) -> Leftovers.ServerLock = { $0 == oldFolder ? .free : liveServer }
+        checks.append(("b70: the drive back under another device number: found through the recorded folder; without it, nothing",
+                       Leftovers.stale(playing, dirs: [folder, oldFolder], identity: identity, lock: lockOf,
+                                       maps: byFolder).map(\.pid) == [77783, 77785]
+                           && Leftovers.stale(playing, dirs: [folder], identity: identity, lock: lockOf, maps: byFolder).isEmpty))
+        let lockURL = fm.temporaryDirectory.appendingPathComponent("hxi-launch-lock-\(UUID().uuidString)")
+        let fake = [Leftovers.Stale(pid: 77785, id: Leftovers.ProcID(startSec: 1792175495, uid: me, ppid: 1))]
+        var scanned = false, signalled = false
+        let elsewhereHolder = LaunchLock.acquire(at: lockURL)
+        let refused = Leftovers.endStale(dirs: [folder], grace: 0, lockAt: lockURL,
+                                         flag: { _ in scanned = true; return fake },
+                                         signal: { f, _ in signalled = true; return f.map(\.pid) })
+        checks.append(("b70: with the launch lock held by another holder, endStale scans and signals nothing",
+                       elsewhereHolder != nil && refused.isEmpty && !scanned && !signalled))
+        // Play's half: it holds the lock already and only flags; it signals from a task of its own.
+        let byPlay = Leftovers.flagStale(dirs: [folder], lockHeld: true, lockAt: lockURL, flag: { _ in fake })
+        checks.append(("b70: ... while Play, which holds it already, goes ahead", byPlay == fake))
+        if let elsewhereHolder { LaunchLock.release(elsewhereHolder) }
+        let afterRelease = Leftovers.endStale(dirs: [folder], grace: 0, lockAt: lockURL,
+                                              flag: { _ in fake }, signal: { f, _ in f.map(\.pid) })
+        checks.append(("b70: ... and so does a refresh once the lock is free; nothing at all without a folder",
+                       afterRelease == [77785]
+                           && Leftovers.flagStale(dirs: [], lockHeld: true, flag: { _ in fake }).isEmpty
+                           && Leftovers.endStale(dirs: [], lockAt: lockURL, flag: { _ in fake },
+                                                 signal: { f, _ in f.map(\.pid) }).isEmpty))
+        try? fm.removeItem(at: lockURL)
+
+        // The wineserver first seen holding the lock is then asked as a process (Leftovers.state).
+        let w1 = Leftovers.LockHolder(pid: 77771, startSec: 1792175493, startUsec: 0)
+        let w1ID = Leftovers.ProcID(startSec: 1792175493, uid: me, ppid: 1)
+        func stateOf(_ id: Leftovers.ProcID?, alive: Bool) -> Leftovers.ServerState {
+            Leftovers.state(of: w1, identity: { _ in id }, alive: { _ in alive })
+        }
+        checks.append(("b70 serverLost: the wineserver gone with the loader alive (2026-10-16 14:15:40)",
+                       stateOf(nil, alive: false) == .gone && MultiWorld.serverLost(first: w1, now: .gone, loaderAlive: true)))
+        checks.append(("b70 serverLost: another process under its pid (started later) counts as gone",
+                       stateOf(Leftovers.ProcID(startSec: 1792193859, uid: me, ppid: 1), alive: true) == .gone))
+        checks.append(("b70 serverLost: a read that fails while its pid lives says nothing (the lock file gone after 3 days, EMFILE)",
+                       stateOf(nil, alive: true) == .unknown && !MultiWorld.serverLost(first: w1, now: .unknown, loaderAlive: true)))
+        checks.append(("b70 serverLost: not while the same one runs, not once the loader is gone, not when none was ever seen",
+                       stateOf(w1ID, alive: true) == .running
+                           && !MultiWorld.serverLost(first: w1, now: .running, loaderAlive: true)
+                           && !MultiWorld.serverLost(first: w1, now: .gone, loaderAlive: false)
+                           && !MultiWorld.serverLost(first: w1, now: nil, loaderAlive: true)
+                           && !MultiWorld.serverLost(first: nil, now: .gone, loaderAlive: true)))
+
+        let livePaths = [
+            "HorizonXI": ["/Volumes/x10/Video Games/Mac/FFXI/FFXI on Mac/FFXI on Mac Wine.app/Contents/SharedSupport/prefix10",
+                          "/Volumes/x10/Video Games/Mac/FFXI/wine-coop/wine/bin/wine"],
+            "Local server": ["/Users/x/Library/Application Support/FFXI/prefix", "/Users/x/wine/bin/wine"],
+        ]
+        checks.append(("b70 sessionsOnVolume: the session whose prefix and wine are on /Volumes/x10, not the other",
+                       MultiWorld.sessionsOnVolume("/Volumes/x10", livePaths: livePaths) == ["HorizonXI"]
+                           && MultiWorld.sessionsOnVolume("/Volumes/x10/", livePaths: livePaths) == ["HorizonXI"]))
+        checks.append(("b70 sessionsOnVolume: /Volumes/x1 is not /Volumes/x10, nor is '/Volumes/x10 2'",
+                       MultiWorld.sessionsOnVolume("/Volumes/x1", livePaths: livePaths).isEmpty
+                           && MultiWorld.sessionsOnVolume("/Volumes/x10 2", livePaths: livePaths).isEmpty))
+        // The Games volume's wine-coop is a link into the x10 (live Mac, 2026-10-16): the path a
+        // session keeps is the link resolved, so the x10 going away names it, the Games volume
+        // does not. A temporary folder stands in for both volumes.
+        let vols = fm.temporaryDirectory.appendingPathComponent("hxi-volumes-\(UUID().uuidString)")
+        let x10 = vols.appendingPathComponent("x10"), games = vols.appendingPathComponent("Games")
+        try? fm.createDirectory(at: x10.appendingPathComponent("wine-coop/wine/bin"), withIntermediateDirectories: true)
+        try? fm.createDirectory(at: games.appendingPathComponent("FFXI"), withIntermediateDirectories: true)
+        try? fm.createSymbolicLink(atPath: games.appendingPathComponent("FFXI/wine-coop").path,
+                                   withDestinationPath: x10.appendingPathComponent("wine-coop").path)
+        let kept = ["HorizonXI": [OwnWine.resolve(games.appendingPathComponent("FFXI/wine-coop/wine/bin").path)]]
+        checks.append(("b70 sessionsOnVolume: the Games volume's wine-coop link resolves to the x10",
+                       MultiWorld.sessionsOnVolume(OwnWine.resolve(x10.path), livePaths: kept) == ["HorizonXI"]
+                           && MultiWorld.sessionsOnVolume(OwnWine.resolve(games.path), livePaths: kept).isEmpty))
+        try? fm.removeItem(at: vols)
+
+        let items = MultiWorld.stopItems([(session: "HorizonXI", serverLost: false, stopping: false),
+                                          (session: "Local server #2", serverLost: true, stopping: false)])
+        checks.append(("b70 Dock and Game menu: a Stop per playing session, Force Stop once its Wine is gone",
+                       items.map(\.title) == ["Stop HorizonXI", "Force Stop Local server #2"]
+                           && items.map(\.force) == [false, true] && items.map(\.session) == ["HorizonXI", "Local server #2"]
+                           && !items.contains(where: \.stopping)))
+        let stopping = MultiWorld.stopItems([(session: "HorizonXI", serverLost: false, stopping: true),
+                                             (session: "Local server", serverLost: true, stopping: true)])
+        checks.append(("b70 Dock and Game menu: a session whose Stop is under way shows \"Stopping …\", not pressable, even once its Wine is gone",
+                       stopping.map(\.title) == ["Stopping HorizonXI…", "Stopping Local server…"]
+                           && stopping.allSatisfy { $0.stopping && !$0.force }))
+        // Structural for a client elsewhere: stopItems is built from `live` alone.
+        checks.append(("b70 Dock and Game menu: nothing when nothing plays; a playing session gets one, an idle one none",
+                       MultiWorld.stopItems([]).isEmpty
+                           && sessions.stopItems.map(\.title) == ["Stop Local server"]))
 
         let failures = checks.filter { !$0.1 }.count
         for (name, passed) in checks {

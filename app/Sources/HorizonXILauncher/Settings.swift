@@ -181,6 +181,11 @@ struct PerfSettings: Codable {
         // surfaces <= 32 px. See patches/dxvk-1.10.3-horizonxi-fencewait.patch.
         env["D3D9_RT_READBACK_FENCE"] = "32"
         env["MVK_CONFIG_USE_COMMAND_POOLING"] = "1"
+        // A GPU reset elsewhere fails one of our Metal command buffers (2026-10-16 21:31,
+        // "Discarded (victim of GPU error/recovery)"). By default MoltenVK then marks the VkDevice
+        // lost for good. With this it still signals that buffer's fence and the device stays usable
+        // (one frame of GPU work lost); a lost GPU (removed/access revoked) is still fatal.
+        env["MVK_CONFIG_RESUME_LOST_DEVICE"] = "1"
         // The last macOS 27 session emitted thousands of identical DXVK/MoltenVK warnings
         // after login. They are still available when explicitly requested for diagnostics,
         // but routine play should not spend time writing them or redrawing the log pane.

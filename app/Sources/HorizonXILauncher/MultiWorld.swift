@@ -62,6 +62,13 @@ enum LiveClients {
         /// this launcher's wine (`OwnWine`). See `Leftovers.serverless`.
         var ownWineservers: [pid_t] = []
         var ownSystemPrograms: [pid_t] = []
+        /// wine's own programs that could be left from a session of this launcher: this
+        /// launcher's wine's, and every one whose executable cannot be read. One whose drive
+        /// went away under it has no readable path, so it is never in `ownSystemPrograms`
+        /// (2026-10-16). Another Wine install's (its path reads, and is not this launcher's
+        /// wine) is left out, so it is never walked (b70 review). Only `Leftovers.stale` looks
+        /// at these, and it decides by what each one maps, never by this list alone.
+        var systemPrograms: [pid_t] = []
 
         var byHost: [String: [pid_t]] { LiveClients.byHost(clients) }
 
@@ -112,7 +119,10 @@ enum LiveClients {
     /// launcher's wine builds or the x87 sidecar (`OwnWine`), so a game running under another
     /// wine install (XIV on Mac, CrossOver, Whisky) never holds this launcher's prefix up. The
     /// default, used by self-tests that are not about this, takes every program as ours.
-    static func parse(_ text: String, isOurs: (pid_t) -> Bool = { _ in true }) -> Snapshot {
+    /// `pathRead`: the program's executable could be read at all (`systemPrograms`); with no
+    /// reader, as in the self-tests, none could.
+    static func parse(_ text: String, isOurs: (pid_t) -> Bool = { _ in true },
+                      pathRead: (pid_t) -> Bool = { _ in false }) -> Snapshot {
         var snap = Snapshot()
         for raw in text.split(whereSeparator: \.isNewline) {
             let fields = raw.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
@@ -137,7 +147,9 @@ enum LiveClients {
             let injecting = isInjector(program)
             let known = injecting || isLoader(program)
             if !known, isWineSystemProgram(program) {
-                if isOurs(pid) { snap.ownSystemPrograms.append(pid) }
+                let ours = isOurs(pid)
+                if ours { snap.ownSystemPrograms.append(pid) }
+                if ours || !pathRead(pid) { snap.systemPrograms.append(pid) }
                 continue
             }
             let ours = isOurs(pid)
@@ -160,6 +172,7 @@ enum LiveClients {
         snap.wineservers.sort()
         snap.ownWineservers.sort()
         snap.ownSystemPrograms.sort()
+        snap.systemPrograms.sort()
         snap.clients.sort { $0.pid < $1.pid }
         return snap
     }
@@ -270,7 +283,7 @@ enum LiveClients {
             let ours = own.owns(executable: e)
             seen[e] = ours
             return ours
-        })
+        }, pathRead: { executablePath(of: $0) != nil })
     }
 
     /// The file a process is running, as the kernel has it. Not `ps -o comm`: wine rewrites
@@ -537,6 +550,57 @@ enum MultiWorld {
         clients.isEmpty && otherSessionsPlaying == 0 && !launchUnderWay
     }
 
+    /// b70: may Stop send the session's wineserver what `wineserver -k` sends (SIGINT, then
+    /// SIGCONT; `Runner.escalateStop`)? That server serves every world in the prefix and ends
+    /// all their clients: only when every client on the Mac is one of this session's (`mine`),
+    /// no other session of this launcher plays, no launch is under way (the launch lock is
+    /// free), and the server holding the folder now (`now`) is the one first seen holding it, if
+    /// one was (`first`). Never without a server read.
+    static func mayInterruptServer(_ clients: [LiveClients.Client], mine: Set<pid_t>, otherSessionsPlaying: Int,
+                                   launchUnderWay: Bool, first: Leftovers.LockHolder?,
+                                   now: Leftovers.LockHolder?) -> Bool {
+        guard let now, first == nil || first == now else { return false }
+        return clients.allSatisfy { mine.contains($0.pid) } && otherSessionsPlaying == 0 && !launchUnderWay
+    }
+
+    /// b70: has the wineserver under a session gone while its client still runs? `first` is the
+    /// holder of the session's server folder lock as first seen (once its loader had been up
+    /// 30 s), `now` what became of that process this tick (`Leftovers.state`). Gone (no such
+    /// process, or another under its pid) while the loader is alive: wine has no way back to a
+    /// server, so that client is frozen for good (2026-10-16 14:15:40, the game stuck at
+    /// character select). A read that failed says nothing, and neither does a server never seen.
+    static func serverLost(first: Leftovers.LockHolder?, now: Leftovers.ServerState?, loaderAlive: Bool) -> Bool {
+        first != nil && loaderAlive && now == .gone
+    }
+
+    /// b70: the sessions whose prefix or wine (realpaths read when they started; once the volume
+    /// is gone nothing on it resolves) are on the volume that was mounted at `volume`. By whole
+    /// path components, so `/Volumes/x1` is not `/Volumes/x10`.
+    static func sessionsOnVolume(_ volume: String, livePaths: [String: [String]]) -> [String] {
+        livePaths.filter { entry in entry.value.contains { Leftovers.isUnder($0, dir: volume) } }
+            .map(\.key).sorted()
+    }
+
+    /// b70: what the Dock menu and the Game menu offer: one item per session of this launcher
+    /// that is playing, "Force Stop" for one whose Wine died under it, and a disabled
+    /// "Stopping …" for one whose Stop is under way. A client another launcher started is not
+    /// this one's to stop and gets nothing, as in the RUNNING list.
+    struct StopItem: Equatable {
+        let session: String
+        let title: String
+        let force: Bool
+        /// Its Stop is under way: shown, not pressable.
+        var stopping = false
+    }
+
+    static func stopItems(_ live: [(session: String, serverLost: Bool, stopping: Bool)]) -> [StopItem] {
+        live.map { s in
+            s.stopping ? StopItem(session: s.session, title: "Stopping \(s.session)…", force: false, stopping: true)
+                       : StopItem(session: s.session, title: (s.serverLost ? "Force Stop " : "Stop ") + s.session,
+                                  force: s.serverLost)
+        }
+    }
+
     /// Clients this launcher did not start (another launcher process, a hand-run): not in any
     /// of `ownGroups`, and not on a host a group-less session of ours is playing.
     static func elsewhere(_ clients: [LiveClients.Client], ownGroups: Set<pid_t>,
@@ -679,6 +743,38 @@ final class Sessions: ObservableObject {
 
     var anyBusy: Bool { runners.values.contains { $0.busy } }
 
+    /// One for the whole process, like `Updater.shared`: the launcher window, the Dock menu, the
+    /// Game menu and the sleep, wake and unmount lines (LauncherDelegate) reach the same
+    /// sessions. Closing the window (the app keeps running) used to release them with their
+    /// Stop and their watch loops, which is when the Dock menu's Stop is needed (b70 review).
+    static let shared = Sessions()
+
+    /// b70: a Stop per playing session, for the Dock menu and the Game menu.
+    var stopItems: [MultiWorld.StopItem] {
+        MultiWorld.stopItems(live.map {
+            (session: $0.id, serverLost: $0.runner.serverLost, stopping: $0.runner.stoppingGame)
+        })
+    }
+
+    /// The Dock menu's and the Game menu's Stop. No alert, like the RUNNING list's: choosing it
+    /// from a menu is the decision. Force Stop for a session whose Wine died under it.
+    func stop(session id: String) {
+        guard let r = live.first(where: { $0.id == id })?.runner, !r.stoppingGame else { return }
+        r.stop(force: r.serverLost)
+    }
+
+    /// b70: a volume went away (`NSWorkspace.didUnmountNotification`). Each playing session whose
+    /// prefix or wine is on it is marked (`Runner.markServerLost`): its client runs from files
+    /// that are gone and cannot recover. Nothing is ended here.
+    func volumeGone(_ volume: String, name: String?) {
+        let live = self.live
+        var paths: [String: [String]] = [:]
+        for s in live { paths[s.id] = s.runner.sessionPaths }
+        let hit = Set(MultiWorld.sessionsOnVolume(volume, livePaths: paths))
+        let drive = name ?? (volume as NSString).lastPathComponent
+        for s in live where hit.contains(s.id) { s.runner.markServerLost(drive: drive) }
+    }
+
     /// The `--server` each world's boot profile carries, normalised, by world name. The
     /// duplicate refusal checks it as well as the Host field, so PLAY/RUNNING must too.
     @Published private(set) var bootHosts: [String: String] = [:]
@@ -694,12 +790,19 @@ final class Sessions: ObservableObject {
     /// Neither happens while another launcher is alive, a job of this one is under way, or
     /// without `install`; a launch of this one keeps its client by group or host (`playingGroups`)
     /// and, for the cleanup, by `anyPlaying` and the launch lock.
+    ///
+    /// b70: also what a Wine session that already died left running (`Leftovers.stale`), in this
+    /// prefix's server folder and every one a session of this run started in, even while a game
+    /// plays and its wineserver runs: the rule's start-time test is what keeps a live session's
+    /// programs out. The launch lock and the checks above still apply.
     func refreshElsewhere(install: Install? = nil, profiles: [(world: String, profile: String)] = [],
                           servers: [Server] = []) async {
         let before = Runner.playingGroups
         let prefix = install.map { $0.prefix.path } ?? ""
-        let (snap, boot, evidence, prefixPath, serverless) = await Task.detached {
-            () -> (LiveClients.Snapshot, [String: String], (groups: [pid_t: String], servers: [pid_t: String?]), String, [pid_t]) in
+        let recorded = Runner.serverDirs
+        let (snap, boot, evidence, prefixPath, serverless, staleDirs) = await Task.detached {
+            () -> (LiveClients.Snapshot, [String: String], (groups: [pid_t: String], servers: [pid_t: String?]),
+                   String, [pid_t], Set<String>) in
             var boot: [String: String] = [:]
             if let install {
                 for p in profiles {
@@ -709,7 +812,7 @@ final class Sessions: ObservableObject {
                 }
             }
             let snap = LiveClients.snapshot()
-            guard !prefix.isEmpty else { return (snap, boot, ([:], [:]), "", []) }
+            guard !prefix.isEmpty else { return (snap, boot, ([:], [:]), "", [], []) }
             let ev = Leftovers.evidence(snap, ownGroups: before.groups, ownHostsWithoutGroup: before.hostsWithoutGroup)
             // The prefix is touched (realpath, stat; it may sit on a sleeping drive) only when
             // there is something to decide: almost every refresh has nothing left over.
@@ -718,7 +821,15 @@ final class Sessions: ObservableObject {
                                        prefixSocketExists: Leftovers.prefixSocketExists(prefix))
                 : []
             let resolved = ev.groups.isEmpty && ev.servers.isEmpty ? prefix : OwnWine.resolve(prefix)
-            return (snap, boot, ev, resolved, left)
+            // Likewise the stat for the server folder: only when one of wine's own programs could
+            // be a dead session's at all (this wine's, or one with no readable executable). A
+            // program's regions are walked at most once for its life (`mapsFileOnce`), so with a
+            // game playing a refresh costs a lock read per folder and an identity read per
+            // program (`procID`, two proc calls).
+            var dirs = recorded
+            if !snap.systemPrograms.isEmpty, let d = Leftovers.serverDir(forPrefix: prefix) { dirs.insert(d) }
+            let stale = snap.systemPrograms.isEmpty ? [] : Leftovers.stale(snap, dirs: dirs)
+            return (snap, boot, ev, resolved, left, stale.isEmpty ? [] : dirs)
         }.value
         if boot != bootHosts { bootHosts = boot }
 
@@ -746,7 +857,16 @@ final class Sessions: ObservableObject {
                 r.adopt(group: o.group, host: o.host, world: w.name, install: install.forServer(w),
                         profile: w.bootProfile, pids: o.pids)
             }
-            if !serverless.isEmpty, !cleaning, !Runner.anyPlaying {
+            if !staleDirs.isEmpty, !cleaning {
+                cleaning = true
+                // Its own task, like the one below; the rule is run again in there, under the
+                // launch lock.
+                Task { [weak self] in
+                    let ended = await Task.detached { Leftovers.endStale(dirs: staleDirs) }.value
+                    self?.cleaning = false
+                    if !ended.isEmpty { Runner.appendToLogFile(Leftovers.endedLine(ended)) }
+                }
+            } else if !serverless.isEmpty, !cleaning, !Runner.anyPlaying {
                 cleaning = true
                 // Its own task: the seconds it waits (one, then up to three for SIGTERM) never
                 // hold up this refresh, the RUNNING list, or start-up's forwarded --play.

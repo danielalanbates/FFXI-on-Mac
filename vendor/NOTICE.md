@@ -10,7 +10,7 @@ image. `dxvk.conf` is this project's own file. Checked against the tree on 2026-
 | File | Upstream | Source | Modified | Licence |
 | --- | --- | --- | --- | --- |
 | `d3d8to9.dll` | [crosire/d3d8to9](https://github.com/crosire/d3d8to9) | v1.15.1 (a1246e6, 2026-08-09) | no | BSD 3-Clause |
-| `dxvk-1.10.3-x32-d3d9-horizonxi.dll` | [doitsujin/dxvk](https://github.com/doitsujin/dxvk) | v1.10.3 + `patches/dxvk-1.10.3-horizonxi-fencewait.patch`, rebuilt 2026-08-20 (2da0ccb) | **yes** | zlib/libpng; contains the mingw-w64 runtime (ZPL 2.1) and libstdc++/libgcc (GCC RLE) |
+| `dxvk-1.10.3-x32-d3d9-horizonxi.dll` | [doitsujin/dxvk](https://github.com/doitsujin/dxvk) | v1.10.3 + `patches/dxvk-1.10.3-horizonxi-fencewait.patch` (read-back fence, cursor fix, device-lost fix), rebuilt 2026-10-17 for b70 (`patches/README.md`) | **yes** | zlib/libpng; contains the mingw-w64 runtime (ZPL 2.1) and libstdc++/libgcc (GCC RLE) |
 | `libMoltenVK-1.4.2.dylib` | [KhronosGroup/MoltenVK](https://github.com/KhronosGroup/MoltenVK/releases/tag/v1.4.2) | v1.4.2 release (30bd913, 2026-09-26) | no (re-signed) | Apache 2.0; includes cereal (BSD 3-Clause) |
 | `x87sidecar-coop` | [athei/x87sidecar](https://github.com/athei/x87sidecar) | cooperative build of upstream 238a214 (5fe2410, 2026-08-19); Rosetta `decode_opcode` pattern changed for macOS 27's libRosettaRuntime 2026-09-24 (**3c7c2f6**) | **yes** | MIT |
 | `x87sidecar_entitled` | [athei/x87sidecar](https://github.com/athei/x87sidecar) `rosetta_loader` | upstream 238a214 + `patches/x87sidecar-attach-pid.patch` (5fe2410, 2026-08-19) | **yes** | MIT |
@@ -20,7 +20,7 @@ SHA-256 of the vendored files:
 
 ```
 ab6bf7a9a9f4b3e66a75ca038d8d10289c88acbfe8d52c3b5a8a9a259cb26cd5  d3d8to9.dll
-e5f1a6b9698d36f3b4e50c4cf7e4070a85a43e27c6eb46f50c8f345b6c565490  dxvk-1.10.3-x32-d3d9-horizonxi.dll
+70ba566455fbd084f190dfe03c857fbf9b267c599230314f77a48dcb6998e4e3  dxvk-1.10.3-x32-d3d9-horizonxi.dll
 aef00b13bcc808adf15b85bef9ae67393d92be7ed5dfe41cad16fa809e4a4c5f  libMoltenVK-1.4.2.dylib
 bdb3923da4517019d2822e93d3df5393d01733b14c61daae9afb766ad92ef2c7  x87sidecar-coop
 96155993ed7385e0361b53d38d458918540279edb372a14223a0df162eed7337  x87sidecar_entitled
@@ -102,5 +102,6 @@ repack of 1.10.3 omits `d3d9.dll` entirely, so it has to come from doitsujin's r
 MoltenVK 1.4.2 has been bundled since beta 46 and installed into the launch wine
 (`docs/CHECKPOINT-2026-09-26.md`; hosted post-warmup average 49.1 fps that day).
 
-The DXVK patch's contents (two upstream fixes, the read-back fence wait, the probes) are
-described in [`../patches/README.md`](../patches/README.md) and `docs/MAX4K.md`.
+The DXVK patch's contents (two upstream fixes, the cursor and device-lost fixes, the read-back
+fence wait, the probes) are described in [`../patches/README.md`](../patches/README.md) and
+`docs/MAX4K.md`.

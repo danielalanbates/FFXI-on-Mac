@@ -164,6 +164,51 @@ extension Headless {
         results.append(("running here -> Stop, never on Return", stop.action == .stop && stop.destructive && stop.enabled && stop.reason == nil))
         x.allowsMultipleClients = true
         expect("running, second client allowed -> Play Another", x, .playAnother, reason: .some(nil))
+        // b70: Wine died under the running client (Runner.serverLost).
+        x = base; x.runningHere = true; x.serverLost = true
+        let force = Primary.decide(x)
+        seen.append(("Wine gone under the game", force))
+        results.append(("Wine gone under the game -> Force Stop: enabled, destructive (never on Return), no reason line",
+                        force.action == .stop && force.label == "Force Stop" && force.enabled && force.destructive
+                            && force.reason == nil))
+        x.starting = true; x.allowsMultipleClients = true
+        let forceFirst = Primary.decide(x)
+        seen.append(("Wine gone, still 'starting', a second client allowed", forceFirst))
+        results.append(("... ahead of Starting… and of Play Another (never a second client beside a frozen one)",
+                        forceFirst.action == .stop && forceFirst.label == "Force Stop"))
+        x = base; x.serverLost = true
+        expect("Wine lost with nothing running here changes nothing -> Play", x, .play, reason: .some(nil))
+        // b70: Stop pressed, the client not gone yet (Runner.stoppingGame).
+        x = base; x.runningHere = true; x.stopping = true
+        expect("Stop under way -> Stopping…, not pressable, no line", x, .working(.stopping, progress: nil),
+               enabled: false, reason: .some(nil))
+        x.serverLost = true; x.renderStuckAt = "21:31:07"; x.starting = true; x.allowsMultipleClients = true
+        let stoppingFirst = Primary.decide(x)
+        seen.append(("Stop under way, Wine and graphics gone, 'starting', a second client allowed", stoppingFirst))
+        results.append(("... ahead of Force Stop, the graphics line, Starting… and Play Another",
+                        stoppingFirst.action == .working(.stopping, progress: nil) && stoppingFirst.label == "Stopping…"
+                            && !stoppingFirst.enabled && stoppingFirst.reason == nil))
+        // b70: the game's GPU device lost for good (Runner.renderStuckSince), 2026-10-16 21:31.
+        x = base; x.runningHere = true; x.renderStuckAt = "21:31:07"
+        let gpu = Primary.decide(x)
+        seen.append(("graphics gone under the game", gpu))
+        results.append(("graphics gone -> Stop (not Force Stop), enabled, destructive, with its line: \(gpu.reason ?? "-")",
+                        gpu.action == .stop && gpu.label == "Stop" && gpu.enabled && gpu.destructive
+                            && gpu.reason == "The game's graphics stopped at 21:31:07 — press Stop."))
+        x.starting = true; x.allowsMultipleClients = true
+        let gpuFirst = Primary.decide(x)
+        seen.append(("graphics gone, still 'starting', a second client allowed", gpuFirst))
+        results.append(("... ahead of Starting… and of Play Another",
+                        gpuFirst.action == .stop && gpuFirst.reason == gpu.reason))
+        x = base; x.runningHere = true; x.renderStuckAt = "21:31:07"; x.serverLost = true
+        let both = Primary.decide(x)
+        seen.append(("graphics and Wine gone", both))
+        results.append(("graphics and Wine gone -> Force Stop, no line (the strip already says it)",
+                        both.action == .stop && both.label == "Force Stop" && both.reason == nil))
+        x = base; x.renderStuckAt = "21:31:07"
+        expect("graphics lost with nothing running here changes nothing -> Play", x, .play, reason: .some(nil))
+        x = base; x.stopping = true
+        expect("a Stop under way with nothing running here changes nothing -> Play", x, .play, reason: .some(nil))
         x = base; x.runningElsewhere = true
         expect("running in another launcher -> Running…", x, .working(.runningElsewhere, progress: nil), enabled: false,
                reason: "Already running from another launcher.")

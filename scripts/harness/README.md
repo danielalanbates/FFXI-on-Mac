@@ -47,7 +47,17 @@ and DXVK's d3d11. Run `./renderer.sh save` once before the first switch and `res
 ## install-d3d9.sh
 
 Copies a built `d3d9.dll` to all five paths the game can load it from. Missing one silently
-tests the old build.
+tests the old build. The paths are the old siku.app prefix's, and they are hard-coded.
+
+## cursorprobe.c
+
+Tests whether a `d3d9.dll` leaves the game's own Win32 cursor alone across
+`IDirect3DDevice9::ShowCursor`. That is the DXVK 1.10.3 bug that hid FFXI's Hardware Mouse; see
+`docs/CURSOR-DXVK.md`.
+
+- The stock vendor DLL should FAIL and a DLL rebuilt with the backport should PASS.
+- The build and run commands are in its header. Run it in a throwaway prefix only, never while a
+  game runs.
 
 ## addons/fpslog
 
