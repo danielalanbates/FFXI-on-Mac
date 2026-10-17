@@ -11,8 +11,8 @@ import AppKit
 ///
 /// The button says one of Daniel's verbs: Setup, Update, Repair, Play, Stop (Play Another where
 /// a world allows two clients; Force Stop once Wine has died under the running game, b70), or
-/// what is running ("Setting up… 42%"). Anything else the user needs to know is the one short
-/// line under it.
+/// what is running ("Setting up… 42%", "Stopping…"). Anything else the user needs to know is
+/// the one short line under it.
 ///
 /// Never a greyed-out PLAY (Daniel, 2026-10-15: "the user should never encounter a greyed out
 /// play button"). A game that cannot start is an enabled Setup, Update or Repair whose click
@@ -200,6 +200,8 @@ struct PrimaryInputs {
     /// The selected world's session lost its Wine under the running client (b70,
     /// `Runner.serverLost`): Force Stop.
     var serverLost = false
+    /// Its Stop is under way and the client not gone yet (b70, `Runner.stoppingGame`).
+    var stopping = false
 
     var horizonInstalled: String? = nil
     var horizonLatest: String? = nil
@@ -233,6 +235,8 @@ enum Primary {
         if x.restartingLauncher { return make(.working(.updating, progress: nil), x) }
         if x.setupRunning { return make(.working(.settingUp, progress: x.setupProgress), x) }
         if let job = x.ownJob { return make(.working(work(forJob: job), progress: x.ownProgress), x) }
+        // Stop pressed, the client not gone yet (b70): ahead of everything it would otherwise be.
+        if x.runningHere, x.stopping { return make(.working(.stopping, progress: nil), x) }
         // Wine died under this world's client: its one way out, ahead of "Starting…" and of
         // Play Another (a second client would start beside the frozen one).
         if x.runningHere, x.serverLost { return make(.stop, x) }

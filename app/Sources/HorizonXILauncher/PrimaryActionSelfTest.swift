@@ -178,6 +178,18 @@ extension Headless {
                         forceFirst.action == .stop && forceFirst.label == "Force Stop"))
         x = base; x.serverLost = true
         expect("Wine lost with nothing running here changes nothing -> Play", x, .play, reason: .some(nil))
+        // b70: Stop pressed, the client not gone yet (Runner.stoppingGame).
+        x = base; x.runningHere = true; x.stopping = true
+        expect("Stop under way -> Stopping…, not pressable, no line", x, .working(.stopping, progress: nil),
+               enabled: false, reason: .some(nil))
+        x.serverLost = true; x.starting = true; x.allowsMultipleClients = true
+        let stoppingFirst = Primary.decide(x)
+        seen.append(("Stop under way, Wine gone, 'starting', a second client allowed", stoppingFirst))
+        results.append(("... ahead of Force Stop, Starting… and Play Another",
+                        stoppingFirst.action == .working(.stopping, progress: nil) && stoppingFirst.label == "Stopping…"
+                            && !stoppingFirst.enabled && stoppingFirst.reason == nil))
+        x = base; x.stopping = true
+        expect("a Stop under way with nothing running here changes nothing -> Play", x, .play, reason: .some(nil))
         x = base; x.runningElsewhere = true
         expect("running in another launcher -> Running…", x, .working(.runningElsewhere, progress: nil), enabled: false,
                reason: "Already running from another launcher.")

@@ -1260,10 +1260,17 @@ enum Headless {
                            && MultiWorld.sessionsOnVolume(OwnWine.resolve(games.path), livePaths: kept).isEmpty))
         try? fm.removeItem(at: vols)
 
-        let items = MultiWorld.stopItems([(session: "HorizonXI", serverLost: false), (session: "Local server #2", serverLost: true)])
+        let items = MultiWorld.stopItems([(session: "HorizonXI", serverLost: false, stopping: false),
+                                          (session: "Local server #2", serverLost: true, stopping: false)])
         checks.append(("b70 Dock and Game menu: a Stop per playing session, Force Stop once its Wine is gone",
                        items.map(\.title) == ["Stop HorizonXI", "Force Stop Local server #2"]
-                           && items.map(\.force) == [false, true] && items.map(\.session) == ["HorizonXI", "Local server #2"]))
+                           && items.map(\.force) == [false, true] && items.map(\.session) == ["HorizonXI", "Local server #2"]
+                           && !items.contains(where: \.stopping)))
+        let stopping = MultiWorld.stopItems([(session: "HorizonXI", serverLost: false, stopping: true),
+                                             (session: "Local server", serverLost: true, stopping: true)])
+        checks.append(("b70 Dock and Game menu: a session whose Stop is under way shows \"Stopping …\", not pressable, even once its Wine is gone",
+                       stopping.map(\.title) == ["Stopping HorizonXI…", "Stopping Local server…"]
+                           && stopping.allSatisfy { $0.stopping && !$0.force }))
         // Structural for a client elsewhere: stopItems is built from `live` alone.
         checks.append(("b70 Dock and Game menu: nothing when nothing plays; a playing session gets one, an idle one none",
                        MultiWorld.stopItems([]).isEmpty

@@ -10,7 +10,10 @@ final class Runner: ObservableObject {
     @Published var log: String = ""
     @Published var running = false {
         didSet {
-            if !running { Runner.playing[ObjectIdentifier(self)] = nil; starting = false }
+            if !running {
+                Runner.playing[ObjectIdentifier(self)] = nil; starting = false
+                clearStopState()   // b70
+            }
             else if !oldValue {
                 // Wine boots its prefix before the game window appears; after a Repair that takes
                 // ~30-60s and looks like a hang unless the UI says so.
@@ -1235,6 +1238,7 @@ final class Runner: ObservableObject {
         loaderUpSince = nil
         sessionServerDir = nil
         sessionPaths = []
+        clearStopState()
         preexistingPIDs = Set(live[hostKey] ?? [])
         if !live.isEmpty { appendLine("==> also running: \(Self.describe(live))") }
         // The renderer lives in the prefix's registry and DLLs, not in the environment, so it has
@@ -1672,6 +1676,88 @@ final class Runner: ObservableObject {
         return "i  wake at \(timeOfDay(time)) after \(Int((time.timeIntervalSince(s) / 60).rounded())) min"
     }
 
+    // MARK: - Stopping (b70)
+
+    /// Stop was pressed and the client is not gone yet: the button says "Stopping…", the watch
+    /// loop looks every 0.5 s instead of every 5 s, and App Nap is held off (the launcher sits
+    /// behind the game, where macOS stretches its timers). Over when the session ends, or
+    /// `stopGiveUp` seconds on, when Stop is offered again and asks nothing (`stopOutlived`).
+    @Published private(set) var stoppingGame = false
+    /// The client outlived a Stop the player already confirmed: the next one asks nothing.
+    private(set) var stopOutlived = false
+    private var stopActivity: NSObjectProtocol?
+    nonisolated static let stopGiveUp: Double = 10
+
+    private func beginStopping() {
+        guard running, !stoppingGame else { return }
+        stoppingGame = true
+        stopActivity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep,
+                                                             reason: "Stopping the game")
+        let generation = launchGeneration
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Runner.stopGiveUp * 1_000_000_000))
+            guard let self, self.launchGeneration == generation, self.running, self.stoppingGame else { return }
+            self.logFileOnly("i  \(self.session): still running \(Int(Runner.stopGiveUp)) s after Stop")
+            self.stopOutlived = true
+            self.endStopping()
+        }
+    }
+
+    private func endStopping() {
+        stoppingGame = false
+        if let a = stopActivity { ProcessInfo.processInfo.endActivity(a); stopActivity = nil }
+    }
+
+    /// A new session, or the old one over: nothing of a Stop carries on.
+    private func clearStopState() {
+        endStopping()
+        stopOutlived = false
+    }
+
+    /// Stop's signals for `mine` (pid -> group, from `MultiWorld.signalable`), the Mac injected
+    /// for the self-test. In the game's Wine SIGTERM ends a client at once (ntdll installs no
+    /// SIGTERM handler, nor does the x87 sidecar with its sampler off); the later steps are for a
+    /// process the kernel still holds. 1: SIGTERM to each, up to `step` s for all to go. 2: if
+    /// `server` names the session's wineserver (gated: it serves every world in the prefix),
+    /// SIGINT + SIGCONT to it, what `wineserver -k` sends: it ends every client of the prefix in
+    /// order, SIGKILLing what is left 0.5 s on; up to `step` s more. 3: SIGKILL to each pid still
+    /// the same wine process in the same group (`stillSignalable`). At most 2 × `step` of
+    /// waiting. `force` (Force Stop, Wine gone): SIGKILL to each, nothing else, nothing waited.
+    /// Returns the signals in the order sent ("TERM 44487").
+    nonisolated static func escalateStop(_ mine: [pid_t: pid_t], force: Bool, step: Double = 1.5,
+                                         alive: (pid_t) -> Bool = { Detach.isAlive($0) },
+                                         rescan: () -> LiveClients.Snapshot = { LiveClients.snapshot() },
+                                         server: (LiveClients.Snapshot) -> pid_t? = { _ in nil },
+                                         send: (pid_t, Int32) -> Void = { _ = kill($0, $1) },
+                                         sleep: (Double) -> Void = { Thread.sleep(forTimeInterval: $0) }) -> [String] {
+        let names: [Int32: String] = [SIGTERM: "TERM", SIGKILL: "KILL", SIGINT: "INT", SIGCONT: "CONT"]
+        var sent: [String] = []
+        func signal(_ pid: pid_t, _ sig: Int32) {
+            send(pid, sig)
+            sent.append("\(names[sig] ?? String(sig)) \(pid)")
+        }
+        let pids = mine.keys.sorted()
+        func anyAlive() -> Bool { pids.contains(where: alive) }
+        func waitGone() {
+            var waited = 0.0
+            while waited < step, anyAlive() { sleep(0.25); waited += 0.25 }
+        }
+        for pid in pids { signal(pid, force ? SIGKILL : SIGTERM) }
+        if force { return sent }
+        waitGone()
+        guard anyAlive() else { return sent }
+        if let ws = server(rescan()) {
+            signal(ws, SIGINT); signal(ws, SIGCONT)
+            waitGone()
+            guard anyAlive() else { return sent }
+        }
+        let now = rescan()
+        for pid in pids where alive(pid) {
+            if let g = mine[pid], MultiWorld.stillSignalable(pid, group: g, in: now) { signal(pid, SIGKILL) }
+        }
+        return sent
+    }
+
     /// After the game exits on its own or by Stop: what a Wine session that died under it left
     /// running. Ten seconds first, for Wine's own shutdown to end its programs the normal way,
     /// and only when no client is left anywhere, no other session of this launcher plays, no
@@ -1715,7 +1801,12 @@ final class Runner: ObservableObject {
             // Sample the window on the way: the last size seen is what the next launch opens
             // at (WindowMemory). Sampled on the main actor, since it reads the window server.
             for _ in 0..<120 {
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                // Every 5 s; every 0.5 s once Stop is pressed (b70), so Play is back about a
+                // second after the client ends instead of up to 7 s later.
+                for _ in 0..<10 {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    if self?.stoppingGame ?? true { break }
+                }
                 // b70: the session's wineserver, once the loader has been up 30 s: found by its
                 // server folder's lock, then watched as a process (`readServer`).
                 let poll = self?.serverPoll
@@ -1737,8 +1828,8 @@ final class Runner: ObservableObject {
                 }
             }
             // Two consecutive misses, because pgrep can miss the process for a beat while wine
-            // re-execs it during start-up.
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            // re-execs it during start-up. After a Stop there is none to wait out (b70).
+            try? await Task.sleep(nanoseconds: self?.stoppingGame == true ? 500_000_000 : 2_000_000_000)
             let again = await Task.detached(priority: .utility) { LiveClients.snapshot() }.value
             guard let self else { return }
             if !self.sessionPIDs(in: again).isEmpty { self.watchGameProcess(); return }
@@ -1844,6 +1935,7 @@ final class Runner: ObservableObject {
         // Read by the watch loop, off the main actor (the prefix may be on a sleeping drive).
         sessionServerDir = nil
         sessionPaths = []
+        clearStopState()
         preexistingPIDs = []
         currentInstall = install
         currentProfile = profile
@@ -1868,14 +1960,16 @@ final class Runner: ObservableObject {
     /// so it is stopped only once no client at all is left.
     ///
     /// `force` (b70, Force Stop, offered once `serverLost`): SIGKILL at once to the same
-    /// processes, instead of SIGTERM and up to 8 s. With its wineserver gone a Wine process can
-    /// run no shutdown code; on 2026-10-16 the frozen client's threads sat in a fault loop.
+    /// processes, instead of SIGTERM and what follows it. With its wineserver gone a Wine
+    /// process can run no shutdown code; on 2026-10-16 the frozen client's threads sat in a
+    /// fault loop.
     func stop(_ install: Install, force: Bool = false) {
         sessionExplained = true
         // No x87 verdict on a session being ended: Stop takes the sidecar down at once while the
         // loader can outlive SIGTERM by seconds, which the minute check would read as a failure.
         x87Settled = true
         proc?.terminate()
+        beginStopping()
         let generation = launchGeneration
         Task { [weak self] in
             // The whole-Mac `ps` off the main actor (#25); which pids are this session's is
@@ -1890,27 +1984,39 @@ final class Runner: ObservableObject {
             // no group, a loader of its host in no other session's group). pid -> group.
             let mine = MultiWorld.signalable(pids, group: self.sessionGroup, host: self.hostKey,
                                              otherGroups: self.otherGroups, in: snap)
-            for pid in mine.keys { kill(pid, force ? SIGKILL : SIGTERM) }
             if !mine.isEmpty { self.appendLine("==> \(force ? "force stopping" : "stopping") \(self.currentWorld) (pid \(mine.keys.sorted().map(String.init).joined(separator: ",")))") }
-            self.finishStop(install, mine: mine, generation: generation)
+            self.finishStop(install, mine: mine, generation: generation, force: force)
         }
     }
 
-    /// After the SIGTERM: SIGKILL what ignored it, then stop the wineserver if no client is left.
-    private func finishStop(_ install: Install, mine: [pid_t: pid_t], generation: Int) {
+    /// Stop's signals (`escalateStop`), then stop the wineserver if no client is left.
+    private func finishStop(_ install: Install, mine: [pid_t: pid_t], generation: Int, force: Bool) {
+        let dir = sessionServerDir, first = serverHolder, others = othersPlaying(), name = session
         Task.detached {
-            // wine usually honours SIGTERM within a second or two; a client wedged in a
-            // cutscene or a dead socket may not, and a Stop that does nothing is worse.
-            for _ in 0..<16 {
-                if !mine.keys.contains(where: { Detach.isAlive($0) }) { break }
-                try? await Task.sleep(nanoseconds: 500_000_000)
-            }
-            // Eight seconds on, check again that each pid is still the same wine process in the
-            // same group before the signal that cannot be ignored.
-            let now = LiveClients.snapshot()
-            for (pid, group) in mine where Detach.isAlive(pid)
-                && MultiWorld.stillSignalable(pid, group: group, in: now) {
-                kill(pid, SIGKILL)
+            // The wineserver step only for the session's own wineserver (holding its folder's
+            // lock, a wineserver in the scan, the one first seen there if one was), only with no
+            // client but this session's anywhere, no other session of this launcher playing and
+            // no launch under way: SIGINT ends every client of the prefix. The launch lock is
+            // held from that decision until the signals are done, so no Play starts against the
+            // dying server.
+            var held: Int32?
+            let sent = Runner.escalateStop(mine, force: force, server: { snap in
+                guard let dir, let now = Leftovers.lockHolder(dir), snap.wineservers.contains(now.pid) else { return nil }
+                let lock = LaunchLock.acquire()
+                guard MultiWorld.mayInterruptServer(snap.clients, mine: Set(mine.keys), otherSessionsPlaying: others,
+                                                    launchUnderWay: lock == nil, first: first, now: now) else {
+                    if let lock { LaunchLock.release(lock) }
+                    return nil
+                }
+                held = lock
+                return now.pid
+            })
+            if let held { LaunchLock.release(held) }
+            let late = force ? [] : sent.filter { !$0.hasPrefix("TERM ") }
+            if !late.isEmpty {
+                await MainActor.run { [weak self] in
+                    self?.logFileOnly("i  \(name): SIGTERM was not enough: " + late.joined(separator: ", "))
+                }
             }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             // Decided on the main actor, where no launch of this launcher can be half-way, and

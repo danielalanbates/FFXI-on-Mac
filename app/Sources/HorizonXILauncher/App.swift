@@ -50,15 +50,18 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
     /// its drive dropped, its own window could not be closed, and Stop lived only in the
     /// launcher's window, behind the game. One item per session of this launcher that is
     /// playing ("Force Stop …" once its Wine is gone); nothing for a client another launcher
-    /// started. No alert: choosing it from the menu is the decision, as in the RUNNING list.
+    /// started. No alert: choosing it from the menu is the decision, as in the RUNNING list. A
+    /// Stop under way is a disabled "Stopping …".
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         let items = Sessions.shared.stopItems
         guard !items.isEmpty else { return nil }
         let menu = NSMenu()
+        menu.autoenablesItems = false
         for item in items {
             let m = NSMenuItem(title: item.title, action: #selector(stopFromDock(_:)), keyEquivalent: "")
             m.target = self
             m.representedObject = item.session
+            m.isEnabled = !item.stopping
             menu.addItem(m)
         }
         return menu
@@ -206,6 +209,7 @@ struct GameCommands: Commands {
             } else {
                 ForEach(items, id: \.session) { item in
                     Button(item.title) { sessions.stop(session: item.session) }
+                        .disabled(item.stopping)
                 }
             }
         }
@@ -403,6 +407,7 @@ struct ContentView: View {
         if !runner.busy, Runner.workInFlight { x.otherJob = Runner.workInFlightReason ?? "Another job is running" }
         x.runningHere = runner.running
         x.serverLost = runner.serverLost
+        x.stopping = runner.stoppingGame
         x.starting = runner.starting
         x.runningElsewhere = s.map { sessions.runningElsewhere(world: $0.name, host: $0.host) } == true
         x.wineStuck = WineserverStopWait.anyStuck && sessions.live.isEmpty
@@ -1887,10 +1892,10 @@ struct ContentView: View {
                 play()
             }
         case .stop:
-            // Force Stop (b70): Wine is gone under the client and nothing is left to save, so
-            // no question.
-            if runner.serverLost {
-                runner.stop(force: true)
+            // No question (b70) when nothing is left to save: Wine gone under the client (Force
+            // Stop); nor for a client that outlived a Stop already confirmed.
+            if runner.serverLost || runner.stopOutlived {
+                runner.stop(force: runner.serverLost)
                 Task { await refreshElsewhere() }
                 return
             }
@@ -2539,8 +2544,10 @@ struct ContentView: View {
         // The selected world's own client is left out only while the main button is its Stop:
         // not while it says "Starting…", nor on a world that allows a second client, whose
         // button is Play Another -- its first client's Stop is here. By the session the button
-        // acts on: b70's Force Stop can be the Stop of a second client ("Local server #2").
-        let own = primary.action == .stop ? runner.session : nil
+        // acts on: b70's Force Stop can be the Stop of a second client ("Local server #2"), and
+        // its "Stopping…" stands for it too.
+        let p = primary.action
+        let own = p == .stop || (p == .working(.stopping, progress: nil) && runner.stoppingGame) ? runner.session : nil
         let live = sessions.live.filter { $0.id != own }
         if !live.isEmpty || !elsewhere.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
@@ -2550,10 +2557,11 @@ struct ContentView: View {
                         Circle().fill(Vana.crystal).frame(width: 6, height: 6)
                         Text(s.id).font(.system(size: 12)).foregroundStyle(Vana.text)
                         Spacer()
-                        Button(s.runner.serverLost ? "Force Stop" : "Stop") {
+                        Button(s.runner.stoppingGame ? "Stopping…" : s.runner.serverLost ? "Force Stop" : "Stop") {
                             s.runner.stop(force: s.runner.serverLost)
                             Task { await refreshElsewhere() }
                         }
+                            .disabled(s.runner.stoppingGame)
                             .font(.system(size: 12))
                             .help("Ends \(s.id)'s client only. Other worlds keep running.")
                     }

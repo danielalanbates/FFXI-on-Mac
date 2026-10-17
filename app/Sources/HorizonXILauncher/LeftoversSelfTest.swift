@@ -407,6 +407,80 @@ extension Headless {
         checks.append(("the wineserver socket folder is named as wine names it",
                        Leftovers.serverDir(dev: 0x1000016, ino: 0xd7c73b, uid: 501) == "/tmp/.wine-501/server-1000016-d7c73b"))
 
+        // b70: Stop's signals (`Runner.escalateStop`), on 2026-10-16's session: loader 44487 and
+        // its sidecar 44489 in group 44470, wineserver 44464. Every signal, every liveness answer
+        // and every sleep is injected: nothing is signalled and nothing waits.
+        final class FakeStop {
+            var sent: [(pid: pid_t, sig: Int32)] = []
+            var slept = 0.0
+            /// What ends the session's pids: SIGTERM to each, or SIGINT to the wineserver (which
+            /// then ends every client of the prefix); nil, only SIGKILL.
+            var diesOn: Int32?
+            func alive(_ pid: pid_t) -> Bool {
+                if sent.contains(where: { $0.pid == pid && $0.sig == SIGKILL }) { return false }
+                if diesOn == SIGTERM, sent.contains(where: { $0.pid == pid && $0.sig == SIGTERM }) { return false }
+                if diesOn == SIGINT, sent.contains(where: { $0.pid == 44464 && $0.sig == SIGINT }) { return false }
+                return true
+            }
+        }
+        let stopMine: [pid_t: pid_t] = [44487: 44470, 44489: 44470]
+        var stopSnap = LiveClients.Snapshot()
+        stopSnap.groups = [44487: 44470, 44489: 44470, 44464: 44464]
+        stopSnap.wine = [44487, 44489, 44464]
+        func escalate(diesOn: Int32?, force: Bool = false, server: pid_t? = 44464,
+                      snap: LiveClients.Snapshot? = nil) -> (sent: [String], slept: Double) {
+            let f = FakeStop()
+            f.diesOn = diesOn
+            let out = Runner.escalateStop(stopMine, force: force, alive: f.alive, rescan: { snap ?? stopSnap },
+                                          server: { _ in server }, send: { f.sent.append((pid: $0, sig: $1)) },
+                                          sleep: { f.slept += $0 })
+            return (out, f.slept)
+        }
+        let terms = ["TERM 44487", "TERM 44489"]
+        let onTerm = escalate(diesOn: SIGTERM)
+        checks.append(("b70 Stop: a client SIGTERM ends gets SIGTERM only, nothing waited",
+                       onTerm.sent == terms && onTerm.slept == 0))
+        let onInt = escalate(diesOn: SIGINT)
+        checks.append(("b70 Stop: one that outlives SIGTERM: 1.5 s on, SIGINT + SIGCONT to its wineserver (wineserver -k's), and that ends it",
+                       onInt.sent == terms + ["INT 44464", "CONT 44464"] && onInt.slept == 1.5))
+        let never = escalate(diesOn: nil)
+        checks.append(("b70 Stop: one that outlives both: SIGKILL to each pid of the session, after 3.0 s in all",
+                       never.sent == terms + ["INT 44464", "CONT 44464", "KILL 44487", "KILL 44489"] && never.slept == 3.0))
+        let gated = escalate(diesOn: SIGINT, server: nil)
+        checks.append(("b70 Stop: the wineserver step not allowed: SIGTERM, then SIGKILL 1.5 s on, never SIGINT",
+                       gated.sent == terms + ["KILL 44487", "KILL 44489"] && gated.slept == 1.5))
+        let forced = escalate(diesOn: nil, force: true)
+        checks.append(("b70 Force Stop: SIGKILL to each, nothing else, nothing waited",
+                       forced.sent == ["KILL 44487", "KILL 44489"] && forced.slept == 0))
+        var moved = stopSnap
+        moved.groups[44489] = 50000
+        let regrouped = escalate(diesOn: nil, server: nil, snap: moved)
+        var notWine = stopSnap
+        notWine.wine.remove(44489)
+        let unwined = escalate(diesOn: nil, server: nil, snap: notWine)
+        checks.append(("b70 Stop: no SIGKILL for a pid now in another group, nor for one no longer a wine process",
+                       regrouped.sent == terms + ["KILL 44487"] && unwined.sent == terms + ["KILL 44487"]))
+
+        // b70: when Stop may send that SIGINT (`MultiWorld.mayInterruptServer`): it ends every
+        // client of the prefix.
+        let liveClients = [LiveClients.Client(pid: 44487, group: 44470, host: "play.horizonxi.com", injecting: false),
+                           LiveClients.Client(pid: 44489, group: 44470, host: "play.horizonxi.com", injecting: false)]
+        let server1 = Leftovers.LockHolder(pid: 44464, startSec: 1792193859, startUsec: 120)
+        let mineSet = Set(stopMine.keys)
+        func mayInterrupt(_ clients: [LiveClients.Client] = liveClients, others: Int = 0, launching: Bool = false,
+                          first: Leftovers.LockHolder? = server1, now: Leftovers.LockHolder? = server1) -> Bool {
+            MultiWorld.mayInterruptServer(clients, mine: mineSet, otherSessionsPlaying: others,
+                                          launchUnderWay: launching, first: first, now: now)
+        }
+        checks.append(("b70 Stop's SIGINT: allowed when only this session's clients are live, with the server first seen or none seen yet",
+                       mayInterrupt() && mayInterrupt(first: nil)))
+        let otherWorld = liveClients + [LiveClients.Client(pid: 55501, group: 55500, host: "127.0.0.1", injecting: false)]
+        checks.append(("b70 Stop's SIGINT: never with another world's client, another session playing, or a launch under way",
+                       !mayInterrupt(otherWorld) && !mayInterrupt(others: 1) && !mayInterrupt(launching: true)))
+        checks.append(("b70 Stop's SIGINT: never to a server that started at another time than the one first seen, nor with none read",
+                       !mayInterrupt(now: Leftovers.LockHolder(pid: 44464, startSec: 1792193859, startUsec: 121))
+                           && !mayInterrupt(now: nil) && !mayInterrupt(first: nil, now: nil)))
+
         var failures = 0
         for (name, ok) in checks {
             if !ok { failures += 1 }

@@ -550,6 +550,19 @@ enum MultiWorld {
         clients.isEmpty && otherSessionsPlaying == 0 && !launchUnderWay
     }
 
+    /// b70: may Stop send the session's wineserver what `wineserver -k` sends (SIGINT, then
+    /// SIGCONT; `Runner.escalateStop`)? That server serves every world in the prefix and ends
+    /// all their clients: only when every client on the Mac is one of this session's (`mine`),
+    /// no other session of this launcher plays, no launch is under way (the launch lock is
+    /// free), and the server holding the folder now (`now`) is the one first seen holding it, if
+    /// one was (`first`). Never without a server read.
+    static func mayInterruptServer(_ clients: [LiveClients.Client], mine: Set<pid_t>, otherSessionsPlaying: Int,
+                                   launchUnderWay: Bool, first: Leftovers.LockHolder?,
+                                   now: Leftovers.LockHolder?) -> Bool {
+        guard let now, first == nil || first == now else { return false }
+        return clients.allSatisfy { mine.contains($0.pid) } && otherSessionsPlaying == 0 && !launchUnderWay
+    }
+
     /// b70: has the wineserver under a session gone while its client still runs? `first` is the
     /// holder of the session's server folder lock as first seen (once its loader had been up
     /// 30 s), `now` what became of that process this tick (`Leftovers.state`). Gone (no such
@@ -569,17 +582,23 @@ enum MultiWorld {
     }
 
     /// b70: what the Dock menu and the Game menu offer: one item per session of this launcher
-    /// that is playing, "Force Stop" for one whose Wine died under it. A client another launcher
-    /// started is not this one's to stop and gets nothing, as in the RUNNING list.
+    /// that is playing, "Force Stop" for one whose Wine died under it, and a disabled
+    /// "Stopping …" for one whose Stop is under way. A client another launcher started is not
+    /// this one's to stop and gets nothing, as in the RUNNING list.
     struct StopItem: Equatable {
         let session: String
         let title: String
         let force: Bool
+        /// Its Stop is under way: shown, not pressable.
+        var stopping = false
     }
 
-    static func stopItems(_ live: [(session: String, serverLost: Bool)]) -> [StopItem] {
-        live.map { StopItem(session: $0.session, title: ($0.serverLost ? "Force Stop " : "Stop ") + $0.session,
-                            force: $0.serverLost) }
+    static func stopItems(_ live: [(session: String, serverLost: Bool, stopping: Bool)]) -> [StopItem] {
+        live.map { s in
+            s.stopping ? StopItem(session: s.session, title: "Stopping \(s.session)…", force: false, stopping: true)
+                       : StopItem(session: s.session, title: (s.serverLost ? "Force Stop " : "Stop ") + s.session,
+                                  force: s.serverLost)
+        }
     }
 
     /// Clients this launcher did not start (another launcher process, a hand-run): not in any
@@ -732,13 +751,15 @@ final class Sessions: ObservableObject {
 
     /// b70: a Stop per playing session, for the Dock menu and the Game menu.
     var stopItems: [MultiWorld.StopItem] {
-        MultiWorld.stopItems(live.map { (session: $0.id, serverLost: $0.runner.serverLost) })
+        MultiWorld.stopItems(live.map {
+            (session: $0.id, serverLost: $0.runner.serverLost, stopping: $0.runner.stoppingGame)
+        })
     }
 
     /// The Dock menu's and the Game menu's Stop. No alert, like the RUNNING list's: choosing it
     /// from a menu is the decision. Force Stop for a session whose Wine died under it.
     func stop(session id: String) {
-        guard let r = live.first(where: { $0.id == id })?.runner else { return }
+        guard let r = live.first(where: { $0.id == id })?.runner, !r.stoppingGame else { return }
         r.stop(force: r.serverLost)
     }
 
