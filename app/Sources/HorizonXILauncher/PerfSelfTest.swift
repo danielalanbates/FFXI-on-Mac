@@ -124,6 +124,11 @@ extension Headless {
         checks.append(("every client gets DXVK_CONFIG_FILE next to DXVK_STATE_CACHE_PATH",
                        env["DXVK_CONFIG_FILE"] == #"C:\dxvk-cache\dxvk.conf"#
                            && env["DXVK_STATE_CACHE_PATH"] == #"C:\dxvk-cache"#))
+        // A GPU reset elsewhere must not leave MoltenVK's VkDevice lost for good (2026-10-16 21:31).
+        checks.append(("every client gets MVK_CONFIG_RESUME_LOST_DEVICE=1, and last-spawn.txt records it",
+                       env["MVK_CONFIG_RESUME_LOST_DEVICE"] == "1"
+                           && PerfSettings().environment(for: install, gameWine: false)["MVK_CONFIG_RESUME_LOST_DEVICE"] == "1"
+                           && Runner.spawnDiagnosticKeys.contains("MVK_CONFIG_RESUME_LOST_DEVICE")))
 
         // No-execute stays on under the game's Wine (the b66 fault storm): by default, for every
         // world; an explicit extraEnv value wins; `KEY=` takes it out; the wrapper's Wine is left alone.
