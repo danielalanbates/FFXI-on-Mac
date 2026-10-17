@@ -1,11 +1,12 @@
 # Beta 3.10 build 70 (local only)
 
 Branch `beta-b70`, from `beta-b69` (5716690). Local beta: no GitHub release, nothing pushed, not
-installed. **Written while Daniel was playing: nothing in it has been compiled or run yet.** The
-only check so far is `swiftc -parse` (syntax) on every changed Swift file; the build and the
-self-tests below wait until no game runs.
+installed. Written while Daniel was playing; **built and self-tested 2026-10-17** with no game
+running (release build, all 26 `--selftest-*` suites: 989 checks, 0 failures). Nothing in it has run
+in a game yet.
 
-Four launcher changes, all from the freeze on 2026-10-16:
+Four launcher changes, all from the freeze on 2026-10-16 at 14:15, and a renderer change from the
+second freeze that evening:
 
 - Wine programs left running by a Wine session that already died are ended
   ([below](#1-programs-of-a-wine-session-that-already-died)).
@@ -15,9 +16,11 @@ Four launcher changes, all from the freeze on 2026-10-16:
 - Stop is in the Dock menu and in a new **Game** menu
   ([Stop without the launcher window](#3-stop-without-the-launcher-window)).
 - launcher.log gets a line when the Mac sleeps and when it wakes ([Sleep and wake](#4-sleep-and-wake)).
+- A GPU reset no longer freezes the game: MoltenVK keeps the device, and DXVK no longer deadlocks
+  when the device is lost ([Graphics survive a GPU reset](#5-graphics-survive-a-gpu-reset)).
 
 The invisible in-game cursor reported the same day is a separate bug with its own write-up:
-[`CURSOR-DXVK.md`](CURSOR-DXVK.md). Nothing below touches it.
+[`CURSOR-DXVK.md`](CURSOR-DXVK.md). Only the rebuilt DXVK DLL in §5 touches it: it carries the fix.
 
 ## What happened on 2026-10-16
 
@@ -181,6 +184,138 @@ each playing session's server check runs straight away (`Runner.checkServerNow`)
 waiting for the next tick. Logging only: sleep is never held up or delayed, `IOAllowPowerChange` is not
 involved, and no game is stopped for it.
 
+## 5. Graphics survive a GPU reset
+
+**The second freeze, 2026-10-16 21:31 (verified from source, the game log and a `sample`).** The
+lid was closed and the Mac awake on AC. A Metal GPU recovery failed one of the game's command
+buffers ("Discarded (victim of GPU error/recovery)"). Then:
+
+- **MoltenVK 1.4.2 marked the VkDevice lost for good.** The error lands in the default branch of
+  `MVKQueue.mm:220-258`, where `markDeviceLoss = !resumeLostDevice`, and the default is 0.
+  After that every submit, fence wait, acquire and swap-chain creation fails, and nothing clears
+  the state.
+- **DXVK 1.10.3 then deadlocked itself.**
+  - The submit thread logged "Command submission failed" and called `waitForIdle()` while
+    holding the queue's `m_mutex`.
+  - `waitForIdle` → `lockSubmission` → `synchronize` locks the same non-recursive lock and waits
+    for the entry being handled to leave the queue.
+- **Every D3D9 path blocked behind it.** dxvk-submit, dxvk-queue, dxvk-cs and the first Windows
+  thread sat in `futex_wait` for 311 of 311 samples.
+  - The game stopped pumping window messages, so neither closing the window nor Quit did anything.
+  - The game log's last line is "Command submission failed". The submit thread's own
+    `waitForIdle` never logged, which is what the deadlock predicts.
+  - The busy `NtDelayExecution` thread in the sample is the pivot's sound lookups, not DXVK.
+- **What caused the GPU reset is unknown.** The unified log from 21:30:30 to 21:32 has no GPU,
+  AGX or IOGPU entries.
+
+**Fix 1, MoltenVK (the main one): `MVK_CONFIG_RESUME_LOST_DEVICE=1`** in every client's
+environment (`PerfSettings.environment`). It is in `Runner.spawnDiagnosticKeys`, so
+`last-spawn.txt` shows it.
+
+- **The name is right for 1.4.2.** Checked in its source (tag v1.4.2 = db66022):
+  - `MVKConfigMembers.def:80` has `RESUME_LOST_DEVICE`;
+  - `MVKEnvironment.cpp:110-111` reads `MVK_CONFIG_RESUME_LOST_DEVICE` as a number;
+  - `MVKEnvironment.h:293-294` defaults it to 0;
+  - the vendored `libMoltenVK-1.4.2.dylib` contains the name.
+- **With it set:**
+  - An error that leaves the physical GPU usable is logged and the device stays usable. The
+    failed buffer's fence is still signalled (`finish()` runs from the completion handler
+    whatever the status), so DXVK never sees the failure. One frame of GPU work is lost.
+  - A GPU that is removed, blacklisted or no longer permitted is still fatal.
+- MoltenVK's "Resumed VkDevice…" warning needs `MVK_CONFIG_LOG_LEVEL=2`. The launcher runs 1, so
+  a resumed reset leaves no line in the game log.
+- `MVK_CONFIG_RESUME_LOST_DEVICE=` (or `=0`) in Extra environment turns it off, like any other
+  default.
+
+**Fix 2, DXVK: a lost device no longer freezes the game.** This is for a real loss, which
+MoltenVK still reports. It is in the fencewait patch, which builds the shipped DLL. The hunks are
+described in `patches/README.md`, "One upstream bug, fixed our own way":
+
+- the submit thread no longer waits for idle;
+- every command list, refused ones too, is retired exactly once;
+- one `waitForIdle` runs from the retirement thread, which holds no lock;
+- after the loss, `Present` returns `D3D_OK` within ~16 ms.
+
+The picture freezes; the game keeps running, so its window, Quit and Stop work normally. The game
+log gets one line through `Logger::err`, which the launcher's `DXVK_LOG_LEVEL=error` keeps:
+`horizonxi: GPU device lost; drawing stopped, the game keeps running so it can be closed`.
+
+**How the hunks were reviewed** (against v1.10.3 with the patch applied, and MoltenVK 1.4.2's
+source):
+
+- **No self-deadlock is left.**
+  - No thread calls `waitForIdle` while holding `m_mutex`.
+  - The retirement thread's one wait needs the submit queue to drain. After a loss the submit
+    thread only refuses entries, and the CS thread's `submit()` stops at the queue bound, so the
+    queue does drain.
+- **Each command list is retired exactly once.** Every list goes through the finish queue once:
+  submitted ones as before, refused ones now too. Each gets `notifyObjects`, `m_pending -= 1`,
+  the `m_finishCond` notify, `reset` and recycle.
+  - `DxvkSubmitEntry` is value-initialised, so `submitResult` is `VK_SUCCESS` unless a submit
+    failed.
+  - Before this, a refused list never fired its frame-latency signal and never released its
+    resources. Locks and presents waited for it forever, and `m_pending` never fell, which also
+    stopped the implicit flushes.
+- **Nothing still on the GPU is freed.**
+  - Whatever the retirement thread sees first as a loss gets the one `waitForIdle`. That can be
+    its own fence wait, `m_lastError` set by the submit thread, or a refused entry, and it comes
+    before any lost list is reset.
+  - MoltenVK's `vkDeviceWaitIdle` commits an empty command buffer on the same queue and waits for
+    it (`MVKQueue.mm` `waitIdle`). Metal runs a queue's buffers in order, so everything submitted
+    before has finished.
+  - After the loss MoltenVK refuses every submit (`MVKQueue::submit` returns the device's result
+    first), and DXVK stops submitting, so nothing reaches the GPU after that wait.
+- **A failed submit that is not a loss** waits at most 2 s on its fence. MoltenVK 1.4.2 still
+  submits such a batch, "to ensure submission semaphores and fences are signalled". If the wait
+  times out, the failure takes the old log-and-`waitForIdle` path, from the retirement thread.
+- **`Present` after the loss** takes the device lock only inside `Flush()`. The CS thread cannot
+  stall it for long, because the finish queue now drains. The readback fence wait on a lost
+  device returns at once from `vkWaitForFences` and falls back to the normal wait, which returns
+  once the lists are retired.
+- **One caveat, harmless with MoltenVK.** `PresentImage` bumps `m_frameId` before the acquire
+  loop. The new early return there skips that frame's latency signal.
+  - If acquire later succeeded, the next `SyncFrameLatency` would wait for a signal that never
+    comes.
+  - MoltenVK's acquire returns `VK_ERROR_DEVICE_LOST` only for a lost device
+    (`MVKSwapchain.mm:83`), and a lost device stays lost, so that frame never comes. Revisit if
+    the MoltenVK version changes.
+- Upstream v2.3 (5d119673, checked in an upstream clone) also stopped calling `waitForIdle` on
+  `DEVICE_LOST` in the submit thread.
+
+**The rebuilt DLL** (`patches/README.md` has the commands and the SHA table):
+
+- **The recipe reproduces b69's DLL.** b69's patch (5716690) on a fresh v1.10.3 clone, with
+  `SOURCE_DATE_EPOCH=1787269764`, gives b69's 3,403,776 bytes. Only the export directory's time
+  stamp and the PE checksum differ.
+- **The b70 DLL** is `70ba5664…`, from the full patch:
+  - b69's patches, the cursor fix and the device-lost fix;
+  - same size, same imports, same export count;
+  - `strings` finds the cursor fix's and the device-lost fix's log strings in it, and in
+    neither b69's DLL nor the baseline.
+- **Shipped as** `vendor/dxvk-1.10.3-x32-d3d9-horizonxi.dll`. `vendor/NOTICE.md` is updated.
+  `RendererSetup` replaces any `d3d9.dll` whose bytes differ on the next Play, so existing
+  installs pick it up.
+
+**Tests:** `--selftest-perf` +1. Every client gets `MVK_CONFIG_RESUME_LOST_DEVICE=1`, under the
+game's Wine and the wrapper's, and `last-spawn.txt` records it.
+
+**Not verified:**
+
+- **No GPU reset was reproduced.** There is no safe way to force a Metal GPU recovery. Neither
+  fix has run in a game.
+- **That FFXI keeps drawing correctly after a resumed reset.** A texture upload in the dropped
+  buffer could leave a wrong texture until the client rewrites it.
+- **The DXVK hunks' runtime behaviour after a loss.** There is no device-loss injection harness.
+  They are checked by reading and by compiling only.
+- **That `vkDeviceWaitIdle` returns on a GPU that is really gone.** If Metal never completes the
+  empty buffer, the retirement thread waits, and the CS thread and `Present` block once the queue
+  bound is reached.
+- **The cursor probe and the A/B in `CURSOR-DXVK.md`.** `cursorprobe.c` compiles (no warnings)
+  but needs Wine.
+- **The launcher does not yet watch for the line.** It could show a "can't draw; Stop" line when
+  it sees `horizonxi: GPU device lost` or MoltenVK's `Lost VkDevice after MTLCommandBuffer` in
+  the game log (`Runner.appendChunk`). Not in this part.
+
 ## Kill safety
 
 What b70 can end, and why nothing else:
@@ -213,7 +348,11 @@ What b70 can end, and why nothing else:
   it, and `F_GETLK` takes no lock. The region walk reads another process's memory map, nothing
   more.
 
-## Tests (added; not run yet)
+## Tests
+
+**Run 2026-10-17** (release build, no game running, one suite at a time): all 26 suites exit 0,
+989 checks, 0 failures (leftovers 55, multiworld 88, primary-action 80, ui-text 42, perf 64 with
+§5's check). launcher.log was untouched (same inode, mtime and size before and after).
 
 All pure or injected; no process is scanned for real except where noted, nothing is signalled.
 The one process started is the lock probe, which ends when its stdin is closed.
@@ -271,13 +410,13 @@ here leaves Play. "Force Stop" joins `Primary.verbs`.
 `--selftest-ui-text` (+3): both Force Stop lines word for word, one line each, no "restart", and
 they reach the strip as errors; the sleep and wake lines (time to the second, sessions, minutes).
 
-These add 46 checks to b69's 942 (26 suites): expect 988, to be run once built, with no game
-running.
+These add 46 checks to b69's 942 (26 suites), and §5 adds 1: 989, as run.
 
 ## Not verified
 
-- **Nothing has been compiled.** `swiftc -parse` only. Type errors are possible; the code was
-  written against the types as read, not checked by the compiler.
+- **Nothing has run outside the self-tests.** The release build compiles (two warnings, both in
+  older code: LocalServer.swift:251, Runner.swift:2198) and every suite passes; no part of it has
+  been seen in the app or in a game.
 - That `--leftovers-report` lists nothing to end during a healthy session (read-only, safe to run
   during play).
 - That the Dock menu reaches the launcher's delegate through SwiftUI's
@@ -297,7 +436,8 @@ running.
 
 ## Checks to run (never on the x10, never on HorizonXI, never while Daniel plays)
 
-1. Build in a scratch folder and run all 26 `--selftest-*` suites with no game running.
+1. ~~Build in a scratch folder and run all 26 `--selftest-*` suites with no game running.~~ Done
+   2026-10-17: 989 checks, 0 failures.
 2. `--leftovers-report` during a healthy session: "would end: []".
 3. A scratch DMG with a throwaway prefix: run a trivial wine program from it, then
    `hdiutil detach -force`. Expect the "!!" line within ~10 s, the Dock icon bouncing, Force Stop

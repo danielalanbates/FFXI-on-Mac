@@ -166,3 +166,19 @@ no D3D cursor was ever set.
 - That is not backported. FFXI never sets a D3D cursor, so it changes nothing here.
 
 The full chain and the test plan are in `docs/CURSOR-DXVK.md`.
+
+---
+
+## 5. DXVK — the device-lost deadlock is fixed upstream (nothing to file)
+
+**Where:** doitsujin/dxvk 5d119673 "[dxvk] Implement waiting for specific present requests"
+(2023-06-15, first in **v2.3**).
+
+- In 1.10.3, a failed submission made the submit thread call `waitForIdle()` while holding the
+  queue's `m_mutex`, which `waitForIdle` locks again. The renderer deadlocked.
+- 5d119673 stopped waiting there on `VK_ERROR_DEVICE_LOST`.
+
+On 2026-10-16 21:31 a Metal GPU recovery made MoltenVK report the device lost, and FFXI froze
+that way. b70 fixes it in our 1.10.3 patch in its own way, because 2.3's queue is a different
+design (`patches/README.md`). The main fix is MoltenVK's own `MVK_CONFIG_RESUME_LOST_DEVICE=1`;
+see `docs/BETA-70.md` §5.

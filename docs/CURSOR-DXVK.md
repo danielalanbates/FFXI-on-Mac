@@ -4,7 +4,8 @@
 
 - **Cause: likely.** It is confirmed from source, imports and logs. There is no runtime trace yet.
 - **Fix:** written as a patch hunk, and `git apply --check` passes on a clean v1.10.3.
-- **DLL:** not rebuilt yet. Daniel was playing, so nothing was built or run.
+- **DLL:** rebuilt 2026-10-17 for b70 (`70ba5664…`, `patches/README.md`), together with the
+  device-lost fix (`docs/BETA-70.md` §5). Not run yet: the probe and the A/B below need Wine.
 
 ## Symptom
 
@@ -116,7 +117,7 @@ test while a game runs.
 1. **Probe.** Run `scripts/harness/cursorprobe.c`, following its header.
    - It sets `mousenor.ani`, makes a D3D9 device through the DLL under test, then calls
      `ShowCursor(FALSE)` and `ShowCursor(TRUE)`.
-   - Expected: the stock DLL (`e5f1a6b9…`) prints FAIL, and the rebuilt DLL prints PASS.
+   - Expected: b69's DLL (`e5f1a6b9…`) prints FAIL, and b70's (`70ba5664…`) prints PASS.
 2. **Local world, `0021 = 1`, with the stock DLL.**
    - Change only the `0021` line of `lsb.ini`. The boot profiles hold a password: never read or
      print them whole.
