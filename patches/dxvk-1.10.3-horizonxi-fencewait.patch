@@ -2046,7 +2046,7 @@ index 43a712a..e0bcc25 100644
  #include "d3d9_device.h"
  #include "d3d9_state.h"
 diff --git a/src/d3d9/d3d9_swapchain.cpp b/src/d3d9/d3d9_swapchain.cpp
-index 306a79b..8888818 100644
+index 306a79b..e5c255c 100644
 --- a/src/d3d9/d3d9_swapchain.cpp
 +++ b/src/d3d9/d3d9_swapchain.cpp
 @@ -1,4 +1,9 @@
@@ -2059,7 +2059,7 @@ index 306a79b..8888818 100644
  #include "d3d9_surface.h"
  #include "d3d9_monitor.h"
  
-@@ -244,12 +249,732 @@ namespace dxvk {
+@@ -244,12 +249,743 @@ namespace dxvk {
    }
  
  
@@ -2789,10 +2789,21 @@ index 306a79b..8888818 100644
 +      ~ProbeExit() { g_presentProbe.exit(t); }
 +    } probeExit { probeEnter };
 +
++    // horizonxi: MoltenVK never un-loses a VkDevice. After a loss, acquire and swap chain
++    // re-creation fail on every frame and stock DXVK throws out of Present each time. Keep the
++    // game's loop, and with it the window's messages, running instead: flush so the rejected
++    // work is retired and every wait on it returns, pace like a 60 Hz present, report success.
++    // The window keeps the last frame until the game is closed.
++    if (m_device->getDeviceStatus() == VK_ERROR_DEVICE_LOST) {
++      m_parent->Flush();
++      ::Sleep(16);
++      return D3D_OK;
++    }
++
      D3D9DeviceLock lock = m_parent->LockDevice();
  
      uint32_t presentInterval = m_presentParams.PresentationInterval;
-@@ -524,6 +1249,22 @@ namespace dxvk {
+@@ -524,6 +1260,22 @@ namespace dxvk {
      if (FAILED(this->GetDisplayModeEx(&mode, nullptr)))
        return D3DERR_INVALIDCALL;
  
@@ -2815,7 +2826,28 @@ index 306a79b..8888818 100644
      uint32_t scanLineCount = mode.Height + vBlankLineCount;
  
      auto nowUs = std::chrono::time_point_cast<std::chrono::microseconds>(
-@@ -1091,8 +1832,15 @@ namespace dxvk {
+@@ -830,6 +1582,10 @@ namespace dxvk {
+       VkResult status = m_presenter->acquireNextImage(sync, imageIndex);
+ 
+       while (status != VK_SUCCESS && status != VK_SUBOPTIMAL_KHR) {
++        // horizonxi: a lost device gets no new swap chain (RecreateSwapChain would throw).
++        if (status == VK_ERROR_DEVICE_LOST)
++          return;
++
+         RecreateSwapChain(m_vsync);
+         
+         info = m_presenter->info();
+@@ -899,7 +1655,8 @@ namespace dxvk {
+     // Recreate swap chain if the previous present call failed
+     VkResult status = m_device->waitForSubmission(&m_presentStatus);
+ 
+-    if (status != VK_SUCCESS)
++    // horizonxi: not on a lost device; see Present().
++    if (status != VK_SUCCESS && status != VK_ERROR_DEVICE_LOST)
+       RecreateSwapChain(m_vsync);
+   }
+ 
+@@ -1091,8 +1848,15 @@ namespace dxvk {
  
  
    void D3D9SwapChainEx::SyncFrameLatency() {
@@ -4084,10 +4116,35 @@ index f6f0306..eb34942 100644
  
  namespace dxvk {
 diff --git a/src/dxvk/dxvk_queue.cpp b/src/dxvk/dxvk_queue.cpp
-index 86f0b4e..33ac50e 100644
+index 86f0b4e..a8eb555 100644
 --- a/src/dxvk/dxvk_queue.cpp
 +++ b/src/dxvk/dxvk_queue.cpp
-@@ -137,6 +137,34 @@ namespace dxvk {
+@@ -126,9 +126,21 @@ namespace dxvk {
+         if (entry.submit.cmdList != nullptr)
+           m_finishQueue.push(std::move(entry));
+       } else if (status == VK_ERROR_DEVICE_LOST || entry.submit.cmdList != nullptr) {
+-        Logger::err(str::format("DxvkSubmissionQueue: Command submission failed: ", status));
+-        m_lastError = status;
+-        m_device->waitForIdle();
++        // horizonxi: stock 1.10.3 called m_device->waitForIdle() here. This thread holds
++        // m_mutex, and waitForIdle() -> lockSubmission() -> synchronize() locks m_mutex again
++        // (a non-recursive SRW lock) and waits for this very entry to leave m_submitQueue, so
++        // the first failed submission deadlocked the whole renderer (FFXI, 2026-10-16 21:31).
++        // Log each new error once; the retirement thread does the one wait for idle.
++        if (m_lastError.exchange(status) != status)
++          Logger::err(str::format("DxvkSubmissionQueue: Command submission failed: ", status));
++
++        // A command list that never reached the GPU still goes to the retirement thread, so
++        // that its resources are released, its signals (frame latency) fire and m_pending
++        // drops. Dropped here, every lock or present that waited on it blocked forever.
++        if (entry.submit.cmdList != nullptr) {
++          entry.submitResult = status;
++          m_finishQueue.push(std::move(entry));
++        }
+       }
+ 
+       m_submitQueue.pop();
+@@ -137,6 +149,34 @@ namespace dxvk {
    }
    
    
@@ -4122,18 +4179,45 @@ index 86f0b4e..33ac50e 100644
    void DxvkSubmissionQueue::finishCmdLists() {
      env::setThreadName("dxvk-queue");
  
-@@ -162,8 +190,10 @@ namespace dxvk {
+@@ -162,12 +202,34 @@ namespace dxvk {
        
        VkResult status = m_lastError.load();
        
+-      if (status != VK_ERROR_DEVICE_LOST)
+-        status = entry.submit.cmdList->synchronize();
 +      auto qlT0 = std::chrono::steady_clock::now();
-       if (status != VK_ERROR_DEVICE_LOST)
-         status = entry.submit.cmdList->synchronize();
++      if (status != VK_ERROR_DEVICE_LOST) {
++        if (entry.submitResult == VK_SUCCESS) {
++          status = entry.submit.cmdList->synchronize();
++        } else if (entry.submitResult == VK_ERROR_DEVICE_LOST) {
++          status = VK_ERROR_DEVICE_LOST;
++        } else {
++          // horizonxi: vkQueueSubmit failed but the device is not lost. MoltenVK still runs
++          // such a submission and signals its fence (MVKQueue::submit); never wait unbounded.
++          status = entry.submit.cmdList->synchronizeBounded(2'000'000'000ull);
++          if (status == VK_TIMEOUT)
++            status = entry.submitResult;
++        }
++      }
 +      auto qlT1 = std::chrono::steady_clock::now();
        
-       if (status != VK_SUCCESS) {
+-      if (status != VK_SUCCESS) {
++      // horizonxi: after a device loss every later command list arrives here unsubmitted.
++      // Report the loss and wait for idle once, so nothing still on the GPU is freed under it,
++      // then retire the rest silently. Stock 1.10.3 logged and waited for every one of them.
++      if (status != VK_SUCCESS && !(status == VK_ERROR_DEVICE_LOST && m_lostRetired)) {
          Logger::err(str::format("DxvkSubmissionQueue: Failed to sync fence: ", status));
-@@ -175,6 +205,10 @@ namespace dxvk {
+         m_lastError = status;
++
++        if (status == VK_ERROR_DEVICE_LOST) {
++          m_lostRetired = true;
++          Logger::err("horizonxi: GPU device lost; drawing stopped, the game keeps running so it can be closed");
++        }
++
+         m_device->waitForIdle();
+       }
+ 
+@@ -175,6 +237,10 @@ namespace dxvk {
        // up any thread that's currently waiting on a resource in
        // order to reduce delays as much as possible.
        entry.submit.cmdList->notifyObjects();
@@ -4145,7 +4229,7 @@ index 86f0b4e..33ac50e 100644
        lock.lock();
        m_pending -= 1;
 diff --git a/src/dxvk/dxvk_queue.h b/src/dxvk/dxvk_queue.h
-index 374da55..4327561 100644
+index 374da55..2eaeb6a 100644
 --- a/src/dxvk/dxvk_queue.h
 +++ b/src/dxvk/dxvk_queue.h
 @@ -1,5 +1,8 @@
@@ -4157,6 +4241,23 @@ index 374da55..4327561 100644
  #include <condition_variable>
  #include <mutex>
  #include <queue>
+@@ -56,6 +59,7 @@ namespace dxvk {
+     DxvkSubmitStatus*   status;
+     DxvkSubmitInfo      submit;
+     DxvkPresentInfo     present;
++    VkResult            submitResult;   ///< horizonxi: what vkQueueSubmit returned for cmdList
+   };
+ 
+ 
+@@ -185,6 +189,8 @@ namespace dxvk {
+     std::atomic<uint32_t>   m_pending = { 0u };
+     std::atomic<uint64_t>   m_gpuIdle = { 0ull };
+ 
++    bool                    m_lostRetired = false;  ///< horizonxi: finish thread only
++
+     dxvk::mutex                 m_mutex;
+     dxvk::mutex                 m_mutexQueue;
+     
 diff --git a/src/dxvk/dxvk_recycler.h b/src/dxvk/dxvk_recycler.h
 index b90befd..973351a 100644
 --- a/src/dxvk/dxvk_recycler.h

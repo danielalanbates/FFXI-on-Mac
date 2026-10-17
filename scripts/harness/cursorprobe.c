@@ -18,11 +18,11 @@
  * and wine's own d3d9 leave the handle unchanged (wine dlls/d3d9/tests/device.c test_cursor,
  * "unchanged", checked against Windows).
  *
- *   stock vendor DLL (e5f1a6b9..., 2026-08-20)   FAIL, GetCursor() reads 0 after ShowCursor
- *   DLL rebuilt with the backport                 PASS
+ *   b69 vendor DLL (e5f1a6b9..., 2026-08-20)     FAIL, GetCursor() reads 0 after ShowCursor
+ *   b70 vendor DLL (70ba5664..., the backport)    PASS
  *   wine's builtin d3d9 (WINEDLLOVERRIDES unset) exit 2: not the DLL under test
  *
- * Build (i686, like the game; not built yet -- first build is part of the b70 release step):
+ * Build (i686, like the game; compiles with no warnings, checked 2026-10-17; never run yet):
  *
  *     i686-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -static -s -Wl,--no-insert-timestamp \
  *         -o cursorprobe.exe scripts/harness/cursorprobe.c -ld3d9
