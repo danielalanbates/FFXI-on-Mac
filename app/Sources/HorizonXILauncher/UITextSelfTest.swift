@@ -161,6 +161,9 @@ extension Headless {
                            && Runner.sleepLine(at: at, sessions: []) == "i  sleep at 14:15:40 with no game"
                            && Runner.wakeLine(at: woke, sleptAt: at) == "i  wake at 14:32:17 after 17 min"
                            && Runner.wakeLine(at: woke, sleptAt: nil) == "i  wake at 14:32:17"))
+        checks.append(("display lines: off and on with the Mac awake, the time, what played",
+                       Runner.displayLine(on: false, at: at, sessions: ["HorizonXI"]) == "i  display off at 14:15:40 with HorizonXI"
+                           && Runner.displayLine(on: true, at: woke, sessions: []) == "i  display on at 14:32:17 with no game"))
 
         // b70: the game's GPU device lost. 2026-10-16 21:31, the game's output as launcher.log
         // kept it (lines 76-79): three of the four lines say so, "waitForIdle" alone does not.

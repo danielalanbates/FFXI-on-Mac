@@ -244,6 +244,9 @@ extension Headless {
         }
         checks.append(("last-spawn.txt records HXI_GAME_ASPECT, HXI_WINDOW_TITLE and DYLD_INSERT_LIBRARIES",
                        Runner.spawnDiagnosticKeys.isSuperset(of: [gw, GameWindow.titleKey, InsertedLibrary.key])))
+        // b70: gamewindow.dylib's hung-game question reads it (its seconds, or 0 for off).
+        checks.append(("last-spawn.txt records FFXI_GAMEWINDOW_HANG",
+                       Runner.spawnDiagnosticKeys.contains("FFXI_GAMEWINDOW_HANG")))
         let notMachO = fm.temporaryDirectory.appendingPathComponent("hxi-perf-notmacho-\(UUID().uuidString).dylib")
         try? Data("not a Mach-O file at all".utf8).write(to: notMachO)
         checks.append(("a file without an x86_64 Mach-O slice is never inserted",

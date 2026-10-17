@@ -1677,6 +1677,13 @@ final class Runner: ObservableObject {
         return "i  wake at \(timeOfDay(time)) after \(Int((time.timeIntervalSince(s) / 60).rounded())) min"
     }
 
+    /// … and the displays going off and on with the Mac awake: a lid closed on AC (2026-10-16,
+    /// 20:13 to 22:10) never sleeps, and the GPU reset at 21:31 came inside that window.
+    nonisolated static func displayLine(on: Bool, at time: Date, sessions: [String]) -> String {
+        "i  display \(on ? "on" : "off") at \(timeOfDay(time)) with "
+            + (sessions.isEmpty ? "no game" : sessions.joined(separator: ", "))
+    }
+
     // MARK: - Graphics gone under the game (b70)
 
     /// The client's GPU device is lost, which nothing brings back: MoltenVK never un-loses a
@@ -2262,9 +2269,9 @@ final class Runner: ObservableObject {
     static let spawnDiagnosticKeys: Set<String> = [
         "CX_ROOT", "D3D9_RT_READBACK_FENCE", "D3DMETAL_FRAMEWORK_PATH",
         "DXVK_CONFIG_FILE", "DXVK_STATE_CACHE_PATH", "DYLD_FALLBACK_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
-        "FFXI_FPS_DIVISOR", "HXI_GAME_ASPECT", "HXI_WINDOW_TITLE", "LSAppNapIsDisabled", "MVK_CONFIG_FAST_MATH_ENABLED",
-        "MVK_CONFIG_RESUME_LOST_DEVICE", "MVK_CONFIG_USE_COMMAND_POOLING", "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS",
-        "ROSETTA_X87_PATH", "WINEDEBUG", "WINEESYNC", "WINEMSYNC", "WINEPREFIX",
+        "FFXI_FPS_DIVISOR", "FFXI_GAMEWINDOW_HANG", "HXI_GAME_ASPECT", "HXI_WINDOW_TITLE", "LSAppNapIsDisabled",
+        "MVK_CONFIG_FAST_MATH_ENABLED", "MVK_CONFIG_RESUME_LOST_DEVICE", "MVK_CONFIG_USE_COMMAND_POOLING",
+        "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "ROSETTA_X87_PATH", "WINEDEBUG", "WINEESYNC", "WINEMSYNC", "WINEPREFIX",
         "WINE_DISABLE_NX_COMPAT", "WINE_LARGE_ADDRESS_AWARE"
     ]
 

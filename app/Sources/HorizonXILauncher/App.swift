@@ -80,14 +80,28 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
     /// One line each in launcher.log when the Mac sleeps and wakes, and on waking the server
     /// check of every playing session at once (`Runner.checkServerNow`): 2026-10-16's freeze
     /// was blamed on the lid, and the log had nothing to say either way. Logging only: sleep is
-    /// never held up or delayed, and no game is ever stopped for it. Also each unmount, here
-    /// rather than in the window, so it is seen with the window closed.
+    /// never held up or delayed, and no game is ever stopped for it. Also a line each when the
+    /// displays go off and on with the Mac awake (nothing else is done then), and each unmount,
+    /// here rather than in the window, so it is seen with the window closed.
     @MainActor private func watchSleep() {
         let nc = NSWorkspace.shared.notificationCenter
         nc.addObserver(self, selector: #selector(macWillSleep(_:)), name: NSWorkspace.willSleepNotification, object: nil)
         nc.addObserver(self, selector: #selector(macDidWake(_:)), name: NSWorkspace.didWakeNotification, object: nil)
+        nc.addObserver(self, selector: #selector(displaysDidSleep(_:)), name: NSWorkspace.screensDidSleepNotification,
+                       object: nil)
+        nc.addObserver(self, selector: #selector(displaysDidWake(_:)), name: NSWorkspace.screensDidWakeNotification,
+                       object: nil)
         nc.addObserver(self, selector: #selector(volumeDidUnmount(_:)), name: NSWorkspace.didUnmountNotification,
                        object: nil)
+    }
+
+    /// The displays off and on with the Mac awake (a lid closed on AC): a line each, nothing else.
+    @MainActor @objc private func displaysDidSleep(_ n: Notification) {
+        Runner.appendToLogFile(Runner.displayLine(on: false, at: Date(), sessions: Sessions.shared.live.map(\.id)))
+    }
+
+    @MainActor @objc private func displaysDidWake(_ n: Notification) {
+        Runner.appendToLogFile(Runner.displayLine(on: true, at: Date(), sessions: Sessions.shared.live.map(\.id)))
     }
 
     @MainActor @objc private func macWillSleep(_ n: Notification) {
