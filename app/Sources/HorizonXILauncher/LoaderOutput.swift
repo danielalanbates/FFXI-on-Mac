@@ -46,6 +46,32 @@ enum LoaderOutput {
         return nil
     }
 
+    /// b70: what the game's output says about its GPU device. Only a loss: nothing brings a lost
+    /// device back (MoltenVK never un-loses a VkDevice, and the HorizonXI DXVK latches it), so
+    /// there is no line for a recovery. MoltenVK's "Resumed VkDevice" (a GPU reset it rode out,
+    /// `MVK_CONFIG_RESUME_LOST_DEVICE`) is a warning, printed only at log level 2, and says
+    /// nothing here either way.
+    enum RenderEvent: Equatable { case lost }
+
+    /// The HorizonXI DXVK's one line once the device is lost (`Logger::err`, so it survives the
+    /// launcher's `DXVK_LOG_LEVEL=error`).
+    static let renderLostMarker = "horizonxi: GPU device lost"
+
+    /// Whole lines of the game's output (`RepeatCap.filter`'s; a line's first time always
+    /// passes). Each of these means the client can never draw again: MoltenVK's error
+    /// `[mvk-error] …: Lost VkDevice after MTLCommandBuffer …`, DXVK's `err:` lines naming
+    /// `VK_ERROR_DEVICE_LOST`, and the HorizonXI DXVK's own line. By the line's start, so a chat
+    /// line or anything else that merely names the error says nothing. 2026-10-16 21:31 printed
+    /// the first two kinds, three of its four lines.
+    static func renderEvents(in lines: String) -> [RenderEvent] {
+        lines.split(whereSeparator: \.isNewline).compactMap { raw -> RenderEvent? in
+            let l = raw.trimmingCharacters(in: .whitespaces)
+            if l.hasPrefix("[mvk-error]"), l.contains("Lost VkDevice") { return .lost }
+            if l.hasPrefix("err:"), l.contains("VK_ERROR_DEVICE_LOST") || l.contains(renderLostMarker) { return .lost }
+            return nil
+        }
+    }
+
     /// Keeps a looping loader from filling launcher.log. Each distinct line (its leading
     /// `[mm/dd/yy hh:mm:ss]` stamp aside, since the menu's changes every second) is written at most
     /// `limit` times per session; after that it is dropped, with one note the first time.

@@ -408,6 +408,7 @@ struct ContentView: View {
         x.runningHere = runner.running
         x.serverLost = runner.serverLost
         x.stopping = runner.stoppingGame
+        x.renderStuckAt = runner.renderStuckSince.map(Runner.timeOfDay)
         x.starting = runner.starting
         x.runningElsewhere = s.map { sessions.runningElsewhere(world: $0.name, host: $0.host) } == true
         x.wineStuck = WineserverStopWait.anyStuck && sessions.live.isEmpty
@@ -1893,8 +1894,9 @@ struct ContentView: View {
             }
         case .stop:
             // No question (b70) when nothing is left to save: Wine gone under the client (Force
-            // Stop); nor for a client that outlived a Stop already confirmed.
-            if runner.serverLost || runner.stopOutlived {
+            // Stop), or its graphics gone for good (the line under the button says so); nor for
+            // a client that outlived a Stop already confirmed.
+            if runner.serverLost || runner.renderStuckSince != nil || runner.stopOutlived {
                 runner.stop(force: runner.serverLost)
                 Task { await refreshElsewhere() }
                 return

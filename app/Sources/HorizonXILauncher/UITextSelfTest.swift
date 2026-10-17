@@ -162,6 +162,42 @@ extension Headless {
                            && Runner.wakeLine(at: woke, sleptAt: at) == "i  wake at 14:32:17 after 17 min"
                            && Runner.wakeLine(at: woke, sleptAt: nil) == "i  wake at 14:32:17"))
 
+        // b70: the game's GPU device lost. 2026-10-16 21:31, the game's output as launcher.log
+        // kept it (lines 76-79): three of the four lines say so, "waitForIdle" alone does not.
+        let night = """
+            [mvk-error] VK_ERROR_OUT_OF_DEVICE_MEMORY: Lost VkDevice after MTLCommandBuffer "vkQueueSubmit MTLCommandBuffer on Queue 0-0" execution failed (code 1): Discarded (victim of GPU error/recovery) (00000005:kIOGPUCommandBufferCallbackErrorInnocentVictim)
+            err:   DxvkSubmissionQueue: Failed to sync fence: VK_ERROR_DEVICE_LOST
+            err:   DxvkDevice: waitForIdle: Operation failed
+            err:   DxvkSubmissionQueue: Command submission failed: VK_ERROR_DEVICE_LOST
+
+            """
+        checks.append(("GPU device lost: the 2026-10-16 lines give three losses",
+                       LoaderOutput.renderEvents(in: night) == [.lost, .lost, .lost]))
+        checks.append(("GPU device lost: each shape alone gives one, the HorizonXI DXVK's own line too",
+                       night.split(separator: "\n").map { LoaderOutput.renderEvents(in: String($0)) }
+                           == [[.lost], [.lost], [], [.lost]]
+                           && LoaderOutput.renderEvents(in: "err:   horizonxi: GPU device lost; drawing stopped, the game keeps running so it can be closed\r\n")
+                               == [.lost]))
+        checks.append(("GPU device: MoltenVK's \"Resumed\" warning, a chat line naming the error, an info line: nothing",
+                       LoaderOutput.renderEvents(in: "[mvk-warn] VK_ERROR_OUT_OF_DEVICE_MEMORY: Resumed VkDevice after MTLCommandBuffer \"x\" execution failed (code 1): Discarded (victim of GPU error/recovery)\n").isEmpty
+                           && LoaderOutput.renderEvents(in: "[21:31:07] Someone : err: VK_ERROR_DEVICE_LOST and Lost VkDevice, horizonxi: GPU device lost?\n").isEmpty
+                           && LoaderOutput.renderEvents(in: "info:  DxvkSubmissionQueue: VK_ERROR_DEVICE_LOST\n").isEmpty
+                           && LoaderOutput.renderEvents(in: "warn:  horizonxi: GPU device lost\n").isEmpty))
+        var cap = LoaderOutput.RepeatCap()
+        let firstHalf = LoaderOutput.renderEvents(in: cap.filter("ok\nerr:   DxvkSubmissionQueue: Failed to sync fen"))
+        let secondHalf = LoaderOutput.renderEvents(in: cap.filter("ce: VK_ERROR_DEVICE_LOST\n"))
+        checks.append(("GPU device lost: a line split across two reads counts once, on the read that ends it",
+                       firstHalf.isEmpty && secondHalf == [.lost]))
+        let gpuLine = Primary.renderStuckReason("21:31:07")
+        checks.append(("graphics gone: the line under Stop, word for word, one short line, no 'restart'",
+                       gpuLine == "The game's graphics stopped at 21:31:07 — press Stop."
+                           && gpuLine.count <= 72 && !gpuLine.contains("\n") && !gpuLine.lowercased().contains("restart")))
+        checks.append(("graphics gone: said 2 s after the loss, not before; nothing without a loss",
+                       Runner.renderGrace == 2
+                           && !Runner.renderStuck(lostAt: at, now: at.addingTimeInterval(1.9))
+                           && Runner.renderStuck(lostAt: at, now: at.addingTimeInterval(2))
+                           && !Runner.renderStuck(lostAt: nil, now: at.addingTimeInterval(60))))
+
         // Quit question.
         checks.append(("quit alert names the work",
                        LauncherDelegate.quitQuestion("Updating Wine").message == "Quit while updating Wine?"

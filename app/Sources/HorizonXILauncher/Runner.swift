@@ -285,6 +285,7 @@ final class Runner: ObservableObject {
         }
         let logged = capped ? gameOutputCap.filter(s) : s
         tee(logged)
+        if capped { noteRender(LoaderOutput.renderEvents(in: logged)) }
         if !x87Settled { checkX87Output(s) }
         // Every xiloader fork prints its refusal and drops to an interactive menu no window shows;
         // a loader that never logged in (b60: Ashita's pol.exe on HorizonXI) shows only the menu.
@@ -1676,6 +1677,45 @@ final class Runner: ObservableObject {
         return "i  wake at \(timeOfDay(time)) after \(Int((time.timeIntervalSince(s) / 60).rounded())) min"
     }
 
+    // MARK: - Graphics gone under the game (b70)
+
+    /// The client's GPU device is lost, which nothing brings back: MoltenVK never un-loses a
+    /// VkDevice and the HorizonXI DXVK latches the loss. 2026-10-16 21:31, lid closed on AC: a
+    /// Metal GPU recovery failed one of the game's command buffers, MoltenVK marked the device
+    /// lost, and DXVK 1.10.3 deadlocked itself; the picture froze and neither the window's close
+    /// button nor Quit did anything. b70's DXVK keeps the game running so it can be closed, but
+    /// it never draws again. Seen in the game's output (`LoaderOutput.renderEvents`); said
+    /// `renderGrace` later, so a burst of lines settles into one: Stop with one line under it,
+    /// one Dock bounce, and Stop asks nothing. Nothing is ended here.
+    private var renderLostAt: Date?
+    /// When the loss was seen, once it is said (the line under Stop carries the time).
+    @Published private(set) var renderStuckSince: Date?
+    nonisolated static let renderGrace: Double = 2
+
+    nonisolated static func renderStuck(lostAt: Date?, now: Date, grace: Double = renderGrace) -> Bool {
+        guard let lostAt else { return false }
+        return now.timeIntervalSince(lostAt) >= grace
+    }
+
+    private func noteRender(_ events: [LoaderOutput.RenderEvent]) {
+        guard running, renderLostAt == nil, events.contains(.lost) else { return }
+        let at = Date()
+        renderLostAt = at
+        logFileOnly("i  \(session): the game's GPU device was lost at \(Self.timeOfDay(at)); it can't draw again")
+        let generation = launchGeneration
+        // The launcher is behind the frozen game, where App Nap would stretch the grace.
+        let activity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep,
+                                                             reason: "The game's graphics stopped")
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Runner.renderGrace * 1_000_000_000))
+            ProcessInfo.processInfo.endActivity(activity)
+            guard let self, self.launchGeneration == generation, self.running, self.renderStuckSince == nil,
+                  let lost = self.renderLostAt, Runner.renderStuck(lostAt: lost, now: Date()) else { return }
+            self.renderStuckSince = lost
+            _ = NSApp?.requestUserAttention(.informationalRequest)
+        }
+    }
+
     // MARK: - Stopping (b70)
 
     /// Stop was pressed and the client is not gone yet: the button says "Stopping…", the watch
@@ -1708,10 +1748,12 @@ final class Runner: ObservableObject {
         if let a = stopActivity { ProcessInfo.processInfo.endActivity(a); stopActivity = nil }
     }
 
-    /// A new session, or the old one over: nothing of a Stop carries on.
+    /// A new session, or the old one over: nothing of a Stop or of lost graphics carries on.
     private func clearStopState() {
         endStopping()
         stopOutlived = false
+        renderLostAt = nil
+        renderStuckSince = nil
     }
 
     /// Stop's signals for `mine` (pid -> group, from `MultiWorld.signalable`), the Mac injected

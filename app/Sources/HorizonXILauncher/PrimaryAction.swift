@@ -202,6 +202,9 @@ struct PrimaryInputs {
     var serverLost = false
     /// Its Stop is under way and the client not gone yet (b70, `Runner.stoppingGame`).
     var stopping = false
+    /// When its GPU device was lost, "21:31:07" (b70, `Runner.renderStuckSince`): Stop, with
+    /// the line under it.
+    var renderStuckAt: String? = nil
 
     var horizonInstalled: String? = nil
     var horizonLatest: String? = nil
@@ -237,9 +240,9 @@ enum Primary {
         if let job = x.ownJob { return make(.working(work(forJob: job), progress: x.ownProgress), x) }
         // Stop pressed, the client not gone yet (b70): ahead of everything it would otherwise be.
         if x.runningHere, x.stopping { return make(.working(.stopping, progress: nil), x) }
-        // Wine died under this world's client: its one way out, ahead of "Starting…" and of
-        // Play Another (a second client would start beside the frozen one).
-        if x.runningHere, x.serverLost { return make(.stop, x) }
+        // Wine or the graphics gone under this world's client: its one way out, ahead of
+        // "Starting…" and of Play Another (a second client would start beside the frozen one).
+        if x.runningHere, x.serverLost || x.renderStuckAt != nil { return make(.stop, x) }
         if x.starting { return make(.working(.starting, progress: nil), x) }
         if x.runningHere, !x.allowsMultipleClients { return make(.stop, x) }
         if x.runningElsewhere, !x.allowsMultipleClients {
@@ -312,6 +315,9 @@ enum Primary {
         return .settingUp
     }
 
+    /// The line under Stop once the game's GPU device is lost (b70): when, and what to press.
+    static func renderStuckReason(_ time: String) -> String { "The game's graphics stopped at \(time) — press Stop." }
+
     /// "2.0.5" > "2.0.4", numerically per part (same rule as Updater.isNewer, off the main actor).
     static func isNewer(_ a: String, than b: String) -> Bool {
         let pa = a.split(separator: ".").map { Int($0) ?? 0 }, pb = b.split(separator: ".").map { Int($0) ?? 0 }
@@ -377,8 +383,8 @@ enum Primary {
                 return .init(action: a, label: "Repair", enabled: true, reason: line)
             }
         case .stop:
-            return .init(action: a, label: x.serverLost ? "Force Stop" : "Stop", enabled: true, reason: nil,
-                         destructive: true)
+            return .init(action: a, label: x.serverLost ? "Force Stop" : "Stop", enabled: true,
+                         reason: x.serverLost ? nil : x.renderStuckAt.map(renderStuckReason), destructive: true)
         case .enterAccount:
             return .init(action: a, label: "Play", enabled: true, reason: "Type your account name and password above.")
         case .play:
