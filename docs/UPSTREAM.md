@@ -105,8 +105,9 @@ err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_COLORKEYENABLE) shoul
 
 ## 3. DXVK — the two fixes in our patch, and whether they are worth filing
 
-Both live in `patches/dxvk-1.10.3-horizonxi.patch`. Assessed 2026-08-11; the honest answer is
-that neither is a good upstream PR, for different reasons.
+Both live in `patches/dxvk-1.10.3-horizonxi.patch` and in the fencewait patch that builds the
+shipped DLL (`patches/README.md`). Assessed 2026-08-11; the honest answer is that neither is a good
+upstream PR, for different reasons.
 
 ### 3a. Zero-sized fragment push-constant range for fixed-function pixel shaders
 
@@ -137,3 +138,31 @@ and on 1.10.3 it has the EOL problem as well. The right home for it is a MoltenV
 fork, or MoltenVK itself growing honest emulation of the features.
 
 Filing either remains Daniel's call — nothing has been submitted.
+
+---
+
+## 4. DXVK — the cursor fix is upstream already (nothing to file)
+
+**Where:** doitsujin/dxvk [PR #3562](https://github.com/doitsujin/dxvk/pull/3562), commit
+b0b46fd075 "[d3d9] Don't show/hide a software cursor"
+
+- Written by WinterSnowfall on 2023-07-16, merged 2023-08-02.
+- First released in **v2.3**. 1.10.3 does not have it.
+
+DXVK 1.10.3's `D3D9Cursor::ShowCursor` calls `SetCursor(bShow ? m_hCursor : nullptr)` even when
+no D3D cursor was ever set.
+
+- That erases any Win32 cursor the game set itself.
+- For FFXI that is its Hardware Mouse `.ani`. The game's d3d8 `ShowCursor` reaches DXVK through
+  d3d8to9.
+- The PR describes the same thing for Age of Mythology.
+- Native D3D9 and wined3d leave the Win32 cursor alone (wine `dlls/d3d9/tests/device.c`
+  `test_cursor`, checked against Windows).
+
+**Backported 2026-10-16:** the commit is one hunk in both of our DXVK patches.
+
+- Upstream later went one step further: bbe82aa534 (v2.5) stops recording the visibility when no
+  cursor is set.
+- That is not backported. FFXI never sets a D3D cursor, so it changes nothing here.
+
+The full chain and the test plan are in `docs/CURSOR-DXVK.md`.

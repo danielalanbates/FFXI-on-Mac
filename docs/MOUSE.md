@@ -2,6 +2,10 @@
 
 Measured 2026-08-17 with the `mousediag` addon (`addons/mousediag/mousediag.lua`).
 
+**Corrected 2026-10-16:** the cursor claims below were wrong. The invisible cursor is the
+vendored DXVK 1.10.3 calling `SetCursor(NULL)`; see `docs/CURSOR-DXVK.md`. Clicking is a
+separate problem and is unchanged.
+
 ## Symptoms
 - Mouse cursor invisible inside the game window.
 - Ashita/ImGui addon windows (Links, HXUI, …) can't be hovered or clicked.
@@ -13,8 +17,18 @@ CGEvent *and* a real HID left-click posted at the window centre. Meanwhile
 `io.MousePos` tracked perfectly, because Ashita polls `GetCursorPos` for position.
 Position worked; the button/hover *message* stream was dead.
 
-Separately, FFXI calls `ShowCursor(FALSE)` and draws its own cursor sprite, which does
-not render under Wine/DXVK — hence no visible cursor.
+Separately, the cursor. *(Corrected 2026-10-16.)* This page said FFXI calls `ShowCursor(FALSE)`
+and draws a sprite that does not render. Both halves are wrong.
+
+- **No `ShowCursor` call.** Nothing in the game process imports user32 `ShowCursor`. Only
+  PlayOnlineViewer's `pol.exe` does.
+- **No sprite with Hardware Mouse on.** With Hardware Mouse on (`0021 = 1`), FFXI draws no
+  sprite. The Aug 17 10:13 profile backup has `0021 = 1`, so this run most likely had it on.
+  - Its cursor is a Win32 `.ani` (`mousenor.ani`, set with `SetCursor`).
+  - DXVK 1.10.3's `IDirect3DDevice9::ShowCursor` replaces that cursor with `SetCursor(NULL)`
+    whenever no D3D cursor is set.
+- **With Hardware Mouse off,** FFXI draws its own sprite into the frame, and that renders: seen
+  2026-08-15.
 
 ## NOT the cause
 **RetinaMode.** Client rect and ImGui DisplaySize are both exactly 1920x1080,
@@ -26,9 +40,12 @@ was a pure regression and has been reverted. Do not revisit it.
 - `mouse.unhook=0` in `config/boot/horizonxi.ini` — no change.
 - `io.MouseDown[0] = x` from Lua — Ashita's ImGui binding is read-only
   (`MouseDown assignable: false`).
-- **`HardwareMouse.dll` — actively harmful.** With `/load HardwareMouse` in
-  `scripts/default.txt` the client dies during startup, before addons load. Keep it
-  commented out.
+- **`HardwareMouse.dll`: no help here, but not harmful any more** *(corrected 2026-10-16)*.
+  - On 2026-08-17 the client died during startup with it loaded.
+  - HorizonXI's managed block now loads it (`AddonPolicy.swift:107`). On 2026-10-16 it loaded at
+    11:31:41 and ran for hours. The 08-17 death has no known cause and has not recurred.
+  - It cannot fix the cursor on this stack. It drops `SetCursor(NULL)` only when the call comes
+    from `d3d8.dll`, and ours comes from DXVK's `d3d9.dll`.
 
 ## 2026-08-21: injection is OFF again, and why
 
@@ -43,7 +60,8 @@ So injection is behind `FFXI_MOUSE_INJECT=1` and off by default. The cursor fix 
 unrelated, stays on, and is what stopped the blinking.
 
 **Clicking addon windows is therefore still unsolved**, and the two obvious paths are both known
-bad: this injection spins the camera, and `HardwareMouse.dll` kills the client at startup. What
+bad: this injection spins the camera, and `HardwareMouse.dll` only filters `SetCursor`, so it was
+never a click fix. (It does not kill the client either; corrected 2026-10-16, see above.) What
 has *not* been tried is fixing the message stream at its source — Ashita 4.3's own mouse hook
 (`mouse.unhook` in the boot profile was tested and did nothing, but the hook itself was never
 read) or a DirectInput-side interposer. That is where the next attempt should go, rather than at
@@ -55,6 +73,9 @@ In `mousediag.lua`, per frame:
 1. `SetCursor(LoadCursorA(nil, IDC_ARROW))` then drive `ShowCursor(1)` until the
    internal show-count is >= 0. Log line `ShowCursor count -> 1` means visible.
    **This is what made the cursor appear.**
+   - *2026-10-16:* most likely the per-frame `SetCursor` did the work. It puts a cursor back
+     after DXVK's `SetCursor(NULL)`.
+   - The show-count is unlikely to matter, since nothing in the game calls `ShowCursor`.
 2. (**Off by default — see the 2026-08-21 note above.**) Synthesise the missing message stream from `GetCursorPos` + `GetAsyncKeyState` and
    `PostMessageA` it to the `FFXiClass` window (WM_MOUSEMOVE 0x200,
    WM_LBUTTONDOWN/UP 0x201/0x202, WM_RBUTTONDOWN/UP 0x204/0x205). After this,
