@@ -10,8 +10,9 @@ import AppKit
 /// ghost-mounted.
 ///
 /// The button says one of Daniel's verbs: Setup, Update, Repair, Play, Stop (Play Another where
-/// a world allows two clients), or what is running ("Setting up… 42%"). Anything else the user
-/// needs to know is the one short line under it.
+/// a world allows two clients; Force Stop once Wine has died under the running game, b70), or
+/// what is running ("Setting up… 42%"). Anything else the user needs to know is the one short
+/// line under it.
 ///
 /// Never a greyed-out PLAY (Daniel, 2026-10-15: "the user should never encounter a greyed out
 /// play button"). A game that cannot start is an enabled Setup, Update or Repair whose click
@@ -196,6 +197,9 @@ struct PrimaryInputs {
     var starting = false
     var runningElsewhere = false
     var wineStuck = false
+    /// The selected world's session lost its Wine under the running client (b70,
+    /// `Runner.serverLost`): Force Stop.
+    var serverLost = false
 
     var horizonInstalled: String? = nil
     var horizonLatest: String? = nil
@@ -223,12 +227,15 @@ enum Primary {
 
     /// Every label the button may show when nothing is running. The progress labels are
     /// `Work.label`, with " 42%" when the job reports how far it is.
-    static let verbs: Set<String> = ["Setup", "Update", "Repair", "Play", "Stop", "Play Another"]
+    static let verbs: Set<String> = ["Setup", "Update", "Repair", "Play", "Stop", "Force Stop", "Play Another"]
 
     static func decide(_ x: PrimaryInputs) -> PrimaryDecision {
         if x.restartingLauncher { return make(.working(.updating, progress: nil), x) }
         if x.setupRunning { return make(.working(.settingUp, progress: x.setupProgress), x) }
         if let job = x.ownJob { return make(.working(work(forJob: job), progress: x.ownProgress), x) }
+        // Wine died under this world's client: its one way out, ahead of "Starting…" and of
+        // Play Another (a second client would start beside the frozen one).
+        if x.runningHere, x.serverLost { return make(.stop, x) }
         if x.starting { return make(.working(.starting, progress: nil), x) }
         if x.runningHere, !x.allowsMultipleClients { return make(.stop, x) }
         if x.runningElsewhere, !x.allowsMultipleClients {
@@ -366,7 +373,8 @@ enum Primary {
                 return .init(action: a, label: "Repair", enabled: true, reason: line)
             }
         case .stop:
-            return .init(action: a, label: "Stop", enabled: true, reason: nil, destructive: true)
+            return .init(action: a, label: x.serverLost ? "Force Stop" : "Stop", enabled: true, reason: nil,
+                         destructive: true)
         case .enterAccount:
             return .init(action: a, label: "Play", enabled: true, reason: "Type your account name and password above.")
         case .play:

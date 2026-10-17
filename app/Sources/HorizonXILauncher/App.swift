@@ -21,6 +21,7 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
     /// on a display that is no longer connected.
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        watchSleep()
         DispatchQueue.main.async { Self.recenterOffscreenWindows() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             guard !SingleInstance.terminating else { return }
@@ -41,6 +42,68 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
             && !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(w.frame) }) {
             w.center()
         }
+    }
+
+    // MARK: - Stop from the Dock (b70)
+
+    /// Stop without the launcher window. 2026-10-16: the game froze at character select when
+    /// its drive dropped, its own window could not be closed, and Stop lived only in the
+    /// launcher's window, behind the game. One item per session of this launcher that is
+    /// playing ("Force Stop …" once its Wine is gone); nothing for a client another launcher
+    /// started. No alert: choosing it from the menu is the decision, as in the RUNNING list.
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let items = Sessions.shared.stopItems
+        guard !items.isEmpty else { return nil }
+        let menu = NSMenu()
+        for item in items {
+            let m = NSMenuItem(title: item.title, action: #selector(stopFromDock(_:)), keyEquivalent: "")
+            m.target = self
+            m.representedObject = item.session
+            menu.addItem(m)
+        }
+        return menu
+    }
+
+    @MainActor @objc private func stopFromDock(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        Sessions.shared.stop(session: id)
+    }
+
+    // MARK: - Sleep, wake and unmount (b70)
+
+    /// When the Mac went to sleep, for the wake line.
+    private var sleptAt: Date?
+
+    /// One line each in launcher.log when the Mac sleeps and wakes, and on waking the server
+    /// check of every playing session at once (`Runner.checkServerNow`): 2026-10-16's freeze
+    /// was blamed on the lid, and the log had nothing to say either way. Logging only: sleep is
+    /// never held up or delayed, and no game is ever stopped for it. Also each unmount, here
+    /// rather than in the window, so it is seen with the window closed.
+    @MainActor private func watchSleep() {
+        let nc = NSWorkspace.shared.notificationCenter
+        nc.addObserver(self, selector: #selector(macWillSleep(_:)), name: NSWorkspace.willSleepNotification, object: nil)
+        nc.addObserver(self, selector: #selector(macDidWake(_:)), name: NSWorkspace.didWakeNotification, object: nil)
+        nc.addObserver(self, selector: #selector(volumeDidUnmount(_:)), name: NSWorkspace.didUnmountNotification,
+                       object: nil)
+    }
+
+    @MainActor @objc private func macWillSleep(_ n: Notification) {
+        let now = Date()
+        sleptAt = now
+        Runner.appendToLogFile(Runner.sleepLine(at: now, sessions: Sessions.shared.live.map(\.id)))
+    }
+
+    @MainActor @objc private func macDidWake(_ n: Notification) {
+        Runner.appendToLogFile(Runner.wakeLine(at: Date(), sleptAt: sleptAt))
+        sleptAt = nil
+        for s in Sessions.shared.live { s.runner.checkServerNow() }
+    }
+
+    /// The drive a playing session's Wine or prefix is on has gone; that client is frozen for
+    /// good. Said once, Force Stop offered, nothing ended (`Sessions.volumeGone`).
+    @MainActor @objc private func volumeDidUnmount(_ n: Notification) {
+        guard let v = n.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL else { return }
+        Sessions.shared.volumeGone(v.path, name: n.userInfo?[NSWorkspace.localizedVolumeNameUserInfoKey] as? String)
     }
 
     /// A Dock click with the window minimised or hidden shows that window rather than letting
@@ -124,6 +187,27 @@ struct HorizonXILauncherApp: App {
                 Button("Show Launcher Window") { LauncherDelegate.showMainWindow() }
                     .keyboardShortcut("n")
             }
+            GameCommands()
+        }
+    }
+}
+
+/// The Game menu (b70): the Dock menu's Stop items, from the menu bar while the launcher is in
+/// front. No keyboard shortcut: Stop is never one key away (see `playButton`).
+struct GameCommands: Commands {
+    /// The process's sessions, so the menu works with the launcher window closed too.
+    @ObservedObject private var sessions = Sessions.shared
+
+    var body: some Commands {
+        CommandMenu("Game") {
+            let items = sessions.stopItems
+            if items.isEmpty {
+                Button("Stop") {}.disabled(true)
+            } else {
+                ForEach(items, id: \.session) { item in
+                    Button(item.title) { sessions.stop(session: item.session) }
+                }
+            }
         }
     }
 }
@@ -173,7 +257,9 @@ struct ContentView: View {
     }
     @State private var checks: [Check] = []
     @State private var perf = PerfSettings.load()
-    @StateObject private var sessions = Sessions()
+    /// One for the whole process (see Sessions.shared): closing this window leaves every
+    /// session, its Stop and its watch loop running.
+    @ObservedObject private var sessions = Sessions.shared
     /// The selected world's session: what Play, Stop and the log pane act on.
     private var runner: Runner { sessions.runner(for: store.selectedID) }
 
@@ -316,6 +402,7 @@ struct ContentView: View {
         x.ownProgress = runner.updatingHorizon ? runner.updateProgress : runner.moveProgress
         if !runner.busy, Runner.workInFlight { x.otherJob = Runner.workInFlightReason ?? "Another job is running" }
         x.runningHere = runner.running
+        x.serverLost = runner.serverLost
         x.starting = runner.starting
         x.runningElsewhere = s.map { sessions.runningElsewhere(world: $0.name, host: $0.host) } == true
         x.wineStuck = WineserverStopWait.anyStuck && sessions.live.isEmpty
@@ -1800,6 +1887,13 @@ struct ContentView: View {
                 play()
             }
         case .stop:
+            // Force Stop (b70): Wine is gone under the client and nothing is left to save, so
+            // no question.
+            if runner.serverLost {
+                runner.stop(force: true)
+                Task { await refreshElsewhere() }
+                return
+            }
             let alert = NSAlert()
             alert.messageText = "Stop \(s.name)?"
             alert.informativeText = "The game closes without logging out."
@@ -2444,8 +2538,9 @@ struct ContentView: View {
     @ViewBuilder private var runningList: some View {
         // The selected world's own client is left out only while the main button is its Stop:
         // not while it says "Starting…", nor on a world that allows a second client, whose
-        // button is Play Another -- its first client's Stop is here.
-        let own = primary.action == .stop ? store.selected?.name : nil
+        // button is Play Another -- its first client's Stop is here. By the session the button
+        // acts on: b70's Force Stop can be the Stop of a second client ("Local server #2").
+        let own = primary.action == .stop ? runner.session : nil
         let live = sessions.live.filter { $0.id != own }
         if !live.isEmpty || !elsewhere.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
@@ -2455,7 +2550,10 @@ struct ContentView: View {
                         Circle().fill(Vana.crystal).frame(width: 6, height: 6)
                         Text(s.id).font(.system(size: 12)).foregroundStyle(Vana.text)
                         Spacer()
-                        Button("Stop") { s.runner.stop(); Task { await refreshElsewhere() } }
+                        Button(s.runner.serverLost ? "Force Stop" : "Stop") {
+                            s.runner.stop(force: s.runner.serverLost)
+                            Task { await refreshElsewhere() }
+                        }
                             .font(.system(size: 12))
                             .help("Ends \(s.id)'s client only. Other worlds keep running.")
                     }

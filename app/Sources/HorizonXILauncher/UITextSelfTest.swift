@@ -141,6 +141,27 @@ extension Headless {
                            && scanKey != AddonSuite.SheetKey(addonInstall, profile: "horizonxi.ini", policy: .unknown)
                            && scanKey != AddonSuite.SheetKey(otherClient, profile: "horizonxi.ini", policy: allowBar)))
 
+        // b70: what is said when Wine dies under the game, and the sleep and wake lines.
+        let at = Calendar.current.date(from: DateComponents(year: 2026, month: 10, day: 16, hour: 14, minute: 15, second: 40))!
+        let lost = Runner.serverLostLine(at: at)
+        let lostDrive = Runner.serverLostLine(at: at, drive: "x10")
+        let wantLost: String = "Wine stopped under the game at 14:15:40 — the game drive may have disconnected. "
+            + "The game can't recover; press Force Stop."
+        let wantDrive: String = "The 'x10' drive disconnected under the game at 14:15:40. The game can't recover; press Force Stop."
+        checks.append(("Wine gone under the game: the time, what happened, what to press",
+                       lost == wantLost && lostDrive == wantDrive))
+        checks.append(("... one line each, no 'restart', and it reaches the strip as an error",
+                       [lost, lostDrive].allSatisfy { !$0.contains("\n") && !$0.lowercased().contains("restart") && $0.count <= 130 }
+                           && Runner.errorLines(in: "==> x\n!! " + lost + "\n") == "!! " + lost + "\n"))
+        // 997 s: 2026-10-16's time asleep, summed over the dark wakes, between 15:41:57 and 16:02:15
+        // (pmset; that span is 1218 s). 16.6 min, said as 17.
+        let woke = at.addingTimeInterval(997)
+        checks.append(("sleep and wake lines: the time to the second as pmset prints it, what played, minutes asleep",
+                       Runner.sleepLine(at: at, sessions: ["HorizonXI", "Local server"]) == "i  sleep at 14:15:40 with HorizonXI, Local server"
+                           && Runner.sleepLine(at: at, sessions: []) == "i  sleep at 14:15:40 with no game"
+                           && Runner.wakeLine(at: woke, sleptAt: at) == "i  wake at 14:32:17 after 17 min"
+                           && Runner.wakeLine(at: woke, sleptAt: nil) == "i  wake at 14:32:17"))
+
         // Quit question.
         checks.append(("quit alert names the work",
                        LauncherDelegate.quitQuestion("Updating Wine").message == "Quit while updating Wine?"

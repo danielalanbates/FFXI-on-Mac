@@ -1230,6 +1230,11 @@ final class Runner: ObservableObject {
         currentWorld = worldName
         sessionGroup = nil
         groupHeldLoader = false
+        serverLost = false
+        serverHolder = nil
+        loaderUpSince = nil
+        sessionServerDir = nil
+        sessionPaths = []
         preexistingPIDs = Set(live[hostKey] ?? [])
         if !live.isEmpty { appendLine("==> also running: \(Self.describe(live))") }
         // The renderer lives in the prefix's registry and DLLs, not in the environment, so it has
@@ -1245,6 +1250,27 @@ final class Runner: ObservableObject {
         } else {
             logFileOnly("renderer: \(perf.renderer.title) already set up; left alone for the running world")
             RendererSetup.ensureFiles(perf.renderer, for: install) { [weak self] in self?.appendLine($0) }
+        }
+        // b70: what a Wine session that already died left running ends before a new one starts
+        // beside it (2026-10-16 16:37: five of the 14:15 session's programs were still spinning
+        // next to the new session). Decided under the launch lock this launch holds, by a scan
+        // that stops at `staleEndLimit` and is dropped unless it finished by then; the signals,
+        // with their 1.5 s grace, go from a task of their own and never hold up Play (b70
+        // review: the grace used to block the window). One line to launcher.log.
+        let staleDirs = Runner.serverDirs.union([Leftovers.serverDir(forPrefix: install.prefix.path)].compactMap { $0 })
+        let staleUntil = DispatchTime.now() + Self.staleEndLimit
+        let staleScan = Leftovers.Flagged()
+        let scanned = Self.finishes(within: Self.staleEndLimit) {
+            staleScan.result = Leftovers.flagStale(dirs: staleDirs, lockHeld: true) {
+                Leftovers.stale(LiveClients.snapshot(), dirs: $0, until: staleUntil)
+            }
+        }
+        let staleFlagged = scanned ? staleScan.result : []
+        if !staleFlagged.isEmpty {
+            Task.detached(priority: .utility) {
+                let ended = Leftovers.signalStale(staleFlagged, grace: 1.5)
+                if !ended.isEmpty { await MainActor.run { Runner.appendToLogFile(Leftovers.endedLine(ended)) } }
+            }
         }
         Self.cleanStaleWineSockets()
         gameExe = Credentials.bootLoaderName(in: install, profile: profile) ?? "horizon-loader.exe"
@@ -1422,6 +1448,9 @@ final class Runner: ObservableObject {
         if let pid = spawned {
             lockHandedOff = true
             LaunchLock.release(lock, whenVisible: pid, group: sessionGroup)
+            // b70: the server folder this session's wineserver will hold, and where its prefix
+            // and wine really are, while every path still resolves.
+            keepSpawnFacts(Self.spawnFacts(install))
         }
         return nil
     }
@@ -1513,6 +1542,156 @@ final class Runner: ObservableObject {
                              : "!! x87 acceleration didn't attach — next launch uses standard Rosetta.")
     }
 
+    // MARK: - Wine gone under the game (b70)
+
+    /// The wineserver under this session's client died, or the drive its Wine or prefix is on
+    /// went away, while the client still ran. 2026-10-16 14:15:40: the X10 dropped off USB for
+    /// ~3 s, the wineserver died (SIGBUS on its own paged-out code) and the game froze at
+    /// character select for good, its window impossible to close; nothing on screen said so.
+    /// Wine has no way back to a server, so the button says Force Stop and Stop sends SIGKILL at
+    /// once (`stop(force:)`). Set once per launch, and it never ends anything by itself: only the
+    /// player's Stop does.
+    @Published private(set) var serverLost = false
+    /// This session's prefix's server folder (`Leftovers.serverDir`), read when it started.
+    private var sessionServerDir: String?
+    /// Realpaths of this session's prefix and of the wine it runs, read when it started: once
+    /// their volume is gone nothing on it resolves any more (`Sessions.volumeGone`).
+    private(set) var sessionPaths: [String] = []
+    /// The wineserver holding that folder's lock, as first seen once the loader had been up 30 s.
+    /// From then on the watch loop asks that process, not the lock file (`Leftovers.state`).
+    private var serverHolder: Leftovers.LockHolder?
+    /// When the watch loop first saw this session's loader.
+    private var loaderUpSince: Date?
+    /// Every server folder a session of this run started in: where `Leftovers.endStale` looks,
+    /// besides the selected prefix's own. A drive that comes back under another device number
+    /// gives its prefix a new folder; what ran in the old one is still looked for here.
+    private(set) static var serverDirs: Set<String> = []
+
+    /// What a session keeps from its start for the checks above. Reads the drive (a stat, three
+    /// realpaths).
+    nonisolated static func spawnFacts(_ install: Install) -> (serverDir: String?, paths: [String]) {
+        let paths = [install.prefix.path, install.wine.path, playWine(install).path].map(OwnWine.resolve)
+        return (Leftovers.serverDir(forPrefix: install.prefix.path), Array(Set(paths)).sorted())
+    }
+
+    private func keepSpawnFacts(_ facts: (serverDir: String?, paths: [String])) {
+        sessionServerDir = facts.serverDir
+        sessionPaths = facts.paths
+        if let d = facts.serverDir { Runner.serverDirs.insert(d) }
+    }
+
+    /// What the watch loop reads this tick: from 30 s after the loader appeared (its wineserver
+    /// is long up by then) until the server is found lost, the session's server folder, and the
+    /// wineserver already seen holding it, if one was.
+    private var serverPoll: (dir: String, first: Leftovers.LockHolder?)? {
+        guard !serverLost, let since = loaderUpSince, Date().timeIntervalSince(since) >= 30,
+              let dir = sessionServerDir else { return nil }
+        return (dir, serverHolder)
+    }
+
+    /// One tick's read for `serverPoll`, off the main actor: the folder's lock holder until one
+    /// has been seen (one open, one fcntl, one identity read), then what became of that one
+    /// (one identity read).
+    nonisolated static func readServer(_ poll: (dir: String, first: Leftovers.LockHolder?))
+        -> (found: Leftovers.LockHolder?, state: Leftovers.ServerState?) {
+        guard let first = poll.first else { return (Leftovers.lockHolder(poll.dir), nil) }
+        return (nil, Leftovers.state(of: first))
+    }
+
+    /// Each tick of the watch loop: the first wineserver seen holding the session's folder is
+    /// remembered, and that process gone while the loader is alive marks the session
+    /// (`MultiWorld.serverLost`). A read that failed decides nothing.
+    private func watchServer(snap: LiveClients.Snapshot, pids: [pid_t], found: Leftovers.LockHolder?,
+                             state: Leftovers.ServerState?) {
+        let mine = Set(pids)
+        let loaderAlive = snap.clients.contains { $0.knownLoader && mine.contains($0.pid) }
+        if loaderAlive, loaderUpSince == nil { loaderUpSince = Date() }
+        guard !serverLost else { return }
+        guard let first = serverHolder else { serverHolder = found; return }
+        if MultiWorld.serverLost(first: first, now: state, loaderAlive: loaderAlive) { markServerLost() }
+    }
+
+    /// One "!!" line, the Dock icon bounces until the launcher is brought forward (the frozen
+    /// game is usually in front of it), and Stop becomes Force Stop. Nothing is ended here.
+    /// `drive`: the volume that went away, when that is how it was found.
+    func markServerLost(drive: String? = nil) {
+        guard running, !serverLost else { return }
+        serverLost = true
+        let now = Date()
+        let pid = serverHolder.map { String($0.pid) } ?? "?"
+        let how = drive.map { "drive '\($0)' unmounted" } ?? "wineserver pid \(pid) of \(sessionServerDir ?? "?") gone"
+        logFileOnly("i  \(session): \(how) at \(Self.timeOfDay(now)), the client still running")
+        appendLine("!! " + Self.serverLostLine(at: now, drive: drive))
+        _ = NSApp?.requestUserAttention(.criticalRequest)
+    }
+
+    /// The watch loop's server check, at once: after a wake, when its own next tick may be
+    /// seconds away. Reads only (one `ps`, one identity read).
+    func checkServerNow() {
+        guard running, !serverLost, let first = serverHolder else { return }
+        Task { [weak self] in
+            let (snap, state) = await Task.detached(priority: .utility) {
+                () -> (LiveClients.Snapshot, Leftovers.ServerState) in
+                (LiveClients.snapshot(), Leftovers.state(of: first))
+            }.value
+            guard let self, self.running, !self.serverLost, self.serverHolder == first else { return }
+            let mine = Set(self.sessionPIDs(in: snap))
+            let loaderAlive = snap.clients.contains { $0.knownLoader && mine.contains($0.pid) }
+            if MultiWorld.serverLost(first: first, now: state, loaderAlive: loaderAlive) { self.markServerLost() }
+        }
+    }
+
+    /// The line said when Wine went away under the game, with when it was noticed and, when that
+    /// is how it was found, the drive.
+    nonisolated static func serverLostLine(at time: Date, drive: String? = nil) -> String {
+        let t = timeOfDay(time)
+        if let drive {
+            return "The '\(drive)' drive disconnected under the game at \(t). The game can't recover; press Force Stop."
+        }
+        return "Wine stopped under the game at \(t) — the game drive may have disconnected. "
+             + "The game can't recover; press Force Stop."
+    }
+
+    /// Local time, 24-hour, to the second, whatever the Mac's own clock format: what `pmset -g
+    /// log` prints, so a line can be matched against it.
+    nonisolated static func timeOfDay(_ time: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "HH:mm:ss"
+        return f.string(from: time)
+    }
+
+    /// launcher.log only (LauncherDelegate): the Mac going to sleep, and what was playing.
+    nonisolated static func sleepLine(at time: Date, sessions: [String]) -> String {
+        "i  sleep at \(timeOfDay(time)) with " + (sessions.isEmpty ? "no game" : sessions.joined(separator: ", "))
+    }
+
+    /// … and waking, with how long it slept; just the time when the sleep was not seen.
+    nonisolated static func wakeLine(at time: Date, sleptAt: Date?) -> String {
+        guard let s = sleptAt else { return "i  wake at \(timeOfDay(time))" }
+        return "i  wake at \(timeOfDay(time)) after \(Int((time.timeIntervalSince(s) / 60).rounded())) min"
+    }
+
+    /// After the game exits on its own or by Stop: what a Wine session that died under it left
+    /// running. Ten seconds first, for Wine's own shutdown to end its programs the normal way,
+    /// and only when no client is left anywhere, no other session of this launcher plays, no
+    /// job runs and this session has not been started again (Play does its own). The rule is
+    /// run again under the launch lock (`Leftovers.endStale`). One line to launcher.log.
+    private func endStaleAfterExit() {
+        let generation = launchGeneration
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            guard let self, self.launchGeneration == generation, !self.running,
+                  self.othersPlaying() == 0, !Runner.workInFlight else { return }
+            let dirs = Runner.serverDirs
+            let ended = await Task.detached(priority: .utility) { () -> [pid_t] in
+                guard LiveClients.snapshot().clients.isEmpty else { return [] }
+                return Leftovers.endStale(dirs: dirs)
+            }.value
+            if !ended.isEmpty { self.logFileOnly(Leftovers.endedLine(ended)) }
+        }
+    }
+
     /// Poll for the client itself. Ashita-cli.exe exits seconds after a successful injection
     /// while the game carries on in horizon-loader.exe, so the injector's exit is not the game's.
     ///
@@ -1521,19 +1700,34 @@ final class Runner: ObservableObject {
     /// user.reg read and the boot-profile write. An exit is noticed within about 7 s.
     private func watchGameProcess() {
         let install = currentInstall
+        // An adopted session was not started by this run: what Play keeps at the spawn is read
+        // here instead, off the main actor with the scale (b70).
+        let needFacts = sessionServerDir == nil && sessionPaths.isEmpty
         Task { [weak self] in
             // Wine's Retina factor, from the prefix's user.reg on the game drive.
-            let scale = await Task.detached(priority: .utility) { install.map(WindowMemory.scale(for:)) ?? 1 }.value
+            let (scale, facts) = await Task.detached(priority: .utility) {
+                () -> (Int, (serverDir: String?, paths: [String])?) in
+                let scale = install.map { WindowMemory.scale(for: $0) } ?? 1
+                return (scale, needFacts ? install.map { Runner.spawnFacts($0) } : nil)
+            }.value
+            if let facts, let me = self, me.sessionServerDir == nil, me.sessionPaths.isEmpty { me.keepSpawnFacts(facts) }
             // Give the injector's child a moment to appear before deciding it never did.
             // Sample the window on the way: the last size seen is what the next launch opens
             // at (WindowMemory). Sampled on the main actor, since it reads the window server.
             for _ in 0..<120 {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
-                let snap = await Task.detached(priority: .utility) { LiveClients.snapshot() }.value
+                // b70: the session's wineserver, once the loader has been up 30 s: found by its
+                // server folder's lock, then watched as a process (`readServer`).
+                let poll = self?.serverPoll
+                let (snap, read) = await Task.detached(priority: .utility) {
+                    () -> (LiveClients.Snapshot, (found: Leftovers.LockHolder?, state: Leftovers.ServerState?)?) in
+                    (LiveClients.snapshot(), poll.map { Runner.readServer($0) })
+                }.value
                 guard let self else { return }
                 let pids = self.sessionPIDs(in: snap)
                 if pids.isEmpty { break }
                 self.sessionSeenAlive = true
+                self.watchServer(snap: snap, pids: pids, found: read?.found, state: read?.state)
                 if !self.x87Settled { self.checkX87Alive(snap: snap, pids: pids) }
                 if let s = WindowMemory.currentSize(pids: pids, scale: scale) {
                     // The window is up: "Starting…" is over (90 s is only the fallback).
@@ -1570,6 +1764,7 @@ final class Runner: ObservableObject {
             self.x87Settled = true
             self.tailGameGone?.raise()
             self.appendLine("==> game exited")
+            self.endStaleAfterExit()
             if let i = self.currentInstall { self.keepDXVKCache(i) }
             if silent {
                 self.logFileOnly("i  the injector printed nothing and no process of this launch was ever seen: "
@@ -1643,6 +1838,12 @@ final class Runner: ObservableObject {
         starting = false
         sessionGroup = group
         groupHeldLoader = true
+        serverLost = false
+        serverHolder = nil
+        loaderUpSince = nil
+        // Read by the watch loop, off the main actor (the prefix may be on a sleeping drive).
+        sessionServerDir = nil
+        sessionPaths = []
         preexistingPIDs = []
         currentInstall = install
         currentProfile = profile
@@ -1659,13 +1860,17 @@ final class Runner: ObservableObject {
     }
 
     /// Stop this session's own client, in the prefix it was launched in.
-    func stop() {
-        if let i = currentInstall { stop(i) }
+    func stop(force: Bool = false) {
+        if let i = currentInstall { stop(i, force: force) }
     }
 
     /// Ends this session's client only. The wineserver is shared by every world in the prefix,
     /// so it is stopped only once no client at all is left.
-    func stop(_ install: Install) {
+    ///
+    /// `force` (b70, Force Stop, offered once `serverLost`): SIGKILL at once to the same
+    /// processes, instead of SIGTERM and up to 8 s. With its wineserver gone a Wine process can
+    /// run no shutdown code; on 2026-10-16 the frozen client's threads sat in a fault loop.
+    func stop(_ install: Install, force: Bool = false) {
         sessionExplained = true
         // No x87 verdict on a session being ended: Stop takes the sidecar down at once while the
         // loader can outlive SIGTERM by seconds, which the minute check would read as a failure.
@@ -1685,8 +1890,8 @@ final class Runner: ObservableObject {
             // no group, a loader of its host in no other session's group). pid -> group.
             let mine = MultiWorld.signalable(pids, group: self.sessionGroup, host: self.hostKey,
                                              otherGroups: self.otherGroups, in: snap)
-            for pid in mine.keys { kill(pid, SIGTERM) }
-            if !mine.isEmpty { self.appendLine("==> stopping \(self.currentWorld) (pid \(mine.keys.sorted().map(String.init).joined(separator: ",")))") }
+            for pid in mine.keys { kill(pid, force ? SIGKILL : SIGTERM) }
+            if !mine.isEmpty { self.appendLine("==> \(force ? "force stopping" : "stopping") \(self.currentWorld) (pid \(mine.keys.sorted().map(String.init).joined(separator: ",")))") }
             self.finishStop(install, mine: mine, generation: generation)
         }
     }
@@ -1769,6 +1974,10 @@ final class Runner: ObservableObject {
         }
         return done.wait(timeout: .now() + seconds) == .success
     }
+
+    /// How long Play waits for the dead-session scan (`Leftovers.flagStale`) before starting the
+    /// client anyway; the scan stops there too. The signals are not waited for.
+    nonisolated static let staleEndLimit: Double = 2
 
     /// How long Play waits for the DXVK cache merge before starting the client without it.
     nonisolated static let dxvkWarmLimit: Double = 3
