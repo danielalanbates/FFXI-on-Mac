@@ -2,11 +2,11 @@
 
 Branch `beta-b70`, from `beta-b69` (5716690). Local beta: no GitHub release, nothing pushed, not
 installed. Written while Daniel was playing; **built and self-tested 2026-10-17** with no game
-running (release build, all 26 `--selftest-*` suites: 1014 checks, 0 failures). Nothing in it has
-run in a game yet.
+running (release build, all 26 `--selftest-*` suites: 1014 checks, 0 failures; the window harness
+`scripts/tests/gamewindow-test.sh`: 342 PASS, 0 FAIL). Nothing in it has run in a game yet.
 
-Launcher changes from the freeze on 2026-10-16 at 14:15 (§1-§4), and renderer and launcher changes
-from the second freeze that evening (§5-§7):
+Launcher changes from the freeze on 2026-10-16 at 14:15 (§1-§4), and renderer, launcher and
+game-window changes from the second freeze that evening (§5-§8):
 
 - Wine programs left running by a Wine session that already died are ended
   ([below](#1-programs-of-a-wine-session-that-already-died)).
@@ -24,6 +24,9 @@ from the second freeze that evening (§5-§7):
   ([Stop on a frozen game](#6-stop-on-a-frozen-game)).
 - When the game's GPU device is lost, the button is **Stop** with one line under it, and the Dock
   icon bounces once ([Graphics gone under the game](#7-graphics-gone-under-the-game)).
+- The game window's close button and Quit work on a frozen game: 5 s after either, if the game has
+  neither read its input nor drawn, it asks "The game isn't responding." with **Force Quit** and
+  **Wait** ([Closing a frozen game from its window](#8-closing-a-frozen-game-from-its-window)).
 
 The invisible in-game cursor reported the same day is a separate bug with its own write-up:
 [`CURSOR-DXVK.md`](CURSOR-DXVK.md). Only the rebuilt DXVK DLL in §5 touches it: it carries the fix.
@@ -420,6 +423,124 @@ automatically, nothing says "restart", and Play is never greyed out.
 **Not for an adopted session.** A client an earlier launcher run started is adopted without its
 output file, so its loss is not seen. Its Stop works as always.
 
+## 8. Closing a frozen game from its window
+
+At 21:31 neither the close button nor Quit did anything, and §5 only removes that one cause. Wine
+never acts on either itself: it queues the request for the game's own thread, and a thread stuck
+anywhere (the DXVK deadlock, the 14:15 drive drop) never reads it (athei/wine cx-26-patched,
+dlls/winemac.drv, read in source):
+
+- **The close button.** WineWindow is its own delegate; `windowShouldClose:` posts
+  WINDOW_CLOSE_REQUESTED to the window's queue and answers NO (cocoa_window.m:3202-3208). The
+  game's thread turns it into SC_CLOSE.
+- **Quit** (Cmd-Option-Q, the app menu, the Dock, log out). `applicationShouldTerminate:` posts
+  APP_QUIT_REQUESTED to every queue and answers NSTerminateLater; only the Windows side replies
+  (cocoa_app.m:2655-2696).
+- **Plain Cmd-Q is not a quit** in wine's app. Its Quit item is Cmd-Option-Q
+  (cocoa_app.m:367-368), and Cmd-Q reaches the game as Alt-Q.
+- AppKit's own thread stays fine, so macOS never calls the game "not responding" and offers
+  nothing.
+
+**What gamewindow.dylib does now** (`window/gamewindow.c`, "Not responding"):
+
+- **Every request still goes to wine unchanged.** The close button, Quit (all four ways) and plain
+  Cmd-Q on a game window (titled, resizable, at least 320x240 points; the key still goes on to the
+  game) are each watched for `FFXI_GAMEWINDOW_HANG` seconds, 5 by default (Windows' own hung-window
+  timeout).
+- **"Responding" is two counters,** read before wine posts the request:
+  - the game window's thread reading its wine event queue (`-[WineEventQueue
+    getEventMatchingMask:]`, which only that thread calls, and which the request itself wakes);
+  - the game asking for a frame (`-[CAMetalLayer nextDrawable]`, once per frame MoltenVK presents).
+
+  A live game, even one idle in GetMessage or throttled behind a locked screen, moves one within a
+  frame or two. Nothing is judged without a request, so play, zone loads, a covered or minimized
+  window and a locked screen are never asked about.
+- **If neither moved,** an alert on AppKit's main thread: **"The game isn't responding."** with
+  **Force Quit** (Return) and **Wait** (Escape). One line, nothing else.
+  - **Force Quit** writes one line to the game's log (`gamewindow: close: Force Quit chosen;
+    ending the game (pid N) now`) and SIGKILLs its own process, the client. The launcher sees the
+    client exit like any exit, and wine's own shutdown ends the rest.
+  - **Wait** changes nothing; the next close, Quit or Cmd-Q is judged afresh.
+  - **The question withdraws itself** (`abortModal`, checked every 0.25 s) once the game reads its
+    input or draws.
+  - **It is kept above every visible window of the app,** never below the modal-panel level, and
+    re-checked every 0.25 s. Wine puts a topmost game window at NSFloatingWindowLevel, and above
+    the screen shield while the displays are captured (cocoa_window.m `minimumLevelForActive:`,
+    reapplied whenever the app becomes active).
+  - That it asked, and what was chosen, always go to the game's log, debug or not.
+- **Where it runs:** wherever the dylib already watches windows, `HXI_WINDOW_TITLE` or
+  `HXI_GAME_ASPECT`, which means with "keep window shape" on (the default). `FFXI_GAMEWINDOW_HANG=0`
+  turns it off, 1...600 sets the seconds, anything else is 5. `last-spawn.txt` records it
+  (`--selftest-perf` checks that).
+- **Four overrides, each calling the one it replaced** (`getEventMatchingMask:`,
+  `windowShouldClose:`, `nextDrawable`, `applicationShouldTerminate:`), and a local key monitor
+  that passes every key on. Installed once, at the first game window wine shows. Without wine's
+  event queue behind it nothing is installed, since frames alone would make a game at a message box
+  look hung.
+- **Measuring zone loads:** with `FFXI_GAMEWINDOW_DEBUG=1`, any gap of a second or more between
+  frames, or between the game thread's input reads, is logged when it ends (`gamewindow: gap: …`).
+
+**What it cannot catch:**
+
+- a hang that keeps reading its input but never handles it;
+- a blocked AppKit main thread, where no alert can appear. Stop and Force Stop in the Dock and
+  Game menus (§3, §6) still work there;
+- wine's own code faulting on the main thread, as after a drive drop, when wine runs from the
+  drive that went away.
+
+**Tests** (`scripts/tests/gamewindow-test.sh`, stand-in windows that are never shown, under wine's
+class names; arm64 and x86_64 under Rosetta). Run 2026-10-17 with no game running: **342 PASS,
+0 FAIL**, b69's 296 plus 46:
+
+- 15 request cases per architecture:
+  - **close:** a game that reads its input, one idle in GetMessage, and one that only draws are
+    all left to the game;
+  - **close on a hung game:** asked, Wait keeps it, and the next close asks again (question at
+    level 8, the modal-panel level);
+  - **close:** reads and frames from before the click don't count;
+  - **close, Force Quit:** the process ends by SIGKILL (exit 137);
+  - **close beside a window wine raised to level 1000:** the question goes to 1001;
+  - **close on a message box:** never watched;
+  - **`FFXI_GAMEWINDOW_HANG=0`:** nothing overridden, and the close still reaches wine;
+  - **quit:** an idle game is left to it; a hung one is judged inside AppKit's NSTerminateLater
+    wait (NSModalPanelRunLoopMode), with Force Quit and with Wait;
+  - **Cmd-Q:** a playing game is left to it and the key comes through unchanged; a hung one gets
+    Force Quit; Cmd-Option-Q is never treated as Cmd-Q.
+- 8 `FFXI_GAMEWINDOW_HANG` values per architecture (empty, `abc`, `601`, `-3`, `1.5` → 5 s; `0` →
+  off; `3`; `600`), in a process with no AppKit.
+- The answer comes from `FFXI_GAMEWINDOW_HANG_ANSWER` (honoured only with `FFXI_GAMEWINDOW_DEBUG=1`),
+  which skips `runModal`, so nothing is ever shown. The cases that must not ask answer "force", so a
+  question where none belongs kills the test (137) instead of passing quietly. The game window's
+  first sighting runs in an autorelease pool of its own, so the key monitor has to outlive one
+  pass of the run loop.
+- The script's sidecar fallback reads the installed app in /Applications. It was run from a copy
+  pointing that fallback nowhere; the vendor sidecar passed, so the fallback was never needed.
+- The dylib is built as `bundle.sh` builds it (`scripts/build-gamewindow.sh`, universal, -Wall
+  -Wextra, no warnings), and still links only libSystem and libobjc. The 26 Swift suites, rerun with
+  it: 1014 checks, 0 failures (`--selftest-perf` finds it with its x86_64 slice).
+
+**Not verified:**
+
+- **Where the alert appears inside the real wine app.** Nobody has seen it there:
+  - whether it shows above wine's window levels, including while the displays are captured. The
+    level raise is checked only against a stand-in window that reports level 1000;
+  - whether `runModal` keeps a level set before it. The 0.25 s re-check covers it if not;
+  - whether it activates when Quit comes from the Dock;
+  - whether `abortModal` from the timer withdraws it, also inside NSTerminateLater's wait.
+
+  The test seam skips `runModal`, so none of these has run.
+- **No real hang has been closed this way.** The shipped winemac.so (2026-08-19) has every selector
+  used, but it is older than the source read, so its method bodies are not proven to match.
+- **That the key monitor sees Cmd-Q in wine's app.** `-[WineApplication sendEvent:]` passes every
+  key-down but Help to `[super sendEvent:]`, where local monitors run (read in source only).
+- **5 s against a zone load:** inferred, not measured. A zone stall of 5 s or more right after a
+  close would ask, then withdraw once the game is back. Force Quit is the Return default, by
+  design. The gap lines above measure what a zone load costs.
+- A second Cmd-Option-Q after Wait may not reach `applicationShouldTerminate:` again while AppKit
+  still waits on the first. The close button and Cmd-Q still ask.
+- Force Quit is SIGKILL, like Force Stop. Ashita's and FFXI's exit writes are lost, and perhaps the
+  last DXVK cache entry; the character stays logged in until the server times it out.
+
 ## Kill safety
 
 What b70 can end, and why nothing else:
@@ -452,6 +573,8 @@ What b70 can end, and why nothing else:
   Mac is the session's own, no other session plays, no launch is under way (the launch lock is
   held for it) and the server is the one the session started with. A pid gets SIGKILL only while
   it is still the same wine process in the same group.
+- **The game window's Force Quit (§8) ends only the process it runs in,** and only on the
+  player's click in its question. Nothing in the dylib signals any other process.
 - **Read-only checks only, during play:** the lock read opens the file read-only, never creates
   it, and `F_GETLK` takes no lock. The region walk reads another process's memory map, nothing
   more.
@@ -553,7 +676,10 @@ These add 46 checks to b69's 942 (26 suites), and §5 adds 1: 989, as run.
   read that ends it; the line under Stop word for word, at most 72 characters, no "restart"; said
   at 2 s and not at 1.9 s, never without a loss.
 - `--selftest-perf` (+1): `last-spawn.txt` records `FFXI_GAMEWINDOW_HANG` (gamewindow.dylib's
-  hung-game question; the dylib side is a later part).
+  hung-game question, §8).
+
+§8 changes no Swift code. The same 26 suites, run again with its dylib in `app/Resources`: 1014
+checks, 0 failures, launcher.log untouched. Its own tests are in the window harness (§8, 342 PASS).
 
 ## Not verified
 
@@ -587,6 +713,8 @@ These add 46 checks to b69's 942 (26 suites), and §5 adds 1: 989, as run.
   `Logger::err`, assumed to print the same `err:   ` start as the stock lines.
 - The line under Stop shows only while that session's world is the one selected in the window.
   The Dock bounce does not depend on it.
+- **§8's question has not been seen in wine's app** (placement, activation, withdrawal): see §8's
+  own list.
 
 ## Checks to run (never on the x10, never on HorizonXI, never while Daniel plays)
 
@@ -610,6 +738,19 @@ These add 46 checks to b69's 942 (26 suites), and §5 adds 1: 989, as run.
    (`$TMPDIR/ffxi-on-mac-game-<launcher pid>-Local-server.log`, the file the launcher tails).
    Within about 2.5 s expect launcher.log's loss line, Stop with "The game's graphics stopped at
    …" under it, one Dock bounce (with the launcher behind), and a Stop that asks nothing.
+7. §8 in a throwaway prefix, never prefix10. Use a small i386 program that opens a 1280x720 window
+   and then stops reading its messages (`Sleep`) for 30 s. Run it with `gamewindow.dylib` in
+   `DYLD_INSERT_LIBRARIES` and `HXI_WINDOW_TITLE` set. (`kill -STOP` cannot fake this: it stops
+   AppKit's thread too.) Expect:
+   - 5 s after the red button: the question, in front, above the window;
+   - Wait keeps the program;
+   - the question goes away by itself when the program reads its messages again;
+   - Force Quit ends the program, with its line on stderr.
+
+   Repeat with Cmd-Option-Q, Dock › Quit and plain Cmd-Q. Once with the window topmost
+   (`WS_EX_TOPMOST`).
+8. On the local LSB world, with `FFXI_GAMEWINDOW_DEBUG=1` in Extra environment: zone a few times
+   and read the `gap:` lines in the game log. They show what 5 s has to cover.
 
 ## Deviations from the plan
 
@@ -644,3 +785,11 @@ These add 46 checks to b69's 942 (26 suites), and §5 adds 1: 989, as run.
   asked about again (`stopOutlived`, not in the proposal).
 - The after-exit cleanup looks only in the folders recorded at spawn (no `stat` of a drive that
   may just have gone).
+- §8, against understand-3's proposal:
+  - the question is one line, with no informative text;
+  - it is kept one level above every visible window of the app and never below the modal-panel
+    level, checked again every 0.25 s while it is up (the proposal left the level to AppKit);
+  - it activates with `-activate` where macOS has it (14+), else `-activateIgnoringOtherApps:`;
+  - it runs in an autorelease pool of its own;
+  - the tests add the raised-window case, require level 8 for an ordinary question, and post the
+    first sighting from a pool of its own.
