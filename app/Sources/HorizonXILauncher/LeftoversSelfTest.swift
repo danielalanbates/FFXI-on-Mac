@@ -432,7 +432,7 @@ extension Headless {
             let f = FakeStop()
             f.diesOn = diesOn
             let out = Runner.escalateStop(stopMine, force: force, alive: f.alive, rescan: { snap ?? stopSnap },
-                                          server: { _ in server }, send: { f.sent.append((pid: $0, sig: $1)) },
+                                          server: { server }, send: { f.sent.append((pid: $0, sig: $1)) },
                                           sleep: { f.slept += $0 })
             return (out, f.slept)
         }
@@ -480,6 +480,48 @@ extension Headless {
         checks.append(("b70 Stop's SIGINT: never to a server that started at another time than the one first seen, nor with none read",
                        !mayInterrupt(now: Leftovers.LockHolder(pid: 44464, startSec: 1792193859, startUsec: 121))
                            && !mayInterrupt(now: nil) && !mayInterrupt(first: nil, now: nil)))
+        // b70 review: the launch lock is taken before the scan that decides it
+        // (`Runner.serverToInterrupt`); scanned first, a launch elsewhere could end and let go of
+        // the lock in between, its client in neither. Lock, scan and holder are injected.
+        final class FakeGate {
+            var steps: [String] = []
+            var lockFree = true
+            var released: [Int32] = []
+            var clients: [LiveClients.Client]
+            var servers: [pid_t] = [44464]
+            init(_ clients: [LiveClients.Client]) { self.clients = clients }
+        }
+        func gate(_ g: FakeGate, dir: String? = "/tmp/.wine-501/server-1000016-d7c73b", others: Int = 0,
+                  first: Leftovers.LockHolder? = server1) -> (pid: pid_t, lock: Int32)? {
+            Runner.serverToInterrupt(dir: dir, mine: mineSet, others: others, first: first,
+                                     acquire: { g.steps.append("lock"); return g.lockFree ? 7 : nil },
+                                     release: { g.released.append($0) },
+                                     scan: {
+                                         g.steps.append("scan")
+                                         var s = LiveClients.Snapshot()
+                                         s.clients = g.clients
+                                         s.wineservers = g.servers
+                                         return s
+                                     },
+                                     holder: { _ in g.steps.append("holder"); return server1 })
+        }
+        let allowed = FakeGate(liveClients)
+        let granted = gate(allowed)
+        checks.append(("b70 Stop's SIGINT: the launch lock first, then the scan; the server and the held lock come back",
+                       granted?.pid == 44464 && granted?.lock == 7 && allowed.steps == ["lock", "scan", "holder"]
+                           && allowed.released.isEmpty))
+        let busy = FakeGate(liveClients)
+        busy.lockFree = false
+        let launched = FakeGate(liveClients)
+        launched.clients += [LiveClients.Client(pid: 55501, group: 55500, host: "127.0.0.1", injecting: false)]
+        let notServer = FakeGate(liveClients)
+        notServer.servers = []
+        checks.append(("b70 Stop's SIGINT: lock held elsewhere, nothing scanned; a client the scan under the lock sees, or a holder that is no wineserver: refused, lock let go",
+                       gate(busy) == nil && busy.steps == ["lock"]
+                           && gate(launched) == nil && launched.released == [7]
+                           && gate(notServer) == nil && notServer.released == [7]
+                           && gate(FakeGate(liveClients), others: 1) == nil
+                           && gate(FakeGate(liveClients), dir: nil) == nil))
 
         var failures = 0
         for (name, ok) in checks {

@@ -1767,16 +1767,16 @@ final class Runner: ObservableObject {
     /// for the self-test. In the game's Wine SIGTERM ends a client at once (ntdll installs no
     /// SIGTERM handler, nor does the x87 sidecar with its sampler off); the later steps are for a
     /// process the kernel still holds. 1: SIGTERM to each, up to `step` s for all to go. 2: if
-    /// `server` names the session's wineserver (gated: it serves every world in the prefix),
-    /// SIGINT + SIGCONT to it, what `wineserver -k` sends: it ends every client of the prefix in
-    /// order, SIGKILLing what is left 0.5 s on; up to `step` s more. 3: SIGKILL to each pid still
-    /// the same wine process in the same group (`stillSignalable`). At most 2 × `step` of
-    /// waiting. `force` (Force Stop, Wine gone): SIGKILL to each, nothing else, nothing waited.
-    /// Returns the signals in the order sent ("TERM 44487").
+    /// `server` names the session's wineserver (gated, `serverToInterrupt`: it serves every world
+    /// in the prefix), SIGINT + SIGCONT to it, what `wineserver -k` sends: it ends every client of
+    /// the prefix in order, SIGKILLing what is left 0.5 s on; up to `step` s more. 3: SIGKILL to
+    /// each pid still the same wine process in the same group (`stillSignalable`). At most
+    /// 2 × `step` of waiting. `force` (Force Stop, Wine gone): SIGKILL to each, nothing else,
+    /// nothing waited. Returns the signals in the order sent ("TERM 44487").
     nonisolated static func escalateStop(_ mine: [pid_t: pid_t], force: Bool, step: Double = 1.5,
                                          alive: (pid_t) -> Bool = { Detach.isAlive($0) },
                                          rescan: () -> LiveClients.Snapshot = { LiveClients.snapshot() },
-                                         server: (LiveClients.Snapshot) -> pid_t? = { _ in nil },
+                                         server: () -> pid_t? = { nil },
                                          send: (pid_t, Int32) -> Void = { _ = kill($0, $1) },
                                          sleep: (Double) -> Void = { Thread.sleep(forTimeInterval: $0) }) -> [String] {
         let names: [Int32: String] = [SIGTERM: "TERM", SIGKILL: "KILL", SIGINT: "INT", SIGCONT: "CONT"]
@@ -1795,7 +1795,7 @@ final class Runner: ObservableObject {
         if force { return sent }
         waitGone()
         guard anyAlive() else { return sent }
-        if let ws = server(rescan()) {
+        if let ws = server() {
             signal(ws, SIGINT); signal(ws, SIGCONT)
             waitGone()
             guard anyAlive() else { return sent }
@@ -1805,6 +1805,33 @@ final class Runner: ObservableObject {
             if let g = mine[pid], MultiWorld.stillSignalable(pid, group: g, in: now) { signal(pid, SIGKILL) }
         }
         return sent
+    }
+
+    /// Stop's wineserver step (`escalateStop`'s `server`): the session's wineserver, with the
+    /// launch lock that is then held until the signals are done, so no Play starts against the
+    /// dying server; nil, with nothing held, when it may not be interrupted
+    /// (`MultiWorld.mayInterruptServer`). The lock first, then the scan, as for the wineserver
+    /// flush after a Stop: scanned first, another launcher could finish a launch and let go of
+    /// the lock in between, and its client would be neither in the scan nor under way (b70
+    /// review). The holder of `dir`'s lock must be a wineserver in that scan, and the one first
+    /// seen there (`first`) if one was. `others`: this launcher's other sessions playing, as
+    /// counted when Stop was pressed (one of them launched since holds the lock or is in the
+    /// scan). The Mac injected for the self-test.
+    nonisolated static func serverToInterrupt(dir: String?, mine: Set<pid_t>, others: Int, first: Leftovers.LockHolder?,
+                                              acquire: () -> Int32? = { LaunchLock.acquire() },
+                                              release: (Int32) -> Void = { LaunchLock.release($0) },
+                                              scan: () -> LiveClients.Snapshot = { LiveClients.snapshot() },
+                                              holder: (String) -> Leftovers.LockHolder? = { Leftovers.lockHolder($0) })
+        -> (pid: pid_t, lock: Int32)? {
+        guard let dir, let lock = acquire() else { return nil }
+        let snap = scan()
+        guard let now = holder(dir), snap.wineservers.contains(now.pid),
+              MultiWorld.mayInterruptServer(snap.clients, mine: mine, otherSessionsPlaying: others,
+                                            launchUnderWay: false, first: first, now: now) else {
+            release(lock)
+            return nil
+        }
+        return (now.pid, lock)
     }
 
     /// After the game exits on its own or by Stop: what a Wine session that died under it left
@@ -2046,19 +2073,13 @@ final class Runner: ObservableObject {
             // lock, a wineserver in the scan, the one first seen there if one was), only with no
             // client but this session's anywhere, no other session of this launcher playing and
             // no launch under way: SIGINT ends every client of the prefix. The launch lock is
-            // held from that decision until the signals are done, so no Play starts against the
-            // dying server.
+            // taken before that scan and held until the signals are done (`serverToInterrupt`).
             var held: Int32?
-            let sent = Runner.escalateStop(mine, force: force, server: { snap in
-                guard let dir, let now = Leftovers.lockHolder(dir), snap.wineservers.contains(now.pid) else { return nil }
-                let lock = LaunchLock.acquire()
-                guard MultiWorld.mayInterruptServer(snap.clients, mine: Set(mine.keys), otherSessionsPlaying: others,
-                                                    launchUnderWay: lock == nil, first: first, now: now) else {
-                    if let lock { LaunchLock.release(lock) }
-                    return nil
-                }
-                held = lock
-                return now.pid
+            let sent = Runner.escalateStop(mine, force: force, server: {
+                guard let s = Runner.serverToInterrupt(dir: dir, mine: Set(mine.keys), others: others, first: first)
+                else { return nil }
+                held = s.lock
+                return s.pid
             })
             if let held { LaunchLock.release(held) }
             let late = force ? [] : sent.filter { !$0.hasPrefix("TERM ") }
