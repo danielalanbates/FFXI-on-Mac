@@ -2,11 +2,11 @@
 
 Branch `beta-b70`, from `beta-b69` (5716690). Local beta: no GitHub release, nothing pushed, not
 installed. Written while Daniel was playing; **built and self-tested 2026-10-17** with no game
-running (release build, all 26 `--selftest-*` suites: 989 checks, 0 failures). Nothing in it has run
-in a game yet.
+running (release build, all 26 `--selftest-*` suites: 1014 checks, 0 failures). Nothing in it has
+run in a game yet.
 
-Four launcher changes, all from the freeze on 2026-10-16 at 14:15, and a renderer change from the
-second freeze that evening:
+Launcher changes from the freeze on 2026-10-16 at 14:15 (§1-§4), and renderer and launcher changes
+from the second freeze that evening (§5-§7):
 
 - Wine programs left running by a Wine session that already died are ended
   ([below](#1-programs-of-a-wine-session-that-already-died)).
@@ -15,9 +15,15 @@ second freeze that evening:
   ([Wine gone under the game](#2-wine-gone-under-the-game)).
 - Stop is in the Dock menu and in a new **Game** menu
   ([Stop without the launcher window](#3-stop-without-the-launcher-window)).
-- launcher.log gets a line when the Mac sleeps and when it wakes ([Sleep and wake](#4-sleep-and-wake)).
+- launcher.log gets a line when the Mac sleeps and when it wakes, and when the displays go off and
+  on with the Mac awake ([Sleep and wake](#4-sleep-and-wake)).
 - A GPU reset no longer freezes the game: MoltenVK keeps the device, and DXVK no longer deadlocks
   when the device is lost ([Graphics survive a GPU reset](#5-graphics-survive-a-gpu-reset)).
+- Stop says **Stopping…** until the client is gone, which takes at most about 3 s, and asks
+  nothing when the launcher knows the game is frozen
+  ([Stop on a frozen game](#6-stop-on-a-frozen-game)).
+- When the game's GPU device is lost, the button is **Stop** with one line under it, and the Dock
+  icon bounces once ([Graphics gone under the game](#7-graphics-gone-under-the-game)).
 
 The invisible in-game cursor reported the same day is a separate bug with its own write-up:
 [`CURSOR-DXVK.md`](CURSOR-DXVK.md). Only the rebuilt DXVK DLL in §5 touches it: it carries the fix.
@@ -148,10 +154,10 @@ can't recover; press Force Stop.`
 **Force Stop.** `PrimaryInputs.serverLost` turns the button into Force Stop (still destructive,
 never on Return, ahead of "Starting…" and of Play Another). It skips the "Stop HorizonXI?" alert,
 and `Runner.stop(force: true)` sends SIGKILL at once to exactly the processes Stop would signal
-(`MultiWorld.signalable`: the session's process group), instead of SIGTERM and up to 8 s. The
-RUNNING list's Stop says Force Stop for a marked session too. The rest of Stop is unchanged (the
-wineserver step only when nothing else is left), and the after-exit cleanup above then ends the
-dead session's Wine programs.
+(`MultiWorld.signalable`: the session's process group), instead of SIGTERM and what follows it
+(§6). The RUNNING list's Stop says Force Stop for a marked session too. The rest of Stop is
+unchanged (the wineserver flush only when nothing else is left), and the after-exit cleanup above
+then ends the dead session's Wine programs.
 
 **Nothing is ended automatically.** The standing rule is never to close a game Daniel is playing;
 a banner, a bouncing icon and one click are enough.
@@ -163,6 +169,7 @@ a banner, a bouncing icon and one click are enough.
   list.
 - **Game menu** (`GameCommands`, `CommandMenu("Game")`): the same items while the launcher is in
   front; a disabled "Stop" when nothing plays. No keyboard shortcut: Stop is never one key away.
+- In both, a session whose Stop is under way is a disabled "Stopping HorizonXI…" (§6).
 - **Sessions live for the whole process** (`Sessions.shared`, like `Updater.shared`; the window,
   both menus and the delegate use it). Before, they were the window's `@StateObject`: closing the
   window (the app keeps running) released them with their Stop and their watch loops, exactly
@@ -183,6 +190,16 @@ a banner, a bouncing icon and one click are enough.
 each playing session's server check runs straight away (`Runner.checkServerNow`) instead of
 waiting for the next tick. Logging only: sleep is never held up or delayed, `IOAllowPowerChange` is not
 involved, and no game is stopped for it.
+
+**Displays off and on with the Mac awake** (`NSWorkspace` `screensDidSleep` / `screensDidWake`,
+same place):
+
+    i  display off at HH:MM:SS with HorizonXI
+    i  display on at HH:MM:SS with HorizonXI
+
+(`Runner.displayLine`.) The 21:31 freeze came with the lid closed on AC: a display sleep from
+20:13 to 22:10 with the Mac awake, so `willSleep` never fired and launcher.log had nothing for it.
+Lines only: nothing is checked, ended or bounced when the displays come back.
 
 ## 5. Graphics survive a GPU reset
 
@@ -312,9 +329,96 @@ game's Wine and the wrapper's, and `last-spawn.txt` records it.
   bound is reached.
 - **The cursor probe and the A/B in `CURSOR-DXVK.md`.** `cursorprobe.c` compiles (no warnings)
   but needs Wine.
-- **The launcher does not yet watch for the line.** It could show a "can't draw; Stop" line when
-  it sees `horizonxi: GPU device lost` or MoltenVK's `Lost VkDevice after MTLCommandBuffer` in
-  the game log (`Runner.appendChunk`). Not in this part.
+- The launcher now watches the game's output for both lines: §7.
+
+## 6. Stop on a frozen game
+
+At 21:31 every Stop path would have ended the client: SIGTERM kills it outright, since CrossOver's
+ntdll installs no SIGTERM handler and neither does the x87 sidecar with its sampler off (read in
+the Wine source and the sidecar's). The gaps were around it: the main Stop asked first, the button
+said Stop for up to 7 s after the client was gone (a 5 s tick plus a 2 s second look), and a client
+that ignored SIGTERM waited 8 s for SIGKILL.
+
+**Stopping…** (`Runner.stoppingGame`) from the click until the session ends:
+
+- on the main button (disabled; ahead of Force Stop, the graphics line, "Starting…" and Play
+  Another), on the RUNNING row (disabled), and in the Dock and Game menus ("Stopping HorizonXI…",
+  disabled);
+- the watch loop looks every 0.5 s instead of every 5 s, and takes its second look 0.5 s on
+  instead of 2 s, so Play is back about a second after the client ends;
+- App Nap is held off (`beginActivity(.userInitiatedAllowingIdleSystemSleep)`): the launcher sits
+  behind the game, where macOS stretches its timers;
+- 10 s on (`stopGiveUp`) with the client still there: one launcher.log line, Stop is offered
+  again, and it asks nothing (`stopOutlived`).
+
+**The signals** (`Runner.escalateStop`; signals, liveness, scans and sleeps all injectable):
+
+1. SIGTERM to each pid Stop may signal (`MultiWorld.signalable`: the session's process group).
+   Up to 1.5 s for all of them to go.
+2. If any is left, SIGINT then SIGCONT to the session's wineserver: what `wineserver -k` sends. The
+   server then ends every client of the prefix in order and SIGKILLs what is left about 0.5 s later
+   (server/request.c, signal.c, process.c). Up to 1.5 s more. Only when
+   `MultiWorld.mayInterruptServer` allows it, because that server serves every world in the prefix:
+   - every client on the Mac is one of this session's pids;
+   - no other session of this launcher plays;
+   - the launch lock is free (taken here and held until the signals are done, so no Play starts
+     against the dying server);
+   - the process holding the session's server folder lock is a wineserver in the scan, and the
+     one first seen holding it, if one was.
+
+   On this Wine it adds no killing power over SIGKILL; it takes the prefix down in order.
+3. If any is left, SIGKILL to each pid that is still the same wine process in the same group
+   (`stillSignalable`, read again).
+
+That is at most 3 s of waiting, and usually none. Force Stop sends SIGKILL to each and nothing
+else. Every signal after the SIGTERMs goes to launcher.log, for example
+`i  HorizonXI: SIGTERM was not enough: INT 44464, CONT 44464`. The rest of Stop is unchanged: 1 s
+on, the wineserver flush under the launch lock if nothing is left.
+
+**No question** when the launcher knows there is nothing to save:
+
+- Wine gone under the game (Force Stop, §2);
+- the graphics gone (§7);
+- a client that outlived a Stop the player already confirmed.
+
+A game the launcher believes is healthy still asks "Stop HorizonXI?": that guards against a stray
+click. A hang the launcher cannot see therefore costs one extra click. The Dock menu, the Game menu
+and the RUNNING row never asked.
+
+## 7. Graphics gone under the game
+
+MoltenVK never un-loses a VkDevice (§5) and the b70 DXVK latches the loss, so a client whose device
+is lost can never draw again. There is no recovery line to wait for. With §5's MoltenVK setting, a
+GPU reset that MoltenVK rides out prints nothing at the launcher's log level; what still prints is
+a real loss.
+
+**The lines** (`LoaderOutput.renderEvents`), read from whole lines of the game's output (after
+`RepeatCap`, where a line's first time always passes) and matched by how the line starts:
+
+- `[mvk-error] … Lost VkDevice after MTLCommandBuffer …` (MoltenVK);
+- an `err:` line naming `VK_ERROR_DEVICE_LOST` (DXVK's "Failed to sync fence" and "Command
+  submission failed");
+- `err:   horizonxi: GPU device lost; …` (the b70 DXVK, printed once).
+
+On 2026-10-16 at 21:31, three of the four lines matched; "waitForIdle: Operation failed" alone
+does not. MoltenVK's `[mvk-warn] … Resumed VkDevice …` (log level 2 only) and a chat line that
+names the error match nothing.
+
+**What happens** (`Runner.noteRender`). The first loss of a session goes to launcher.log at once:
+`i  HorizonXI: the game's GPU device was lost at 21:31:07; it can't draw again`. 2 s later
+(`renderGrace`, so a burst of lines settles into one; App Nap is held off for those 2 s):
+
+- the main button is **Stop**, enabled and destructive (never on Return), ahead of "Starting…" and
+  Play Another, with one line under it: `The game's graphics stopped at 21:31:07 — press Stop.`
+  (53 characters);
+- the Dock icon bounces once (`.informationalRequest`);
+- Stop asks nothing (§6).
+
+With Wine also gone, Force Stop comes first and the strip's "!!" line says it. Nothing is ended
+automatically, nothing says "restart", and Play is never greyed out.
+
+**Not for an adopted session.** A client an earlier launcher run started is adopted without its
+output file, so its loss is not seen. Its Stop works as always.
 
 ## Kill safety
 
@@ -344,6 +448,10 @@ What b70 can end, and why nothing else:
   socket, counts as free.
 - **A loader is ended only by the player's Stop or Force Stop**, and Force Stop signals exactly
   the set Stop always did (the session's process group). Other worlds' clients are never touched.
+- **Stop's wineserver step (§6) is Stop's, never a cleanup's**, and only when every client on the
+  Mac is the session's own, no other session plays, no launch is under way (the launch lock is
+  held for it) and the server is the one the session started with. A pid gets SIGKILL only while
+  it is still the same wine process in the same group.
 - **Read-only checks only, during play:** the lock read opens the file read-only, never creates
   it, and `F_GETLK` takes no lock. The region walk reads another process's memory map, nothing
   more.
@@ -353,6 +461,13 @@ What b70 can end, and why nothing else:
 **Run 2026-10-17** (release build, no game running, one suite at a time): all 26 suites exit 0,
 989 checks, 0 failures (leftovers 55, multiworld 88, primary-action 80, ui-text 42, perf 64 with
 §5's check). launcher.log was untouched (same inode, mtime and size before and after).
+
+**Run again 2026-10-17 with §6, §7 and the display lines**, the same way: all 26 suites exit 0,
+1014 checks, 0 failures (leftovers 64, multiworld 89, primary-action 87, ui-text 49, perf 65).
+launcher.log untouched. One full run before it had 2 `--selftest-updater` checks fail ("probe ran
+with the helper's five arguments", "its PATH is the fixed one": the probe's output not seen within
+its 15 s). Nothing in b70 touches that suite; it passed in three runs on its own and in the full run
+after.
 
 All pure or injected; no process is scanned for real except where noted, nothing is signalled.
 The one process started is the lock probe, which ends when its stdin is closed.
@@ -412,6 +527,34 @@ they reach the strip as errors; the sleep and wake lines (time to the second, se
 
 These add 46 checks to b69's 942 (26 suites), and §5 adds 1: 989, as run.
 
+§6, §7 and the display lines add 25 (1014):
+
+- `--selftest-leftovers` (+9): `escalateStop` on 2026-10-16's pids (loader 44487 and sidecar 44489
+  in group 44470, wineserver 44464), with every signal and sleep injected:
+  - a client SIGTERM ends: SIGTERM only, nothing waited;
+  - one that outlives it: SIGINT + SIGCONT to the wineserver after 1.5 s, which ends it;
+  - one that outlives both: SIGKILL to each, 3.0 s in all;
+  - the wineserver step not allowed: SIGTERM, then SIGKILL after 1.5 s;
+  - Force Stop: SIGKILL only, nothing waited;
+  - no SIGKILL for a pid now in another group, nor for one no longer a wine process;
+  - `mayInterruptServer`: allowed with only this session's clients live, with the server first seen
+    or none seen yet; never with another world's client, another session playing, a launch under
+    way, a server started at another time, or no server read.
+- `--selftest-multiworld` (+1): a session whose Stop is under way is a disabled "Stopping …" in the
+  menus, even once its Wine is gone.
+- `--selftest-primary-action` (+7): Stopping… (disabled, no line), ahead of Force Stop, the graphics
+  line, Starting… and Play Another; the graphics gone: Stop (not Force Stop), enabled, destructive,
+  with its line, ahead of Starting… and Play Another; with Wine gone too, Force Stop with no line;
+  either flag with nothing running here leaves Play. The existing checks (72 characters, no jargon,
+  no "restart", the label set, only Stop off Return) cover the new states.
+- `--selftest-ui-text` (+7): the display lines; the 2026-10-16 lines give three losses; each line
+  shape alone gives one, the b70 DXVK's own too; MoltenVK's "Resumed", a chat line naming the
+  error, `info:` and `warn:` lines give nothing; a line split across two reads counts once, on the
+  read that ends it; the line under Stop word for word, at most 72 characters, no "restart"; said
+  at 2 s and not at 1.9 s, never without a loss.
+- `--selftest-perf` (+1): `last-spawn.txt` records `FFXI_GAMEWINDOW_HANG` (gamewindow.dylib's
+  hung-game question; the dylib side is a later part).
+
 ## Not verified
 
 - **Nothing has run outside the self-tests.** The release build compiles (two warnings, both in
@@ -432,7 +575,18 @@ These add 46 checks to b69's 942 (26 suites), and §5 adds 1: 989, as run.
 - That a normal Play followed by an exit or a Stop logs no "already died" line (Wine's own
   shutdown takes ~3 s; the after-exit cleanup waits 10 s and needs the launch lock, which a
   Stop's wineserver flush holds).
-- The sleep and wake lines against `pmset -g log` on a real lid close.
+- The sleep and wake lines against `pmset -g log` on a real lid close, and that
+  `screensDidSleepNotification` fires for a lid closed on AC.
+- **§6 has not run.** That SIGTERM ends a hung client in practice, the escalation's timings, and
+  that the wineserver step does what wine's source says: only the injected self-test covers them.
+  Nor whether App Nap really stretched the launcher's timers behind the game, or that the activity
+  stops it.
+- "Stopping…", the disabled menu items and the line under Stop have not been seen in the app.
+- **§7 has not run.** The MoltenVK line and the two stock DXVK lines are the ones 2026-10-16 left
+  in launcher.log. The b70 DXVK's line is known only from its source; it goes through
+  `Logger::err`, assumed to print the same `err:   ` start as the stock lines.
+- The line under Stop shows only while that session's world is the one selected in the window.
+  The Dock bounce does not depend on it.
 
 ## Checks to run (never on the x10, never on HorizonXI, never while Daniel plays)
 
@@ -443,10 +597,19 @@ These add 46 checks to b69's 942 (26 suites), and §5 adds 1: 989, as run.
    `hdiutil detach -force`. Expect the "!!" line within ~10 s, the Dock icon bouncing, Force Stop
    ending the program in one click, and the cleanup ending the rest ("already died" line). This
    also shows whether `didUnmount` fires for a forced detach.
-4. On a local LSB world client, `kill -STOP` its loader to fake a freeze: Dock › Stop must end
-   only that session's group within 9 s.
+4. On a local LSB world client, with no HorizonXI client running (§6's wineserver step ends
+   every client of the prefix), `kill -STOP` its loader to fake a freeze. Dock › Stop must:
+   - end only that session's group within about 3.5 s;
+   - show "Stopping…" on the button and in the Dock menu meanwhile;
+   - leave a "SIGTERM was not enough" line in launcher.log, since a stopped process holds its
+     SIGTERM.
 5. Lid closed for 2 minutes with the local world running: two lines whose times match
-   `pmset -g log`.
+   `pmset -g log`. On AC with the Mac kept awake, the display off and on lines instead.
+6. §7 without a GPU reset, on a local LSB world client: append
+   `err:   horizonxi: GPU device lost; test` to that session's output file
+   (`$TMPDIR/ffxi-on-mac-game-<launcher pid>-Local-server.log`, the file the launcher tails).
+   Within about 2.5 s expect launcher.log's loss line, Stop with "The game's graphics stopped at
+   …" under it, one Dock bounce (with the launcher behind), and a Stop that asks nothing.
 
 ## Deviations from the plan
 
@@ -470,5 +633,14 @@ These add 46 checks to b69's 942 (26 suites), and §5 adds 1: 989, as run.
   kept folder costs one lock read per refresh, and dropping one could forget the folder of a
   session that is still starting.
 - The unmount check moved from the window to the app delegate, beside sleep and wake.
+- §7 has no recovery line and no "HXI: device recovered" contract (understand-1's proposal):
+  MoltenVK never un-loses a device. The grace is 2 s, from a task of its own, not 10 s on the
+  watch loop's tick. The Dock bounce is the one-time kind (`.informationalRequest`), where the
+  proposal had `.criticalRequest`.
+- §6: the Dock and Game menus show a disabled "Stopping …" for a session whose Stop is under way,
+  where the proposal dropped it from the menus. Force Stop returns straight after its SIGKILLs
+  (the proposal waited 1.5 s and could send a second SIGKILL). The wineserver step also requires
+  the lock holder to be a wineserver in the scan. A client that outlived a confirmed Stop is not
+  asked about again (`stopOutlived`, not in the proposal).
 - The after-exit cleanup looks only in the folders recorded at spawn (no `stat` of a drive that
   may just have gone).
