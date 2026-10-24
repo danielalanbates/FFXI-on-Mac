@@ -58,6 +58,7 @@ the whole test in about ten seconds.
 | Supernova | open | yes | same LSB payload | **LandSandBoat** |
 | OmicronXI | open | yes | LSB payload, demanding xiloader `2.1.x` | **LandSandBoat** |
 | Gaia XI | open | yes | `0x02` — binary result code from an older LSB login | **LandSandBoat** (older login build) |
+| Vanadreams (added 2026-10-24) | open | yes | `This server requires version 2.2.x` (LSB JSON) | **LandSandBoat** |
 | AscensionXI (added 2026-10-24) | open | yes (TLS 1.3) | `{"error_message":"Your xiloader is too old.\nPlease update to version '2.1.x'…"}`; their loader's own notice: "Based on LandSandBoat xiloader v2.1.2" | **LandSandBoat** |
 | Local server | n/a | n/a | it is LSB, built by `scripts/lsb-server.sh` | **LandSandBoat** |
 | Eden | open | **no** (handshake times out) | — | DarkStar lineage — *cut*. Corroborated twice over: their community wiki says Eden forked from DarkStar, and the loader in their own client identifies itself as `DarkStar Boot Loader (c) 2015 DarkStar Team` from `github.com/EdenServer/xiloader` |

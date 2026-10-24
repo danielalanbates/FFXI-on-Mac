@@ -16,7 +16,8 @@ import socket, ssl, json, sys
 HOSTS = [("HorizonXI","play.horizonxi.com"),("CatsEyeXI","server.catseyexi.com"),
          ("Eden","play.edenxi.com"),("FFEra","ffera.com"),("Gaia XI","play.gaiaxi.com"),
          ("ValhallaXI","logon.valhalla.group"),("Supernova","login.supernovaffxi.com"),
-         ("OmicronXI","OmicronFFXI.com"),("AscensionXI","play.ascensionffxi.com")]
+         ("OmicronXI","OmicronFFXI.com"),("AscensionXI","play.ascensionffxi.com"),
+         ("Vanadreams","vanadreams.online")]
 ctx = ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE
 for name,host in HOSTS:
     verdict=[]

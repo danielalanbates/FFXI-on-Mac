@@ -124,6 +124,10 @@ struct Server: Codable, Identifiable, Hashable {
     /// (xiloader: reach the map server at the login server's own address), and rewriting `command`
     /// with the account used to drop it. Refreshed from `builtins`, like `loader`.
     var loaderOptions: [String] = []
+    /// The world makes accounts at its login server, not on a website (LandSandBoat's
+    /// `login.ACCOUNT_CREATION`): the account card offers Create account (LoginAccount), since the
+    /// loader console where xiloader would ask is never shown here. Refreshed from `builtins`.
+    var createsAccountAtLogin: Bool = false
     /// The boot profile shipped in the app that a new profile for this world is made from, and
     /// whose required settings an existing one is completed with (see `BootProfile`). Empty: a
     /// new profile is copied from one already in the client, as before. Refreshed from `builtins`.
@@ -145,7 +149,11 @@ struct Server: Codable, Identifiable, Hashable {
     ///   archive directly skips a GUI that cannot be driven unattended under wine.
     /// - `ascensionChannel`: AscensionXI's own update channel, read natively (AscensionChannel).
     enum InstallKind: String, Codable {
-        case website, installerExe, catseyeLauncher, horizonTorrent, retail, clientZip, ascensionChannel, none
+        case website, installerExe, catseyeLauncher, horizonTorrent, retail, clientZip, ascensionChannel, vanadreamsPackage, none
+
+        /// Worlds whose own launcher updates the client before every Play; this one does the same
+        /// (AscensionSync, VanadreamsSync).
+        var updatesBeforePlay: Bool { self == .ascensionChannel || self == .vanadreamsPackage }
 
         /// A kind this build does not know (a newer build wrote it) reads as `website`: one
         /// unknown value must not make the whole servers.json unreadable, which resets every
@@ -161,7 +169,7 @@ struct Server: Codable, Identifiable, Hashable {
         /// value they do not know, which would reset that build's whole server list.
         func encode(to encoder: Encoder) throws {
             var c = encoder.singleValueContainer()
-            try c.encode(self == .ascensionChannel ? InstallKind.website.rawValue : rawValue)
+            try c.encode(updatesBeforePlay ? InstallKind.website.rawValue : rawValue)
         }
     }
 
@@ -176,7 +184,8 @@ struct Server: Codable, Identifiable, Hashable {
          installURL: String = "", installKind: InstallKind = .website, installNote: String = "",
          accountURL: String = "", accountHow: String = "", discordURL: String = "",
          renderer: Renderer? = nil, x87: Bool = true, msync: Bool = true,
-         maxClients: Int = 1, loader: String = "", loaderOptions: [String] = [], bootTemplate: String = "",
+         maxClients: Int = 1, loader: String = "", loaderOptions: [String] = [], createsAccountAtLogin: Bool = false,
+         bootTemplate: String = "",
          newsURL: String = "", newsPageURL: String = "") {
         self.codebase = codebase; self.retired = retired
         self.name = name; self.host = host; self.bootProfile = bootProfile
@@ -188,6 +197,7 @@ struct Server: Codable, Identifiable, Hashable {
         self.renderer = renderer; self.x87 = x87; self.msync = msync
         self.maxClients = maxClients
         self.loader = loader; self.loaderOptions = loaderOptions; self.bootTemplate = bootTemplate
+        self.createsAccountAtLogin = createsAccountAtLogin
         self.newsURL = newsURL; self.newsPageURL = newsPageURL
     }
 
@@ -221,6 +231,7 @@ struct Server: Codable, Identifiable, Hashable {
         maxClients  = Server.all.first { $0.name == name }?.maxClients ?? 1
         loader      = Server.all.first { $0.name == name }?.loader ?? ""
         loaderOptions = Server.all.first { $0.name == name }?.loaderOptions ?? []
+        createsAccountAtLogin = Server.all.first { $0.name == name }?.createsAccountAtLogin ?? false
         bootTemplate = Server.all.first { $0.name == name }?.bootTemplate ?? ""
         newsURL     = Server.all.first { $0.name == name }?.newsURL ?? ""
         newsPageURL = Server.all.first { $0.name == name }?.newsPageURL ?? ""
@@ -346,6 +357,23 @@ struct Server: Codable, Identifiable, Hashable {
                // time, is not permitted."
                maxClients: 1,
                loader: AscensionChannel.loaderName, loaderOptions: ["--hairpin"]),
+        // Added 2026-10-24 (b72). LSB: port 54231 answers LSB JSON ("requires version 2.2.x").
+        // Everything below is from their own open-source launcher (github.com/VanaDreams/vanadreams-
+        // ashita), their site and their status API; see docs/VANADREAMS.md.
+        Server(name: VanadreamsChannel.worldName, host: VanadreamsChannel.host,
+               bootProfile: VanadreamsChannel.bootProfile, verified: false,
+               note: "Level 99, every expansion, custom content. Boxing, mules and your own addons are welcome.",
+               // Their status API, 2026-10-24: 22 online, 161 characters, 82 players this week.
+               era: "99 cap · every expansion · custom", population: 82, codebase: .landSandBoat,
+               installURL: "https://fairywitch.ca/", installKind: .vanadreamsPackage,
+               installNote: "Vanadreams' own client package (about 9 GB of downloads, 17 GB installed) with Ashita "
+                     + "and the loader their server takes, put together as their launcher does it.",
+               accountHow: "No signup page: the account is made at their login server. Type the account name and "
+                     + "password you want above, then Create account.",
+               discordURL: "https://discord.gg/tBpNVBwKqT",
+               // fairywitch.ca: "As many accounts and characters as you want, boxing welcome, mules
+               // welcome, your addons welcome."
+               maxClients: Server.noClientCap, loader: "xiloader.exe", createsAccountAtLogin: true),
         Server(name: "Eden", host: "play.edenxi.com", bootProfile: "eden.ini", verified: false,
                note: "Login host from Eden's own new-player wiki. Untested by this project.",
                era: "Classic · 75 cap", population: 1925, codebase: .darkStarLineage,
@@ -416,10 +444,10 @@ struct Server: Codable, Identifiable, Hashable {
                era: "75 cap", population: 155, codebase: .landSandBoat,
                installURL: "https://supernovaffxi.wordpress.com/get-started-on-supernova/client-installation/", installKind: .retail,
                installNote: "Bring-your-own retail FFXI: Square Enix's free client (7.7 GB, five parts) installs inside the wrapper, then PlayOnline updates it, then Supernova's patch and DATs go on top. Slow (hours) but every step is automated.",
-               accountHow: "No signup page — the account is created in the loader window that "
-                     + "opens when you press Play, then linked to Discord from their Get "
+               accountHow: "No signup page: the account is made at their login server. Type the account name and "
+                     + "password you want above, then Create account; link it to Discord from their Get "
                      + "Started guide.",
-               discordURL: "https://discord.gg/QBBdfQh"),
+               discordURL: "https://discord.gg/QBBdfQh", createsAccountAtLogin: true),
         Server(name: "OmicronXI", host: "OmicronFFXI.com", bootProfile: "omicronxi.ini",
                verified: false,
                note: "Heavily customized. Login host from Omicron's own wiki. Untested by this "
@@ -490,6 +518,9 @@ final class ServerStore: ObservableObject {
                 out[i].maxClients = b.maxClients
                 out[i].loader = b.loader
                 out[i].loaderOptions = b.loaderOptions
+                out[i].createsAccountAtLogin = b.createsAccountAtLogin
+                // How an account is made is this project's research too, and changes with it (b72).
+                out[i].accountHow = b.accountHow
                 out[i].bootTemplate = b.bootTemplate
                 if b.local { out[i].host = b.host }
                 // A stored blank host means the user never set one — adopt a host this project

@@ -625,31 +625,32 @@ final class Runner: ObservableObject {
         appendLine("==> stopped")
     }
 
-    // MARK: - AscensionXI (AscensionSync)
+    // MARK: - Worlds updated by this launcher (AscensionSync, VanadreamsSync)
 
-    /// 0...1 while AscensionXI's client or its update is fetched, for the main button.
+    /// 0...1 while a world's client or its update is fetched, for the main button.
     @Published private(set) var ascensionProgress: Double?
     private let ascensionStop = StopFlag()
-    /// One AscensionXI job at a time across every session: they all write the same client folder.
+    /// One such job at a time across every session.
     private static var ascensionJobRunning = false
 
-    /// AscensionXI's client, and the update their launcher makes before every Play
-    /// (AscensionSync), as a job of this window's: the button shows its progress and Stop sits
-    /// beside it. No Wine runs. `install`: every file is checked (Setup, Repair) instead of only
-    /// what the channel changed since the last update. Lines starting "i  " go to launcher.log only.
-    func syncAscension(root: URL, datsWine: String, install: Bool, donors: [URL],
-                       done: @escaping (AscensionSync.Outcome) -> Void) {
+    /// A world's client, and the update its own launcher makes before every Play, as a job of this
+    /// window's: the button shows its progress and Stop sits beside it. No Wine runs. `install`:
+    /// every file is checked (Setup, Repair). `work` runs off the main actor with the job's Stop,
+    /// its log (lines starting "i  " go to launcher.log only) and its progress.
+    func runWorldJob(world: String, root: URL, install: Bool,
+                     work: @escaping @Sendable (StopFlag, @escaping (String) -> Void, @escaping (Double) -> Void) -> AscensionSync.Outcome,
+                     done: @escaping (AscensionSync.Outcome) -> Void) {
         // Not beside any other job either (a Move… may be copying this very folder), as every job here.
         guard !busy, !running, !Self.ascensionJobRunning, !Runner.workInFlight else {
-            appendLine("!! not starting AscensionXI's update: another job is running. Wait for it to finish (or press Stop), then try again.")
+            appendLine("!! not starting \(world)'s update: another job is running. Wait for it to finish (or press Stop), then try again.")
             done(.failed("Another job is running.")); return
         }
         Self.ascensionJobRunning = true
-        beginBusy(install ? "Setting up AscensionXI" : "Updating AscensionXI")
+        beginBusy(install ? "Setting up \(world)" : "Updating \(world)")
         ascensionStop.reset()
         ascensionProgress = 0
         let stop = ascensionStop
-        if install { appendLine("==> AscensionXI: \(root.path)") } else { logFileOnly("==> AscensionXI: checking for updates") }
+        if install { appendLine("==> \(world): \(root.path)") } else { logFileOnly("==> \(world): checking for updates") }
         // Everything back on the main actor goes through these, so the detached task holds no
         // reference to the runner itself.
         let onLine: @MainActor (String) -> Void = { [weak self] line in
@@ -664,22 +665,36 @@ final class Runner: ObservableObject {
                 self.busy = false
                 switch outcome {
                 case .ok(let n):
-                    if n > 0 || install { self.appendLine("==> AscensionXI is up to date (\(n) file\(n == 1 ? "" : "s") written)") }
-                    else { self.logFileOnly("==> AscensionXI is up to date") }
+                    if n > 0 || install { self.appendLine("==> \(world) is up to date (\(n) file\(n == 1 ? "" : "s") written)") }
+                    else { self.logFileOnly("==> \(world) is up to date") }
                 case .offline(let why): self.logFileOnly("i  " + why)
-                case .stopped: self.appendLine("==> AscensionXI's update stopped")
+                case .stopped: self.appendLine("==> \(world)'s update stopped")
                 case .failed(let why): if !self.stopRequested { self.appendLine("!! " + why) }
                 }
             }
             done(outcome)
         }
         Task.detached(priority: .userInitiated) {
-            let sync = AscensionSync(root: root, datsWine: datsWine, stop: stop,
-                                     log: { line in Task { @MainActor in onLine(line) } },
-                                     progress: { _, f in Task { @MainActor in onProgress(f) } })
-            let outcome = sync.run(install: install, donors: donors)
+            let outcome = work(stop, { line in Task { @MainActor in onLine(line) } },
+                               { f in Task { @MainActor in onProgress(f) } })
             await finish(outcome)
         }
+    }
+
+    /// AscensionXI's client and its Play-time update (AscensionSync).
+    func syncAscension(root: URL, datsWine: String, install: Bool, donors: [URL],
+                       done: @escaping (AscensionSync.Outcome) -> Void) {
+        runWorldJob(world: AscensionChannel.worldName, root: root, install: install, work: { stop, log, progress in
+            AscensionSync(root: root, datsWine: datsWine, stop: stop, log: log, progress: { _, f in progress(f) })
+                .run(install: install, donors: donors)
+        }, done: done)
+    }
+
+    /// Vanadreams' client package, Ashita and loader, and its Play-time update (VanadreamsSync).
+    func syncVanadreams(root: URL, install: Bool, done: @escaping (AscensionSync.Outcome) -> Void) {
+        runWorldJob(world: VanadreamsChannel.worldName, root: root, install: install, work: { stop, log, progress in
+            VanadreamsSync(root: root, stop: stop, log: log, progress: { _, f in progress(f) }).run(install: install)
+        }, done: done)
     }
 
     /// Run CatsEyeXI's own launcher inside the prefix (scripts/catseye-launcher.sh). Their

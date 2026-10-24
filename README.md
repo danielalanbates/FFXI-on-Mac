@@ -101,6 +101,7 @@ differences below are just what happens behind it.
 | --- | --- | --- |
 | **HorizonXI** | fetches their client the way their own launcher does — a 9.4 GB download, then their updates, up to the current version | ✅ downloaded, launched, reached login |
 | **CatsEyeXI** | runs CatsEyeXI's own launcher for you; it installs their full client (~15 GB) | ✅ downloaded, launched, reached login |
+| **Vanadreams** | puts their client package (about 9 GB of downloads), Ashita and the loader their server takes together, the way their own launcher does, and fetches what they add before each Play | ⚙️ installed and checked; login needs your account (made in the loader window) |
 | **AscensionXI** | reads AscensionXI's own update server the way their launcher does: their client (~14 GB, every file checked; identical files are copied from FFXI clients already on your Mac instead of downloaded), then their DATs, addons and loader, and the same update before every Play | ✅ installed, launched, their login server answered |
 | **Supernova, OmicronXI** | downloads Square Enix's own **free** client (7.7 GB), installs it, updates it through PlayOnline, then adds the world's files on top. Slow — hours — but every step is automatic | ⚙️ fully automated, not yet run start-to-finish |
 | **Eden, FFEra** | downloads their installer (a 5–6 GB zip) and runs it | ⚙️ wired up, not yet run start-to-finish |
