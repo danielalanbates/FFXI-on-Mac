@@ -47,6 +47,9 @@ enum Headless {
             || a.contains("--selftest-carryover")
             || a.contains("--selftest-ascension")
             || a.contains("--ascension-sync")
+            || a.contains("--selftest-vanadreams")
+            || a.contains("--vanadreams-sync")
+            || a.contains("--login-version")
             || a.contains("--send-ashita")
             || a.contains("--carryover-report")
             || a.contains("--carryover-apply")
@@ -140,6 +143,9 @@ enum Headless {
             runAscensionSelfTest()
         }
         if args.contains("--ascension-sync") { runAscensionSync(args) }
+        if args.contains("--selftest-vanadreams") { runVanadreamsSelfTest() }
+        if args.contains("--vanadreams-sync") { runVanadreamsSync(args) }
+        if args.contains("--login-version") { runLoginVersion(args) }
         if args.contains("--selftest-carryover") {
             runCarryOverSelfTest()
         }
@@ -758,9 +764,10 @@ enum Headless {
                                                             maxClients: 1, clients: onlyLocal) } != nil))
         checks.append(("a session of this window that is still injecting counts as a copy",
                        refusal(horizon, [], own: [-1]) != nil))
-        checks.append(("only the local world and CatsEyeXI (cited rules) allow several clients",
+        // Vanadreams (b72): "As many accounts and characters as you want, boxing welcome" (fairywitch.ca).
+        checks.append(("only the local world, CatsEyeXI and Vanadreams (cited rules) allow several clients",
                        Server.all.filter(\.allowsMultipleClients).map(\.name).sorted()
-                           == ["CatsEyeXI", "Local server"]))
+                           == ["CatsEyeXI", "Local server", "Vanadreams"]))
         let oneCats = LiveClients.parse("62001 62000 C:\\CatsEye\\xiloader.exe --server server.catseyexi.com\n"
                                         + "62002 62000 /x/x87sidecar-coop --cooperative /x/wine C:\\CatsEye\\xiloader.exe --server server.catseyexi.com\n").clients
         let twoCats = oneCats + LiveClients.parse("63001 63000 C:\\CatsEye\\xiloader.exe --server server.catseyexi.com\n").clients

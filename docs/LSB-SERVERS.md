@@ -23,7 +23,7 @@ Cut for their codebase: Eden, FFEra, ValhallaXI (DarkStar lineage). Stopped: Tab
 | --- | --- | --- | --- | --- | --- |
 | **Phoenix XI** (phoenix-xi.com) | `play.phoenix-xi.com` (xiloader **2.2.x**) | **1,185 online** (their status API), Discord 5,276 | Their launcher (Tauri; Windows, Linux AppImage, Flatpak) downloads everything, and **every game file is behind their account login** (401 without a session). Loader is their xiloader fork, given a single-use `login_token` via `--json` | "Use only tools on the Approved Addons list ... Anything else is forbidden. Ask for a ruling before you use an unlisted addon." Single-box, one account per IP; the launcher sends a device id and MAC address | **Needs Phoenix staff's OK first** (Daniel's call: an unsanctioned launcher risks his account). Then: their auth API (`api.phoenix-xi.com/api/v1`, better-auth session → launch token), their manifests, their loader |
 | **Titan XI** (titan-xi.com) | `play.titan-xi.com` (2.1.x) | 100+ characters in beta; launched 2026-10-24 | Public: launcher 1.6.28 and the full client zip (8.1 GB, ranges). Login by a launch ticket from `titan-xi.com/api/v1/launcher/ticket` passed with `--json` | "Do not bypass launcher authentication ... Use the official Titan launcher and keep it updated." Characters made on the website; no multibox | **Needs Titan staff's OK first** — their rules require their launcher |
-| **Vanadreams** (fairywitch.ca) | `vanadreams.online` (2.2.x) | 21 online, 82 players this week (their status API) | Public chunked client: `vanadreams.org/download/client/30260904_1/manifest.json`, 72 zips (8.8 GB → 17 GB), each with sha256. Launcher source public (github.com/VanaDreams/vanadreams-ashita) | "As many accounts and characters as you want, boxing welcome, mules welcome, your addons welcome." Account made in the loader on first login | **Next (b72).** Simplest of all: a chunk manifest, plain xiloader `--server`, no rules against a Mac launcher |
+| **Vanadreams** (fairywitch.ca) | `vanadreams.online` (2.2.x) | 21 online, 82 players this week (their status API) | Public chunked client: `vanadreams.org/download/client/30260904_1/manifest.json`, 72 zips (8.8 GB → 17 GB), each with sha256. Launcher source public (github.com/VanaDreams/vanadreams-ashita) | "As many accounts and characters as you want, boxing welcome, mules welcome, your addons welcome." Account made in the loader on first login | **Added in b72** ([`VANADREAMS.md`](VANADREAMS.md)) |
 | **PegasusXI** (pegasusxi.com) | `play.pegasusxi.com` (2.1.x) | not published | Public full client zip, 13.9 GB (`cdn.pegasusxi.com/download/PegasusXI_1.2.4.zip`, ranges), Ashita + xiloader + `config/boot/PegasusXI.ini` inside | No bots, no hacks; multibox not stated (so one client) | **Next** — the existing `clientZip` route; news JSON at `pegasusxi.com/launcher/news.json` |
 | **DriftwoodXI** (xi.driftwoodgaming.com) | `xi.driftwoodgaming.com` (2.1.x) | 41 online (homepage) | Bring your own current retail client; their Ashita bundle is public (`DriftwoodXI-Content/ashita.json` → a 44 MB zip, Ashita 4.3.2.1, `driftwood.ini`, `driftwood.txt`). They publish a Linux launcher and a Wine guide | Allowlist of 158 addons at `/addons`; no multibox. Website signup | **Next** — retail client (from another world's identical retail files) + their bundle |
 | **MistXI** (mistxi.com) | `play.mistxi.com` (2.1.x); legacy 99 world `legacy.mistxi.com` (2.0.x) | not readable | Retail client + `mistxi.com/FFXI-UpdatePatch.zip` (5 MB) + Ashita + LSB xiloader | Dual box allowed (2 per IP). Addon allowlist on their site. Website signup | **Next** — the Supernova/Omicron retail route |
@@ -52,6 +52,15 @@ Answering but not LandSandBoat-confirmed, or not reachable on 2026-10-24: Ragnar
 (refused), Omega and Nasomi (hosts not published; Nasomi's loader picks one at runtime),
 Dragon Ball FFXI (Discord only), ZenithXI and Nocturnal Souls (not launched yet). Dead: ChaosDS,
 xiweb, Tabula Rasa XI, Caldera.
+
+## Accounts made at the login server
+
+Several LandSandBoat worlds have no signup page: xiloader's console menu makes the account
+(`command 0x20`). This launcher never shows that console, so b72 sends the same request itself
+(**Create account** on the account card; `Server.createsAccountAtLogin`). The required loader version
+is read from the server's own refusal of version 0.0.0, so the same code works for 2.1 and 2.2
+servers. Worlds whose server has `login.ACCOUNT_CREATION` off answer result 8, which is shown as
+such.
 
 ## Order of work
 

@@ -379,6 +379,9 @@ struct ContentView: View {
     @State private var carryHints: [URL] = []
     /// A carry-over is copying; Play waits for it.
     @State private var carryingOver = false
+    /// Create account (LoginAccount): running, and its one line of result, for the world it was for.
+    @State private var creatingAccount = false
+    @State private var accountResult: (world: String, ok: Bool, text: String)? = nil
     /// Play already said once that a pending carry-over could not run: the next press plays
     /// anyway, so a process that never ends can't hold Play up for good.
     @State private var carryOverWarned = false
@@ -1312,6 +1315,17 @@ struct ContentView: View {
                               systemImage: "terminal")
                             .font(.system(size: 12)).foregroundStyle(Vana.crystalDim)
                     }
+                    // The world's login server makes the account (b72): the name and password
+                    // typed above, sent the way xiloader's own Create New Account sends them.
+                    if s.createsAccountAtLogin {
+                        Button { createAccount(for: s) } label: {
+                            Label(creatingAccount ? "Creating…" : "Create account", systemImage: "person.badge.plus")
+                                .font(.system(size: 12))
+                        }
+                        .buttonStyle(.borderedProminent).tint(Vana.goldDim)
+                        .disabled(creatingAccount)
+                        .help("Makes the account typed above on \(s.host)")
+                    }
                     if let u = URL(string: s.accountURL), !s.accountURL.isEmpty {
                         Button {
                             NSWorkspace.shared.open(u)
@@ -1333,12 +1347,46 @@ struct ContentView: View {
                     }
                     Spacer(minLength: 0)
                 }
+                if let r = accountResult, r.world == s.name {
+                    Text(r.text).font(.system(size: 12)).foregroundStyle(r.ok ? Vana.gold : Vana.ember)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .padding(14)
             .frame(maxWidth: 500, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.25)))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(Vana.stroke))
             .padding(.horizontal, 34).padding(.top, 16)
+        }
+    }
+
+    /// Create account: the typed name and password, at the world's login server (LoginAccount).
+    /// On success they are saved for the world as Play would save them, and the card goes away.
+    private func createAccount(for s: Server) {
+        let name = user.trimmingCharacters(in: .whitespaces), password = pass
+        if let why = LoginAccount.problem(user: name, password: password) {
+            accountResult = (s.name, false, why); return
+        }
+        creatingAccount = true
+        accountResult = nil
+        let host = s.host
+        Task {
+            let outcome = await LoginAccount.create(host: host, user: name, password: password)
+            creatingAccount = false
+            switch outcome {
+            case .created:
+                Credentials.setUsername(name, forWorld: s.name)
+                if remember { Credentials.savePassword(password, for: name, world: s.name) }
+                accountResult = (s.name, true, "Account \(name) created on \(s.name). Press Play.")
+                // The card goes once the world has a saved account; the line stays where Play's are.
+                info("Account \(name) created on \(s.name). Press Play.")
+                runner.logFileOnly("==> \(s.name): account \(name) created at \(host)")
+            case .taken:
+                accountResult = (s.name, false, "\(name) is already taken on \(s.name). Choose another name.")
+            case .refused(let why), .failed(let why):
+                accountResult = (s.name, false, why)
+                runner.logFileOnly("!! \(s.name): account not created: \(why)")
+            }
         }
     }
 
@@ -1735,8 +1783,8 @@ struct ContentView: View {
             runner.installClientZip(from: u, into: s.dataPath, name: s.name)
         case .retail:
             runner.installRetail(for: s, in: i)
-        case .ascensionChannel:
-            ascensionJob(for: s, install: i, full: true, runner: runner) { _ in recheck() }
+        case .ascensionChannel, .vanadreamsPackage:
+            worldJob(for: s, install: i, full: true, runner: runner) { _ in recheck() }
         case .website:
             if let u = URL(string: s.installURL) { NSWorkspace.shared.open(u) }
             info("Download page opened — then use Run installer…")
@@ -2357,8 +2405,8 @@ struct ContentView: View {
     /// way every world's is (placeWorldData). Other worlds' clients are offered as donors of
     /// identical files only when every file is going to be checked anyway (Setup, Repair, or a
     /// folder no update has run in yet).
-    private func ascensionJob(for s: Server, install i: Install, full: Bool, runner r: Runner,
-                              done: @escaping (AscensionSync.Outcome) -> Void) {
+    private func worldJob(for s: Server, install i: Install, full: Bool, runner r: Runner,
+                          done: @escaping (AscensionSync.Outcome) -> Void) {
         var w = s
         if w.dataPath.isEmpty {
             guard placeWorldData(for: w), let again = store.servers.first(where: { $0.name == w.name }),
@@ -2367,6 +2415,7 @@ struct ContentView: View {
         }
         let root = URL(fileURLWithPath: w.dataPath, isDirectory: true)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        if w.installKind == .vanadreamsPackage { r.syncVanadreams(root: root, install: full, done: done); return }
         let dats = Install.winePath(root.appendingPathComponent("Ashita/polplugins/DATs"), driveC: i.driveC)
         let checksAll = full || !FileManager.default.fileExists(atPath: root.appendingPathComponent(".base-manifest.json").path)
         let donors = checksAll ? AscensionChannel.donorClients(store.servers.filter { $0.name != w.name }, base: i) : []
@@ -2450,9 +2499,9 @@ struct ContentView: View {
                 r.installHorizon(into: i.gameDir) { ok in c.resume(returning: ok) }
             }
         }
-        if s.installKind == .ascensionChannel {
+        if s.installKind.updatesBeforePlay {
             return await withCheckedContinuation { c in
-                ascensionJob(for: s, install: i, full: true, runner: r) { outcome in
+                worldJob(for: s, install: i, full: true, runner: r) { outcome in
                     switch outcome {
                     case .ok: c.resume(returning: true)
                     case .offline(let why):
@@ -2809,12 +2858,12 @@ struct ContentView: View {
             return
         }
 
-        // AscensionXI's update, before every Play, as their own launcher does it (AscensionSync):
-        // whatever their client, DATs, addons and loader changed. A few seconds when nothing did;
+        // The world's own update, before every Play, as its own launcher does it (AscensionSync,
+        // VanadreamsSync): whatever the client, DATs, addons and loader changed. Seconds when nothing did;
         // the button shows "Updating…" while it runs. After the gate, so a Play that would be
         // refused anyway (another world's registry live) downloads nothing first.
-        if server.installKind == .ascensionChannel, !synced {
-            ascensionJob(for: server, install: i, full: false, runner: r) { outcome in
+        if server.installKind.updatesBeforePlay, !synced {
+            worldJob(for: server, install: i, full: false, runner: r) { outcome in
                 switch outcome {
                 case .ok, .offline: break
                 case .stopped: return

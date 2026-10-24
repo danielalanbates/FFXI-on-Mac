@@ -527,6 +527,7 @@ final class TestChannel: @unchecked Sendable {
 /// worlds' clients are donors. Exit status 0 when it ends `ok` or `offline`. Never launches the game.
 extension Headless {
     @MainActor static func runAscensionSync(_ args: [String]) -> Never {
+        setvbuf(stdout, nil, _IOLBF, 0)   // a line at a time, also into a file
         let store = ServerStore()
         guard let world = store.servers.first(where: { $0.name == AscensionChannel.worldName }) else {
             FileHandle.standardError.write(Data("AscensionXI is not in servers.json\n".utf8)); exit(2)

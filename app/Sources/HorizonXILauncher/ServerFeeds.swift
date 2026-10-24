@@ -64,6 +64,8 @@ final class ServerFeeds: ObservableObject {
         ("CatsEyeXI", "https://www.catseyexi.com/api/online-count", "playerCount"),
         // Plain integer body — edenxi.com's "active" counter.
         ("Eden", "https://edenxi.com/api/v1/misc/active", nil),
+        // {"state":"online","client_ver":…,"stats":{"online":22,…}} — the counter their launcher shows.
+        ("Vanadreams", "https://vanadreams.org/api/public/vanadreams/status", "stats.online"),
     ]
 
     /// Fetch every published online counter. Cheap (three tiny GETs), silent on failure, and a
@@ -75,8 +77,10 @@ final class ServerFeeds: ObservableObject {
                let (data, resp) = try? await URLSession.shared.data(from: url),
                (resp as? HTTPURLResponse)?.statusCode == 200 {
                 if let key = src.jsonKey {
-                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-                    count = json?[key] as? Int
+                    // A dotted key walks into nested objects ("stats.online").
+                    var node: Any? = try? JSONSerialization.jsonObject(with: data)
+                    for part in key.split(separator: ".") { node = (node as? [String: Any])?[String(part)] }
+                    count = node as? Int
                 } else {
                     count = Int(String(decoding: data, as: UTF8.self)
                         .trimmingCharacters(in: .whitespacesAndNewlines))
