@@ -1965,7 +1965,7 @@ struct ContentView: View {
             case .assemble?: return 0.55
             case .prefix?: return 0.75
             }
-        case .gameWine?, .game?: return runner.updatingHorizon ? runner.updateProgress : 0
+        case .gameWine?, .game?: return runner.updatingHorizon ? runner.updateProgress : runner.ascensionProgress ?? 0
         case .files?: return runner.moveProgress ?? 0
         default: return 0
         }
@@ -2453,7 +2453,14 @@ struct ContentView: View {
         if s.installKind == .ascensionChannel {
             return await withCheckedContinuation { c in
                 ascensionJob(for: s, install: i, full: true, runner: r) { outcome in
-                    if case .failed = outcome { c.resume(returning: false) } else { c.resume(returning: true) }
+                    switch outcome {
+                    case .ok: c.resume(returning: true)
+                    case .offline(let why):
+                        // Setup and Repair check every file: an unreachable channel checked nothing.
+                        r.appendLine("!! " + why.replacingOccurrences(of: "; playing with the files from the last update", with: ""))
+                        c.resume(returning: false)
+                    case .stopped, .failed: c.resume(returning: false)
+                    }
                 }
             }
         }
@@ -2759,18 +2766,6 @@ struct ContentView: View {
             r.logFileOnly("!! not playing: the launcher is restarting to update")
             return
         }
-        // AscensionXI's update, before every Play, as their own launcher does it (AscensionSync):
-        // whatever their client, DATs, addons and loader changed. A few seconds when nothing did;
-        // the button shows "Updating…" while it runs. play() has already refused a second client.
-        if server.installKind == .ascensionChannel, !synced {
-            ascensionJob(for: server, install: i, full: false, runner: r) { outcome in
-                if case .failed(let why) = outcome { notice = why; return }
-                // The Ashita folder is found again: a first update may have just created it.
-                let now = store.servers.first { $0.name == server.name } ?? server
-                launchClient((active ?? i).forServer(now), server: now, runner: r, synced: true)
-            }
-            return
-        }
         // Two servers on the list publish no login host anywhere this project could find. Ashita
         // would take `--server ` with nothing after it and fail somewhere less obvious, so say
         // what is actually missing instead.
@@ -2811,6 +2806,30 @@ struct ContentView: View {
                             maxClients: server.maxClients).refusal {
             notice = why
             r.logFileOnly("!! " + why)
+            return
+        }
+
+        // AscensionXI's update, before every Play, as their own launcher does it (AscensionSync):
+        // whatever their client, DATs, addons and loader changed. A few seconds when nothing did;
+        // the button shows "Updating…" while it runs. After the gate, so a Play that would be
+        // refused anyway (another world's registry live) downloads nothing first.
+        if server.installKind == .ascensionChannel, !synced {
+            ascensionJob(for: server, install: i, full: false, runner: r) { outcome in
+                switch outcome {
+                case .ok, .offline: break
+                case .stopped: return
+                case .failed(let why): notice = why; return
+                }
+                // Another world picked while it updated: the window's account fields now hold that
+                // world's login, which must never go to AscensionXI's server (b71 review). Play again.
+                guard store.selectedID == server.name else {
+                    r.logFileOnly("!! \(server.name) updated; not started, \(store.selectedID) was selected meanwhile")
+                    return
+                }
+                // The Ashita folder is found again: a first update may have just created it.
+                let now = store.servers.first { $0.name == server.name } ?? server
+                launchClient((active ?? i).forServer(now), server: now, runner: r, synced: true)
+            }
             return
         }
 

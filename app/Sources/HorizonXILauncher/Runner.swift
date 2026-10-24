@@ -639,7 +639,8 @@ final class Runner: ObservableObject {
     /// what the channel changed since the last update. Lines starting "i  " go to launcher.log only.
     func syncAscension(root: URL, datsWine: String, install: Bool, donors: [URL],
                        done: @escaping (AscensionSync.Outcome) -> Void) {
-        guard !busy, !running, !Self.ascensionJobRunning else {
+        // Not beside any other job either (a Move… may be copying this very folder), as every job here.
+        guard !busy, !running, !Self.ascensionJobRunning, !Runner.workInFlight else {
             appendLine("!! not starting AscensionXI's update: another job is running. Wait for it to finish (or press Stop), then try again.")
             done(.failed("Another job is running.")); return
         }
@@ -666,6 +667,7 @@ final class Runner: ObservableObject {
                     if n > 0 || install { self.appendLine("==> AscensionXI is up to date (\(n) file\(n == 1 ? "" : "s") written)") }
                     else { self.logFileOnly("==> AscensionXI is up to date") }
                 case .offline(let why): self.logFileOnly("i  " + why)
+                case .stopped: self.appendLine("==> AscensionXI's update stopped")
                 case .failed(let why): if !self.stopRequested { self.appendLine("!! " + why) }
                 }
             }

@@ -141,7 +141,7 @@ extension Headless {
                 ["name": "big", "kind": "addon", "enabled": false,
                  "archives": [["url": mirror + "/gh/big.zip", "from": "big-main/", "into": "", "size": 10]],
                  "files": bigFiles.mapValues { entry($0).merging(["url": mirror + "/gh/missing"]) { a, _ in a } }],
-                ["name": "chains", "kind": "addon", "enabled": false, "remove": ["old.lua"],
+                ["name": "chains", "kind": "addon", "enabled": false, "remove": ["old.lua", "olddir"],
                  "files": ["chains.lua": entry(Data("chains".utf8)).merging(["url": mirror + "/gh/new.lua"]) { a, _ in a }]],
             ],
         ]
@@ -162,13 +162,18 @@ extension Headless {
         let oldChains = root.appendingPathComponent("Ashita/addons/chains/old.lua")
         try? fm.createDirectory(at: oldChains.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? Data("old".utf8).write(to: oldChains)
+        // A name in `remove` that is a folder now: theirs only deletes files, so it stays.
+        let keptInFolder = root.appendingPathComponent("Ashita/addons/chains/olddir/keep.txt")
+        try? fm.createDirectory(at: keptInFolder.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? Data("keep".utf8).write(to: keptInFolder)
 
         var lines: [String] = []
         let lineLock = NSLock()
-        func sync(_ mirrors: [String] = [mirror], stop: StopFlag = StopFlag(), install: Bool = false, donors: [URL] = []) -> AscensionSync.Outcome {
+        func sync(_ mirrors: [String] = [mirror], stop: StopFlag = StopFlag(), install: Bool = false, donors: [URL] = [],
+                  datsWine: String = "Z:\\T\\Ashita\\polplugins\\DATs") -> AscensionSync.Outcome {
             lineLock.lock(); lines = []; lineLock.unlock()
             channel.clearLog()
-            let sy = AscensionSync(root: root, datsWine: "Z:\\T\\Ashita\\polplugins\\DATs", stop: stop, mirrors: mirrors,
+            let sy = AscensionSync(root: root, datsWine: datsWine, stop: stop, mirrors: mirrors,
                                    log: { l in lineLock.lock(); lines.append(l); lineLock.unlock() })
             return sy.run(install: install, donors: donors)
         }
@@ -194,7 +199,8 @@ extension Headless {
               file("Ashita/addons/move/move.lua") == moveLua && file("Ashita/plugins/thirdparty.dll") == thirdparty
                 && bigFiles.allSatisfy { file("Ashita/addons/big/" + $0.key) == $0.value }
                 && !channel.log.contains { $0.hasPrefix("/gh/missing") })
-        check("install: the obsolete addon file is removed", !fm.fileExists(atPath: oldChains.path))
+        check("install: the obsolete addon file is removed; a folder of that name is not",
+              !fm.fileExists(atPath: oldChains.path) && fm.fileExists(atPath: keptInFolder.path))
         let scriptNow = text("Ashita/scripts/default.txt")
         check("install: default.txt gets their block: defaults on, fps switched off, its bind gone",
               scriptNow == "# Ashita v4 Default Script\r\n" + AscensionScript.fenceBegin + "\r\n/load thirdparty\r\n/addon load move\r\n"
@@ -264,20 +270,86 @@ extension Headless {
         let tampered = sync()
         check("runtime: a client that is not the one the release needs is refused, naming the file",
               { if case .failed(let why) = tampered { return why.contains("FFXiMain.dll") }; return false }())
+        let offlineHalf = sync(["http://127.0.0.1:9"])
+        check("offline after an update that did not finish is a failure, not a Play",
+              { if case .failed = offlineHalf { return true }; return false }())
         let scriptBefore = text("Ashita/scripts/default.txt")
         let repaired = sync(install: true)
         check("repair (every file checked) puts it back", { if case .ok = repaired { return true }; return false }()
               && file("Game/FINAL FANTASY XI/FFXiMain.dll") == ffximain)
         check("repair keeps the boot script the player's addon choices are in (theirs resets it)",
               text("Ashita/scripts/default.txt") == scriptBefore)
+        // Corrupted in place, size and date unchanged: Play trusts the cache, Repair hashes again.
+        let romURL = root.appendingPathComponent("Game/FINAL FANTASY XI/ROM/1/1.DAT")
+        let romDate = (try? fm.attributesOfItem(atPath: romURL.path))?[.modificationDate] as? Date
+        try? Data(repeating: 8, count: rom.count).write(to: romURL)
+        if let romDate { try? fm.setAttributes([.modificationDate: romDate], ofItemAtPath: romURL.path) }
+        let quick = sync()
+        let fixed = sync(install: true)
+        check("repair re-hashes every file: one corrupted in place with its size and date kept is fetched again",
+              quick == .ok(changed: 0) && { if case .ok = fixed { return true }; return false }() && file("Game/FINAL FANTASY XI/ROM/1/1.DAT") == rom
+                && channel.log.contains("/base/files/Game/FINAL%20FANTASY%20XI/ROM/1/1.DAT 200"))
         let offline = sync(["http://127.0.0.1:9"])
-        check("offline: no mirror answers -> play with what is there", { if case .offline = offline { return true }; return false }())
+        check("offline after a finished update: play with what is there", { if case .offline = offline { return true }; return false }())
         let flag = StopFlag(); flag.raise()
-        check("stop: a raised Stop ends the run, saying so",
-              { if case .failed(let why) = sync(stop: flag) { return why.hasPrefix("Stopped") }; return false }())
+        check("stop: a raised Stop is .stopped, never ok or offline (so nothing is started)", sync(stop: flag) == .stopped
+              && sync(["http://127.0.0.1:9"], stop: flag) == .stopped)
         let fresh = tmp.appendingPathComponent("empty")
         let none = AscensionSync(root: fresh, datsWine: "Z:\\", mirrors: ["http://127.0.0.1:9"], log: { _ in }).run()
         check("offline with nothing installed is a failure, not a Play", { if case .failed = none { return true }; return false }())
+
+        // A mirror that answers /environment but serves nothing else (mid-republish) is passed over.
+        let broken = TestChannel()
+        if (try? broken.start()) != nil {
+            broken.put("/environment", Data("prod\n".utf8), t0)
+            let failover = sync(["http://127.0.0.1:\(broken.port)", mirror])
+            check("mirrors: a file the first mirror does not serve comes from the second", failover == .ok(changed: 0))
+            broken.stop()
+        } else { check("mirrors: a second fake channel could listen", false) }
+
+        // A folder name with an accent reaches pivot.ini (Windows-1252), and never stops Play.
+        let accented = sync(datsWine: "Z:\\Users\\Jos\u{E9}\\Ashita\\polplugins\\DATs")
+        check("pivot.ini: a non-ASCII client path is written, not a failure",
+              { if case .ok = accented { return true }; return false }()
+                && file("Ashita/config/pivot/pivot.ini")?.contains(0xE9) == true)
+        _ = sync()
+
+        // A catalog answer that does not parse is not kept for the next If-Modified-Since.
+        let goodCatalog = try! JSONSerialization.data(withJSONObject: catalog)
+        let t2 = t1.addingTimeInterval(3600)
+        channel.put("/addons/catalog.json", Data("{\"entries\": [".utf8), t2)
+        let truncated = sync()
+        check("catalog: a truncated answer leaves the addons and the kept copy as they were",
+              { if case .ok = truncated { return true }; return false }()
+                && AscensionChannel.catalogReadable(file("addons-catalog.json") ?? Data()))
+        // Switched off once is switched off for good, whatever the spelling ("FPS" after "fps").
+        var recased = catalog
+        recased["switchOff"] = [["name": "FPS", "kind": "addon", "reason": "again"]]
+        channel.put("/addons/catalog.json", try! JSONSerialization.data(withJSONObject: recased), t2.addingTimeInterval(60))
+        var withFps = AscensionScript(text("Ashita/scripts/default.txt")); withFps.enable(kind: "addon", "fps")
+        try? withFps.render().write(to: root.appendingPathComponent("Ashita/scripts/default.txt"), atomically: true, encoding: .isoLatin1)
+        _ = sync()
+        check("switchOff: a different spelling of one already switched off does not switch the player's choice off again",
+              AscensionScript(text("Ashita/scripts/default.txt")).isEnabled(kind: "addon", "fps"))
+        channel.put("/addons/catalog.json", goodCatalog, t2.addingTimeInterval(120))
+
+        // Paths from the channel that would leave the client.
+        let t3 = t2.addingTimeInterval(3600)
+        var evil = baseFiles; evil["Game/../../Victim/v.bin"] = Data("x".utf8)
+        publishBase(evil, revision: "r3", at: t3)
+        let evilFull = sync(install: true)
+        check("base manifest: one unsafe path and the whole manifest is refused",
+              { if case .failed(let why) = evilFull { return why.contains("unsafe path") }; return false }()
+                && !fm.fileExists(atPath: tmp.appendingPathComponent("Victim/v.bin").path))
+        publishBase(baseFiles, revision: "r4", at: t3.addingTimeInterval(60))
+        check("catalog: an entry whose name is a path is dropped",
+              AscensionChannel.parseCatalog(Data(#"{"entries":[{"name":"../../x","files":{}},{"name":"a/b"},{"name":"ok"}]}"#.utf8))
+                .entries.map(\.name) == ["ok"])
+        check("archives: a from/into that climbs out is not used",
+              !AscensionChannel.safeArchivePrefix("../x/") && !AscensionChannel.safeArchivePrefix("/abs/")
+                && AscensionChannel.safeArchivePrefix("big-main/") && AscensionChannel.safeArchivePrefix(""))
+        let back = sync(install: true)
+        check("after all that, a full check is clean again", { if case .ok = back { return true }; return false }())
 
         // MARK: The launcher around it
 

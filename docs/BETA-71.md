@@ -35,10 +35,16 @@ One new world and four fixes it exposed:
 | `BootProfileSelfTest.swift` | one check restated: AscensionXI is the one other world that names a loader |
 | `tools/ascension-prefetch.py` | the one-off that fetched the first client (kept for reference) |
 
+## Review
+
+Three reviewers (port fidelity, safety, integration): 21 findings, one high (a world switched
+during the Play-time update sent that world's login to AscensionXI). All fixed and tested:
+[`ASCENSION.md` › Review](ASCENSION.md#review-2026-10-24).
+
 ## Tests (2026-10-24)
 
 - `swift build`: clean apart from the two pre-existing capture warnings in Runner.swift.
-- All 27 `--selftest-*` suites on the bundled app: pass (`--selftest-ascension` 50/50, boot-profile
+- All 27 `--selftest-*` suites on the bundled app: pass (`--selftest-ascension` 60/60 after the review, boot-profile
   43/43, primary-action 87/87, install-location 107/107, …; the log is
   `~/Downloads/FFXI-on-Mac-build/b71-selftests.log` for the first build).
 - `scripts/tests/gamewindow-test.sh` was not re-run: nothing it covers changed.

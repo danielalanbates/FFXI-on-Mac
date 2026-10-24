@@ -11,8 +11,10 @@ final class AscensionSync: @unchecked Sendable {
     enum Outcome: Equatable {
         /// Everything matches the channel. `changed`: files written this run.
         case ok(changed: Int)
-        /// No mirror answered; the client from the last good update is still all there.
+        /// No mirror answered, and the last update ran to the end: its client is still all there.
         case offline(String)
+        /// Stop was pressed. Nothing is started after it.
+        case stopped
         case failed(String)
     }
 
@@ -57,47 +59,78 @@ final class AscensionSync: @unchecked Sendable {
     /// `PlayOnlineViewer` whose identical files are copied instead of downloaded.
     func run(install: Bool = false, donors: [URL] = []) -> Outcome {
         defer { hashes.save() }
-        do {
-            try fm.createDirectory(at: stateDir, withIntermediateDirectories: true)
-            let settings = AscensionChannel.settings(in: root)
-            log("i  AscensionXI: optional packs " + (AscensionChannel.wantedPacks(settings).sorted().joined(separator: ", ").nilIfEmpty ?? "off")
-                + " (launcher.json: hd, hdMaps, lofiMusic)")
-            guard resolveChannel() else {
-                if installedBefore { return .offline("AscensionXI's update server didn't answer; playing with the files from the last update.") }
-                return .failed("AscensionXI's update server didn't answer (\(mirrors.joined(separator: ", "))). Try again in a few minutes.")
-            }
-            try belongsToChannel()
-            try ensureBase(full: install || !fm.fileExists(atPath: baseCopy.path), donors: donors, settings: settings)
+        // Setup and Repair hash every file again, as their Repair does: a file corrupted in place
+        // with its size and date unchanged would pass the cache (b71 review).
+        hashes.trustStamps = !install
+        var outcome: Outcome
+        do { outcome = try steps(install: install, donors: donors) }
+        catch let f as Failure { outcome = .failed(f.description) }
+        catch { outcome = .failed("AscensionXI update failed: \(error.localizedDescription)") }
+        // Whatever the step it reached, a Stop is a Stop: never "offline" or "ok" and then a game.
+        return stop.raised ? .stopped : outcome
+    }
+
+    private func steps(install: Bool, donors: [URL]) throws -> Outcome {
+        try fm.createDirectory(at: stateDir, withIntermediateDirectories: true)
+        let settings = AscensionChannel.settings(in: root)
+        log("i  AscensionXI: optional packs " + (AscensionChannel.wantedPacks(settings).sorted().joined(separator: ", ").nilIfEmpty ?? "off")
+            + " (launcher.json: hd, hdMaps, lofiMusic)")
+        guard resolveChannel() else {
             try checkStop()
-            let manifest = try fetchManifest()
-            if manifest.version != AscensionChannel.manifestVersion {
-                log("i  AscensionXI's manifest is version \(manifest.version); this launcher reads version \(AscensionChannel.manifestVersion)")
+            if installedBefore, lastUpdateFinished {
+                return .offline("AscensionXI's update server didn't answer; playing with the files from the last update.")
             }
-            try validateRuntime(manifest)
-            let writtenBefore = changed
-            try syncOverlay(AscensionChannel.overlay, manifest.files, prefix: "dats")
-            if settings.hd {
-                try syncOverlay(AscensionChannel.overlay + "-hd", manifest.filesHD, prefix: "dats-hd")
+            if installedBefore {
+                return .failed("AscensionXI's update server didn't answer, and the last update did not finish, so the "
+                               + "client may be half updated. Try again in a few minutes.")
             }
-            if settings.manageAddons { try syncAddons() } else { log("i  AscensionXI addons: management off (manageAddons=false)") }
-            // Their launcher's own guard: a release published mid-update is retried, not mixed. Only
-            // needed when this update wrote something from that manifest.
-            if manifest.clientVersion != nil, changed > writtenBefore,
-               try fetchManifest().contentHash != manifest.contentHash {
-                throw Failure(description: "AscensionXI published a new release during this update; press Play again.")
-            }
-            try validateRuntime(manifest)
-            removeRetiredFiles()
-            try rewritePivot(settings)
-            installLoader(manifest)
-            try prepareBootProfile()
-            saveState(manifest)
-            return .ok(changed: changed)
-        } catch let f as Failure {
-            return .failed(f.description)
-        } catch {
-            return .failed("AscensionXI update failed: \(error.localizedDescription)")
+            return .failed("AscensionXI's update server didn't answer (\(mirrors.joined(separator: ", "))). Try again in a few minutes.")
         }
+        try belongsToChannel()
+        // Cleared before anything is written and set again only at the very end, so an update that
+        // stopped or failed half way never lets an offline Play start on the half-updated client.
+        writeState(["finished": false])
+        let full = install || !fm.fileExists(atPath: baseCopy.path)
+        if full {
+            try ensureBase(full: true, donors: donors, settings: settings)
+        } else {
+            // `RoutineBaseCheck`: a base check that fails is skipped with a warning, as theirs does;
+            // the runtime check below still refuses a client that is not the one the release needs.
+            do { try ensureBase(full: false, donors: donors, settings: settings) }
+            catch {
+                try checkStop()
+                log("i  AscensionXI base check skipped (\(error)); their DATs and runtime are still checked")
+            }
+        }
+        try checkStop()
+        let manifest = try fetchManifest()
+        if manifest.version != AscensionChannel.manifestVersion {
+            log("i  AscensionXI's manifest is version \(manifest.version); this launcher reads version \(AscensionChannel.manifestVersion)")
+        }
+        try validateRuntime(manifest)
+        let writtenBefore = changed
+        try syncOverlay(AscensionChannel.overlay, manifest.files, prefix: "dats")
+        if settings.hd {
+            try syncOverlay(AscensionChannel.overlay + "-hd", manifest.filesHD, prefix: "dats-hd")
+        }
+        try checkStop()
+        if settings.manageAddons { try syncAddons() } else { log("i  AscensionXI addons: management off (manageAddons=false)") }
+        try checkStop()
+        // Their launcher's own guard: a release published mid-update is retried, not mixed. Only
+        // needed when this update wrote something from that manifest.
+        if manifest.clientVersion != nil, changed > writtenBefore,
+           try fetchManifest().contentHash != manifest.contentHash {
+            throw Failure(description: "AscensionXI published a new release during this update; press Play again.")
+        }
+        try validateRuntime(manifest)
+        try checkStop()
+        removeRetiredFiles()
+        try rewritePivot(settings)
+        installLoader(manifest)
+        try prepareBootProfile()
+        try checkStop()
+        saveState(manifest)
+        return .ok(changed: changed)
     }
 
     /// A client this launcher updated before (its state file and the base manifest copy are there).
@@ -106,6 +139,9 @@ final class AscensionSync: @unchecked Sendable {
             && fm.fileExists(atPath: baseCopy.path)
             && fm.fileExists(atPath: ashita.appendingPathComponent("Ashita-cli.exe").path)
     }
+
+    /// The last update ran to its end (`saveState`), not into a Stop, a failure or a crash.
+    var lastUpdateFinished: Bool { readState()?["finished"] as? Bool == true }
 
     private func checkStop() throws {
         if stop.raised { throw Failure(description: "Stopped. Press the button again to carry on; nothing finished is lost.") }
@@ -233,22 +269,44 @@ final class AscensionSync: @unchecked Sendable {
             let ok = (try? get(u, timeout: 15)) != nil
             lock.lock(); answered[k] = ok; lock.unlock()
         }
+        if stop.raised { live = []; return false }
         live = mirrors.indices.filter { answered[$0] }.map { mirrors[$0] }
         for k in mirrors.indices where !answered[k] { log("i  AscensionXI mirror \(mirrors[k]) didn't answer") }
         return !live.isEmpty
     }
 
+    /// A GET of a channel file from the first live mirror that answers it, so a mirror whose
+    /// /environment answers but whose files are missing mid-republish is passed over, as their
+    /// launcher's fallback does. The one that answered is used first from then on.
+    private func getFromChannel(_ rel: String, ifModifiedSince: String? = nil, timeout: TimeInterval) throws -> (data: Data?, response: HTTPURLResponse) {
+        var last: Error = Failure(description: "no AscensionXI mirror answered \(rel)")
+        for m in (live.isEmpty ? mirrors : live) {
+            try checkStop()
+            guard let u = url(rel, base: m) else { continue }
+            do {
+                let got = try get(u, ifModifiedSince: ifModifiedSince, timeout: timeout)
+                if m != live.first, let k = live.firstIndex(of: m) { live.remove(at: k); live.insert(m, at: 0) }
+                return got
+            } catch {
+                last = error
+                log("i  AscensionXI mirror \(m): \(rel) failed (\(error.localizedDescription))")
+            }
+        }
+        throw last
+    }
+
     /// A GET answered from `cache` when the channel says it has not changed since (If-Modified-Since,
-    /// the copy dated as the channel's Last-Modified). A copy is kept only when the channel dates it.
-    private func fetchCached(_ rel: String, cache: URL, timeout: TimeInterval) throws -> Data {
-        guard let u = url(rel) else { throw Failure(description: "bad channel URL") }
-        let have = try? Data(contentsOf: cache)
+    /// the copy dated as the channel's Last-Modified). A copy is kept only when the channel dates it
+    /// and `valid` accepts it: a truncated answer must not be kept and then reused on every 304.
+    private func fetchCached(_ rel: String, cache: URL, timeout: TimeInterval, valid: (Data) -> Bool) throws -> Data {
+        let have = (try? Data(contentsOf: cache)).flatMap { valid($0) ? $0 : nil }
         let since = have == nil ? nil : Self.httpDate((try? fm.attributesOfItem(atPath: cache.path))?[.modificationDate] as? Date)
-        let got = try get(u, ifModifiedSince: since, timeout: timeout)
+        let got = try getFromChannel(rel, ifModifiedSince: since, timeout: timeout)
         guard let d = got.data else {
             if let have { return have }
             throw Failure(description: "\(rel): not modified, and no copy here")
         }
+        guard valid(d) else { throw Failure(description: "\(rel) could not be read") }
         try? fm.createDirectory(at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
         if let lm = got.response.value(forHTTPHeaderField: "Last-Modified"), let date = Self.parseHTTPDate(lm),
            (try? d.write(to: cache, options: .atomic)) != nil {
@@ -279,11 +337,15 @@ final class AscensionSync: @unchecked Sendable {
     // MARK: - Base client
 
     private func fetchBase(ifModifiedSince: String?) throws -> AscensionChannel.BaseManifest? {
-        guard let u = url("base/client-manifest.json") else { throw Failure(description: "bad channel URL") }
-        let got = try get(u, ifModifiedSince: ifModifiedSince, timeout: 120)
+        let got = try getFromChannel("base/client-manifest.json", ifModifiedSince: ifModifiedSince, timeout: 120)
         guard let d = got.data else { return nil }
         guard let bm = AscensionChannel.parseBase(d, lastModified: got.response.value(forHTTPHeaderField: "Last-Modified")),
               !bm.files.isEmpty else { throw Failure(description: "AscensionXI's base manifest could not be read.") }
+        // Every key, pack keys included (they are kept in .base-manifest.json and later used to
+        // delete what a revision drops): one unsafe path and the whole manifest is refused.
+        if let bad = bm.files.keys.first(where: { !Self.safeRelative($0) }) {
+            throw Failure(description: "AscensionXI's base manifest names an unsafe path: \(bad)")
+        }
         if bm.version != AscensionChannel.baseVersion {
             log("i  AscensionXI's base manifest is version \(bm.version); this launcher reads version \(AscensionChannel.baseVersion)")
         }
@@ -315,6 +377,7 @@ final class AscensionSync: @unchecked Sendable {
             let names = old.files.keys.filter { AscensionChannel.pack(of: $0).map(newPacks.contains) ?? false }.sorted()
             log("==> AscensionXI: fetching \(newPacks.sorted().joined(separator: ", "))")
             try restore(names, from: old.files, donors: [], label: "Downloading AscensionXI packs")
+            writeState(["packs": Array(packs).sorted()])
             return
         }
         let want = wanted(bm.files, s)
@@ -326,9 +389,12 @@ final class AscensionSync: @unchecked Sendable {
             }
             let removed = old.keys.filter { bm.files[$0] == nil }
             log("==> AscensionXI base client -> revision \(bm.revision): \(names.count) changed, \(removed.count) removed")
-            for rel in removed {
+            // Files only, as their launcher deletes them (File.Exists + File.Delete): never a folder,
+            // never a path that leaves the client.
+            for rel in removed where Self.safeRelative(rel) {
                 let f = root.appendingPathComponent(rel)
-                if fm.fileExists(atPath: f.path) { try? fm.removeItem(at: f); changed += 1; log("i  removed \(rel)") }
+                guard Self.isRegularFile(f) else { continue }
+                if (try? fm.removeItem(at: f)) != nil { changed += 1; log("i  removed \(rel)") }
             }
         } else {
             log("==> AscensionXI: checking every file of the client against revision \(bm.revision) (one time)")
@@ -363,18 +429,9 @@ final class AscensionSync: @unchecked Sendable {
             guard Self.safeRelative(rel) else { throw Failure(description: "AscensionXI's manifest names an unsafe path: \(rel)") }
             let dest = root.appendingPathComponent(rel)
             if hashes.verified(rel, at: dest, sha: e.sha256) { kept += 1; continue }
-            if rel.hasPrefix("Game/"), let src = donor(for: String(rel.dropFirst(5)), size: e.size, sha: e.sha256, in: donors) {
-                do {
-                    try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
-                    let part = dest.deletingLastPathComponent().appendingPathComponent("." + dest.lastPathComponent + ".ffxi-part")
-                    try? fm.removeItem(at: part)
-                    try fm.copyItem(at: src, to: part)
-                    try? fm.removeItem(at: dest)
-                    try fm.moveItem(at: part, to: dest)
-                    hashes.record(rel, at: dest, sha: e.sha256)
-                    copied += 1; changed += 1
-                    continue
-                } catch { log("i  couldn't copy \(rel) from \(src.path): \(error.localizedDescription)") }
+            if rel.hasPrefix("Game/"), copyFromDonor(String(rel.dropFirst(5)), to: dest, key: rel, entry: e, donors: donors) {
+                copied += 1; changed += 1
+                continue
             }
             jobs.append(Job(rel: rel, source: "base/files/" + rel, dest: dest, sha: e.sha256, size: e.size, channelRelative: true))
         }
@@ -391,15 +448,35 @@ final class AscensionSync: @unchecked Sendable {
         }
     }
 
-    /// A donor's copy of `sub` (a path under the base client's `Game/`), when it is the same file.
-    private func donor(for sub: String, size: Int64, sha: String, in donors: [URL]) -> URL? {
+    /// `sub` (a path under the base client's `Game/`) copied from the first donor that has it byte
+    /// for byte. The copy itself is hashed, not the donor before copying: a donor rewritten by its
+    /// own world's updater between the two would otherwise be kept under the channel's hash.
+    private func copyFromDonor(_ sub: String, to dest: URL, key: String, entry e: AscensionChannel.FileEntry, donors: [URL]) -> Bool {
+        let part = dest.deletingLastPathComponent().appendingPathComponent("." + dest.lastPathComponent + ".ffxi-part")
         for d in donors {
             let c = d.appendingPathComponent(sub)
-            guard let a = try? fm.attributesOfItem(atPath: c.path), (a[.size] as? NSNumber)?.int64Value == size,
+            guard let a = try? fm.attributesOfItem(atPath: c.path), (a[.size] as? NSNumber)?.int64Value == e.size,
                   (a[.type] as? FileAttributeType) == .typeRegular else { continue }
-            if AscensionChannel.sha256(of: c) == sha { return c }
+            do {
+                try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? fm.removeItem(at: part)
+                try fm.copyItem(at: c, to: part)
+                guard AscensionChannel.sha256(of: part) == e.sha256 else { try? fm.removeItem(at: part); continue }
+                try? fm.removeItem(at: dest)
+                try fm.moveItem(at: part, to: dest)
+                hashes.record(key, at: dest, sha: e.sha256)
+                return true
+            } catch {
+                try? fm.removeItem(at: part)
+                log("i  couldn't copy \(key) from \(c.path): \(error.localizedDescription)")
+            }
         }
-        return nil
+        return false
+    }
+
+    /// A regular file, not a folder or a link (`lstat`).
+    static func isRegularFile(_ u: URL) -> Bool {
+        (try? FileManager.default.attributesOfItem(atPath: u.path))?[.type] as? FileAttributeType == .typeRegular
     }
 
     static func safeRelative(_ rel: String) -> Bool {
@@ -413,7 +490,7 @@ final class AscensionSync: @unchecked Sendable {
     /// Always fetched whole, as their launcher does: it is what every DAT is checked against, and
     /// a republish dated no later than the last one would slip past an If-Modified-Since.
     private func fetchManifest() throws -> AscensionChannel.Manifest {
-        guard let u = url("manifest.json"), let d = try get(u, timeout: 60).data,
+        guard let d = try getFromChannel("manifest.json", timeout: 60).data,
               let m = AscensionChannel.parseManifest(d) else {
             throw Failure(description: "AscensionXI's update manifest could not be read.")
         }
@@ -488,15 +565,21 @@ final class AscensionSync: @unchecked Sendable {
     private var scriptURL: URL {
         let ini = ashita.appendingPathComponent("config/boot/\(AscensionChannel.bootProfile)")
         let text = (try? String(contentsOf: ini, encoding: .isoLatin1)) ?? ""
-        let script = BootProfile.value("script", section: "ashita.boot", in: text).flatMap { $0.isEmpty ? nil : $0 } ?? "default.txt"
-        return ashita.appendingPathComponent("scripts").appendingPathComponent(script.replacingOccurrences(of: "\\", with: "/"))
+        // A `script=` that leaves Ashita/scripts (the profile comes from their channel) is not used.
+        let named = BootProfile.value("script", section: "ashita.boot", in: text) ?? ""
+        let script = Self.safeRelative(named) ? named.replacingOccurrences(of: "\\", with: "/") : "default.txt"
+        return ashita.appendingPathComponent("scripts").appendingPathComponent(script)
     }
 
     private func addonTarget(_ e: AscensionChannel.Catalog.Entry, _ rel: String) throws -> URL {
         let r = rel.replacingOccurrences(of: "\\", with: "/")
-        guard Self.safeRelative(r) else { throw Failure(description: "catalog entry \(e.name) names an unsafe path: \(rel)") }
-        return e.kind == "plugin" ? ashita.appendingPathComponent("plugins/\(r)")
-                                  : ashita.appendingPathComponent("addons/\(e.name)/\(r)")
+        guard Self.safeRelative(r), AscensionChannel.safeAddonName(e.name) else {
+            throw Failure(description: "catalog entry \(e.name) names an unsafe path: \(rel)")
+        }
+        let base = (e.kind == "plugin" ? ashita.appendingPathComponent("plugins") : ashita.appendingPathComponent("addons/\(e.name)")).standardizedFileURL
+        let t = base.appendingPathComponent(r).standardizedFileURL
+        guard t.path.hasPrefix(base.path + "/") else { throw Failure(description: "catalog entry \(e.name) leaves its folder: \(rel)") }
+        return t
     }
 
     private func addonLocation(_ e: AscensionChannel.Catalog.Entry) -> URL {
@@ -562,9 +645,12 @@ final class AscensionSync: @unchecked Sendable {
     /// addons.json exactly as their launcher writes it, so either launcher can read the other's.
     private func saveState(_ s: AddonState) {
         func arr(_ set: Set<String>) -> String {
-            let sorted = set.sorted { $0.lowercased() < $1.lowercased() }
+            // OrdinalIgnoreCase compares upper-cased; JavaScriptSerializer escapes < > & ' as \u00XX.
+            let sorted = set.sorted { $0.uppercased() < $1.uppercased() }
             let d = (try? JSONSerialization.data(withJSONObject: sorted, options: [.withoutEscapingSlashes])) ?? Data("[]".utf8)
-            return String(data: d, encoding: .utf8) ?? "[]"
+            return (String(data: d, encoding: .utf8) ?? "[]")
+                .replacingOccurrences(of: "<", with: "\\u003c").replacingOccurrences(of: ">", with: "\\u003e")
+                .replacingOccurrences(of: "&", with: "\\u0026").replacingOccurrences(of: "'", with: "\\u0027")
         }
         let note = "The launcher's memory of the addon catalog: 'seen' entries were auto-enabled once and are now the player's to switch; 'ignoreUpdates' entries stay at their installed version and 'followUpdates' entries take every catalog update - both are the player's choices on the Addons page; an entry in neither list does what the catalog says. 'switchedOff' entries left the catalog and were unticked once; switching one back on is the player's choice."
         let text = "{\r\n  \"//\": \"\(note)\",\r\n  \"seen\": \(arr(s.seen)),\r\n  \"ignoreUpdates\": \(arr(s.ignoreUpdates)),\r\n  \"followUpdates\": \(arr(s.followUpdates)),\r\n  \"switchedOff\": \(arr(s.switchedOff))\r\n}\r\n"
@@ -575,18 +661,24 @@ final class AscensionSync: @unchecked Sendable {
         let catalog: AscensionChannel.Catalog
         do {
             // Kept where their launcher keeps it, which is also what AscensionChannel.addonPolicy reads.
-            let d = try fetchCached("addons/catalog.json", cache: root.appendingPathComponent("addons-catalog.json"), timeout: 60)
+            let d = try fetchCached("addons/catalog.json", cache: root.appendingPathComponent("addons-catalog.json"), timeout: 60,
+                                    valid: { AscensionChannel.catalogReadable($0) })
             catalog = AscensionChannel.parseCatalog(d)
             if catalog.version != AscensionChannel.catalogVersion {
                 log("i  AscensionXI's addon catalog is version \(catalog.version); this launcher reads version \(AscensionChannel.catalogVersion)")
             }
         } catch {
+            try checkStop()
             log("i  AscensionXI addon catalog not fetched (\(error.localizedDescription)); addons left as they are")
             return
         }
         var state = loadState()
         let scriptFile = scriptURL
         var script = AscensionScript(try? String(contentsOf: scriptFile, encoding: .isoLatin1))
+        // What this run changes in the script, replayed on the file as it is right before writing:
+        // the Addons… sheet may have written it while the catalog was syncing (minutes, the first time).
+        var ops: [(AscensionScript) -> AscensionScript] = []
+        func apply(_ op: @escaping (AscensionScript) -> AscensionScript) { script = op(script); ops.append(op) }
         var updated = 0, enabled = 0, held = 0, failedCount = 0
         for (n, e) in catalog.entries.enumerated() {
             try checkStop()
@@ -623,6 +715,7 @@ final class AscensionSync: @unchecked Sendable {
                     if removed > 0 { log("i  addon cleaned: \(e.name) (\(removed) obsolete file(s) removed)") }
                     ok = true
                 } catch {
+                    try checkStop()
                     failedCount += 1
                     log("i  addon \(e.name) not synced (\(error))")
                 }
@@ -631,29 +724,41 @@ final class AscensionSync: @unchecked Sendable {
             if !state.seen.contains(where: { $0.caseInsensitiveCompare(e.name) == .orderedSame }) {
                 state.seen.insert(e.name)
                 if e.defaultEnabled, !script.isEnabled(kind: e.kind, e.name) {
-                    script.enable(kind: e.kind, e.name); enabled += 1
+                    apply { var s = $0; s.enable(kind: e.kind, e.name); return s }; enabled += 1
                     log("i  addon enabled: \(e.name) (new in the catalog)")
                 }
             }
-            if e.required, !script.isEnabled(kind: e.kind, e.name) { script.enable(kind: e.kind, e.name); enabled += 1 }
+            if e.required, !script.isEnabled(kind: e.kind, e.name) { apply { var s = $0; s.enable(kind: e.kind, e.name); return s }; enabled += 1 }
         }
         var switched = 0
-        for s in catalog.switchOff {
-            guard state.switchedOff.insert(s.name).inserted else { continue }
-            if script.isEnabled(kind: s.kind, s.name) {
-                script.disable(kind: s.kind, s.name); switched += 1
-                log("i  addon switched off: \(s.name) (\(s.reason))")
+        for off in catalog.switchOff {
+            // Case-insensitive, as their HashSet is: "FPS" is the "fps" switched off before.
+            guard !state.switchedOff.contains(where: { $0.caseInsensitiveCompare(off.name) == .orderedSame }) else { continue }
+            state.switchedOff.insert(off.name)
+            if script.isEnabled(kind: off.kind, off.name) {
+                apply { var s = $0; s.disable(kind: off.kind, off.name); return s }; switched += 1
+                log("i  addon switched off: \(off.name) (\(off.reason))")
             }
         }
-        if !script.isEnabled(kind: "addon", "fps"), script.removeLine("/bind F12 /fps") {
+        if !script.isEnabled(kind: "addon", "fps"), script.hasLine("/bind F12 /fps") {
+            apply { var s = $0; if !s.isEnabled(kind: "addon", "fps") { s.removeLine("/bind F12 /fps") }; return s }
             log("i  addons: removed \"/bind F12 /fps\" (the fps addon is not loaded)")
         }
         saveState(state)
-        if let text = script.changed {
-            try? fm.createDirectory(at: scriptFile.deletingLastPathComponent(), withIntermediateDirectories: true)
-            if (try? text.write(to: scriptFile, atomically: true, encoding: .isoLatin1)) != nil {
-                log("i  addons: \(scriptFile.lastPathComponent) rewritten")
+        if !ops.isEmpty {
+            let now = try? String(contentsOf: scriptFile, encoding: .isoLatin1)
+            let fresh = ops.reduce(AscensionScript(now)) { $1($0) }
+            if let text = fresh.changed {
+                try? fm.createDirectory(at: scriptFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+                if (try? text.write(to: scriptFile, atomically: true, encoding: .isoLatin1)) != nil {
+                    log("i  addons: \(scriptFile.lastPathComponent) rewritten")
+                }
             }
+        } else if let text = AscensionScript(try? String(contentsOf: scriptFile, encoding: .isoLatin1)).changed,
+                  !fm.fileExists(atPath: scriptFile.path) {
+            // No script at all yet: theirs writes the (empty) block anyway.
+            try? fm.createDirectory(at: scriptFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? text.write(to: scriptFile, atomically: true, encoding: .isoLatin1)
         }
         log("i  AscensionXI addons: \(catalog.entries.count) in catalog, \(updated) file(s) updated, \(enabled) newly enabled, "
             + "\(switched) switched off, \(held) held, \(failedCount) failed")
@@ -669,6 +774,12 @@ final class AscensionSync: @unchecked Sendable {
                 return best == a
             }
             guard !mine.isEmpty, Int64(mine.count) * 204_800 >= a.size else { continue }
+            // `from` names a folder inside the zip and `into` one inside the addon: neither may climb
+            // out (theirs only ever compares names inside the zip; extracted to disk, a "../" would
+            // reach files outside the temporary folder).
+            guard AscensionChannel.safeArchivePrefix(a.from), AscensionChannel.safeArchivePrefix(a.into) else {
+                log("i  addon \(e.name): archive with an unsafe folder (\(a.from) -> \(a.into)) not used"); continue
+            }
             let tmp = stateDir.appendingPathComponent("tmp/\(e.name)-\(UUID().uuidString)")
             defer { try? fm.removeItem(at: tmp) }
             do {
@@ -683,10 +794,12 @@ final class AscensionSync: @unchecked Sendable {
                 try p.run(); p.waitUntilExit()
                 guard p.terminationStatus == 0 else { throw Failure(description: "ditto \(p.terminationStatus)") }
                 var got = 0
+                let outBase = out.standardizedFileURL.path + "/"
                 for rel in mine {
                     let inner = a.from + rel.dropFirst(a.into.count)
-                    let src = out.appendingPathComponent(String(inner))
-                    guard let f = e.files[rel], fm.fileExists(atPath: src.path), AscensionChannel.sha256(of: src) == f.sha256 else { continue }
+                    let src = out.appendingPathComponent(String(inner)).standardizedFileURL
+                    guard src.path.hasPrefix(outBase), Self.isRegularFile(src),
+                          let f = e.files[rel], AscensionChannel.sha256(of: src) == f.sha256 else { continue }
                     let t = try addonTarget(e, rel)
                     try fm.createDirectory(at: t.deletingLastPathComponent(), withIntermediateDirectories: true)
                     try? fm.removeItem(at: t)
@@ -717,7 +830,9 @@ final class AscensionSync: @unchecked Sendable {
             if e.files.keys.contains(where: { $0.caseInsensitiveCompare(clean) == .orderedSame }) { continue }
             let full = try addonTarget(e, clean).standardizedFileURL
             guard full.path.hasPrefix(base.path + "/") else { throw Failure(description: "obsolete addon path escapes its folder: \(item)") }
-            guard fm.fileExists(atPath: full.path) else { continue }
+            // A file only, as theirs (File.Exists is false for a folder): an old file that became a
+            // folder in a later version keeps that folder and what is in it.
+            guard Self.isRegularFile(full) else { continue }
             var p = full
             while p.path.count >= base.path.count {
                 if (try? p.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
@@ -759,7 +874,10 @@ final class AscensionSync: @unchecked Sendable {
         let text = AscensionChannel.pivot(old, datsWine: datsWine, settings: s, present: present)
         guard text != old else { return }
         try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try text.write(to: file, atomically: true, encoding: .ascii)
+        // Their Encoding.ASCII turns what it cannot encode into "?"; a folder name with an accent
+        // must not stop Play. Windows-1252 keeps Latin accents as the Wine side reads them.
+        guard let bytes = text.data(using: .windowsCP1252, allowLossyConversion: true) else { return }
+        try bytes.write(to: file, options: .atomic)
         log("i  pivot.ini: overlays set")
     }
 
@@ -830,7 +948,7 @@ final class AscensionSync: @unchecked Sendable {
         }
     }
     private func saveState(_ m: AscensionChannel.Manifest) {
-        writeState(["manifest": m.contentHash, "clientVersion": m.clientVersion ?? "",
+        writeState(["finished": true, "manifest": m.contentHash, "clientVersion": m.clientVersion ?? "",
                     "updated": ISO8601DateFormatter().string(from: Date())])
     }
 
@@ -851,6 +969,8 @@ final class AscensionSync: @unchecked Sendable {
 /// an unchanged file is a `stat`. Keyed by path under the client root. Any change to a file's size
 /// or time makes it hashed again.
 final class HashCache: @unchecked Sendable {
+    /// False: every `verified` hashes the file again (Setup, Repair), and updates the cache.
+    var trustStamps = true
     private var map: [String: [String]] = [:]
     private let lock = NSLock()
     private var dirty = false
@@ -872,7 +992,7 @@ final class HashCache: @unchecked Sendable {
     func verified(_ key: String, at file: URL, sha: String) -> Bool {
         guard let s = Self.stamp(file) else { return false }
         lock.lock()
-        if let e = map[key], e.count == 3, e[0] == s[0], e[1] == s[1] { lock.unlock(); return e[2] == sha }
+        if trustStamps, let e = map[key], e.count == 3, e[0] == s[0], e[1] == s[1] { lock.unlock(); return e[2] == sha }
         lock.unlock()
         guard let h = AscensionChannel.sha256(of: file) else { return false }
         lock.lock(); map[key] = s + [h]; dirty = true; lock.unlock()

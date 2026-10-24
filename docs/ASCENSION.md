@@ -69,11 +69,12 @@ changed; ~3–4 s when nothing did). Differences, all deliberate:
 | --- | --- | --- |
 | downloads the 14.8 GB zip | fetches files one by one from both mirrors (8 at a time), after copying every file that is byte-identical (same path, size, sha256) in another FFXI client on the Mac | on the test Mac under 2,000 of 66,783 files (~1 GB) came from the channel; the rest matched CatsEyeXI/Supernova/HorizonXI files |
 | HD textures, HD maps, LoFi music on | off | texture memory is the frame rate on an 8 GB Mac. `launcher.json` in the client root turns each on with their own keys (`hd`, `hdMaps`, `lofiMusic`) |
-| re-hashes every file every Play | caches size + mtime + sha256 (`.ffxi-on-mac/hashes.json`) | a Play reads 400+ MB of overlay otherwise. Every file still has to match the channel's sha to be kept |
+| re-hashes every file every Play | caches size + mtime + sha256 (`.ffxi-on-mac/hashes.json`) for the Play-time update; Setup and Repair hash every file again | a Play reads 400+ MB of overlay otherwise. Every file still has to match the channel's sha to be kept, and a file corrupted in place with its size and date kept is caught by Repair |
 | probes the channel with `/manifest.json` | `/environment` on both mirrors at once | 5 bytes instead of 280 KB |
 | fetches the 2.2 MB catalog every Play | If-Modified-Since against `addons-catalog.json` (their own cache file, dated as the channel's Last-Modified) | the manifest itself is always fetched whole: every DAT is checked against it |
 | re-checks the manifest after every update | only when the update wrote something | nothing written, nothing mixed |
 | Repair restores the boot profile and boot script to the published copies | a full check keeps both when they exist | theirs switches off every addon the player turned on and turns retired ones back on. A *new* published copy still comes in through the update |
+| an unreachable channel: never launches | launches with the last update's files only if that update ran to its end (`finished` in `.ffxi-on-mac/ascension.json`, cleared before anything is written) | Play still works when their home-hosted mirror is down between releases |
 | runs Ashita with `--json <file>` | `--user/--pass` like every world here, plus `--hairpin` (`Server.loaderOptions`) | `Credentials.apply` rewrote the whole `command` and used to drop `--hairpin` |
 | gamepad and graphics from its own settings | the launcher's Graphics panel | one place for every world |
 | runs `AscensionXI.exe` | reads it as data: `DotNetResources.ascensionLoader` walks the PE's CLI resources (8-byte aligned, length-prefixed) and takes the one native PE plus the GPL licence and notice | no Wine Mono, no WinForms window. If the launcher ever changes shape, the stock `xiloader.exe` their base client ships stays in place; their login server accepts it too |
@@ -126,6 +127,28 @@ Also part of b71 because AscensionXI exposed them:
   booted, "Receiving character list", and the game showed character select with the AscensionXI
   title art (their DAT overlay) and his character. Left there for him; not entered into the world.
   The client took about two minutes from login to character select (16:04:06 → 16:06:09).
+
+## Review (2026-10-24)
+
+An adversarial review of b71 from three angles (port fidelity, safety, launcher integration)
+found 21 issues; all are fixed and each has a check in `--selftest-ascension` (60 checks now):
+
+- **High:** after the Play-time update, the launch read the window's account fields again; a world
+  picked meanwhile put *its* login into AscensionXI's profile. The launch now stops with a line in
+  launcher.log when the selection changed.
+- **Paths from the channel** (their data arrives over plain HTTP, so its own hashes prove nothing):
+  catalog names that are paths are dropped; every base-manifest key is checked (one bad key refuses
+  the manifest); archive `from`/`into` may not climb out; an extracted file must be inside the
+  temporary folder; the profile's `script=` must stay in `Ashita/scripts`; deletions (revision
+  removals, catalog removals) touch regular files only, never folders.
+- **Stop** is `.stopped`, never "ok" or "offline" followed by a game. An offline Play needs the last
+  update to have finished. Setup/Repair re-hash every file.
+- Theirs, matched: a failed base check is skipped, not fatal; a mirror whose files fail is passed
+  over for the next; `switchOff` is case-insensitive; `addons.json` sorts and escapes as theirs.
+- Others: a truncated catalog is not cached; a newly enabled pack is remembered on a 304; a donor
+  copy is hashed after copying; the script is merged with what the Addons… sheet wrote meanwhile;
+  pivot.ini takes a non-ASCII path; the job waits for any other job; Setup shows the job's progress
+  and counts an unreachable channel as a failure; the update runs after the launch gate.
 
 ## Not verified
 

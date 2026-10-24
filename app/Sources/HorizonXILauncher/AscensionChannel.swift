@@ -170,7 +170,7 @@ enum AscensionChannel {
         guard let o = object(data) else { return c }
         c.version = Int(int64(o, "version"))
         for raw in (o["entries"] as? [Any]) ?? [] {
-            guard let d = dict(raw), let name = string(d, "name"), !name.isEmpty else { continue }
+            guard let d = dict(raw), let name = string(d, "name"), safeAddonName(name) else { continue }
             let kind = (string(d, "kind") ?? "addon").lowercased()
             guard kind == "addon" || kind == "plugin" else { continue }
             var e = Catalog.Entry(name: name, kind: kind)
@@ -199,6 +199,26 @@ enum AscensionChannel {
             c.switchOff.append(.init(name: name, kind: kind, reason: string(d, "reason") ?? ""))
         }
         return c
+    }
+
+    /// A catalog name is a folder name under Ashita/addons (or a plugin's file name): never a path.
+    static func safeAddonName(_ n: String) -> Bool {
+        !n.isEmpty && n != "." && n != ".." && !n.contains("/") && !n.contains("\\") && !n.contains(":")
+            && !n.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
+    }
+
+    /// An archive's `from` (a folder in the zip) or `into` (a folder in the addon): relative, no "..".
+    static func safeArchivePrefix(_ p: String) -> Bool {
+        let r = p.replacingOccurrences(of: "\\", with: "/")
+        if r.isEmpty { return true }
+        guard !r.hasPrefix("/"), !r.contains(":") else { return false }
+        return !r.split(separator: "/").contains { $0 == ".." || $0 == "." }
+    }
+
+    /// The catalog is a JSON object with an `entries` list. Anything else (a truncated answer) is
+    /// not used, and not kept for the next If-Modified-Since.
+    static func catalogReadable(_ d: Data) -> Bool {
+        object(d)?["entries"] is [Any]
     }
 
     /// Is `rel` (a base-manifest path) inside one of the optional packs?
@@ -471,6 +491,8 @@ struct AscensionScript {
         if kind == "plugin" { plugins.removeAll { $0.caseInsensitiveCompare(name) == .orderedSame } }
         else { addons.removeAll { $0.caseInsensitiveCompare(name) == .orderedSame } }
     }
+    func hasLine(_ line: String) -> Bool { others.contains(line) }
+
     /// Take every line equal to `line` out; true when there was one.
     @discardableResult
     mutating func removeLine(_ line: String) -> Bool {
