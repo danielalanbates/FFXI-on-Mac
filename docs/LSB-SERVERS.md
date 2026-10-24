@@ -35,6 +35,18 @@ Cut for their codebase: Eden, FFEra, ValhallaXI (DarkStar lineage). Stopped: Tab
 | **Eventide XI** (eventide-xi.com) | `66.85.152.250` | ~50 online (Reddit, 2025-12) | Public full client zip, 8.2 GB, ranges, sha256 published | Single-box. Account made in the loader | **Codebase unclear** — answers the binary `0x02` (an old login build, like Gaia XI), and the operator maintains an AirSkyBoat fork. Daniel's rule is LSB only; decide before adding |
 | **ff11sf** (Chinese, 99 + 75) | `game.ff11sf.com`, `75.ff11sf.com` (2.1.x) | none found | Own launcher via lanzouj file-share links | **Allows speed hacks and auto-play bots**; their README threatens to attack every other server if theirs is attacked | **Not added** — not a community this launcher should send anyone to |
 
+Added by the survey's completeness critic (a second pass over sources the first missed):
+
+| World | Login host | What is known | Verdict |
+| --- | --- | --- | --- |
+| **ImagineXI** (Imagine XI 2.0) | `24.148.24.152` | Server source public ("built on LandSandBoat", modern LSB login); bring your own retail client; launcher zip on GitHub (`markup-ux/imaginexi-updates`). Port unreachable on 2026-10-24; weekly census empty | Later — confirm it is live first |
+| **Demiurge / "Chaos Gremlins"** | `xi.chaos-gremlins.party` (inferred) | Answers `0x02` after TLS like Gaia XI and Eventide; "Total Players Online: 1"; retail + update patch + LSB xiloader | Later — host inferred, one player |
+| **ZenithXI** | — | LandSandBoat fork in active development (pushed 2026-10-23), not launched | When it launches |
+| **Cleopatra XI** | — | Announced; LSB xiloader fork; public DAT manifest on GitHub | When it launches |
+| **LevelDown 75** | `ffxileveldown75.ddns.net` | Times out; a third-party note says it merged into LevelDown 99 (2026-09-16). LevelDown's Discord: 1,391 members | Covered by LevelDown 99 if the merge is real |
+| **Eventide XI** (update) | — | Discord 1,287 members, 531 online. The operator's own fork is AirSkyBoat (stronger lineage evidence, still not proof of what runs live) | Still Daniel's call |
+| **Omega**, **Nasomi** | `lobby.ffxi.party`, `ip.nasomi.com` (third-party sources) | No TLS on 54231: DarkStar lineage by the CODEBASE.md rule | Cut, like Eden |
+
 Answering but not LandSandBoat-confirmed, or not reachable on 2026-10-24: RagnarokXI, LevelDown 75
 (port timed out), Demiurge / "Chaos Gremlins" (host parked), DSP Old School (refused), Aurora
 (refused), Omega and Nasomi (hosts not published; Nasomi's loader picks one at runtime),
