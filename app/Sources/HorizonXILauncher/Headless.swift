@@ -45,6 +45,8 @@ enum Headless {
             || a.contains("--selftest-graphics")
             || a.contains("--selftest-addons-live")
             || a.contains("--selftest-carryover")
+            || a.contains("--selftest-ascension")
+            || a.contains("--ascension-sync")
             || a.contains("--send-ashita")
             || a.contains("--carryover-report")
             || a.contains("--carryover-apply")
@@ -134,6 +136,10 @@ enum Headless {
         if args.contains("--selftest-addons-live") {
             runAddonsLiveSelfTest()
         }
+        if args.contains("--selftest-ascension") {
+            runAscensionSelfTest()
+        }
+        if args.contains("--ascension-sync") { runAscensionSync(args) }
         if args.contains("--selftest-carryover") {
             runCarryOverSelfTest()
         }

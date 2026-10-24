@@ -16,8 +16,16 @@ enum Credentials {
     // used on each world and recall it when the user switches back. Falls back to the global
     // last-used name so existing installs keep their filled-in field.
     static func username(forWorld world: String) -> String {
-        AppDefaults.store.string(forKey: "account.user.\(world)") ?? username
+        if let own = AppDefaults.store.string(forKey: "account.user.\(world)") { return own }
+        return inheritsLegacyAccount(world) ? username : ""
     }
+
+    /// May `world` use what the store kept before accounts were per world (the global
+    /// `account.user`, a password under the bare account name)? Only HorizonXI, the one world the
+    /// launcher played when those were written. b71: a world never played here (AscensionXI) came
+    /// up with Daniel's HorizonXI name *and password* filled in, and Play would have sent both to
+    /// that world's login server. A new world starts with empty fields instead.
+    static func inheritsLegacyAccount(_ world: String) -> Bool { world.isEmpty || world == "HorizonXI" }
 
     /// An account name was saved for this world itself (not the global fallback above).
     static func hasSavedAccount(forWorld world: String) -> Bool {
@@ -86,7 +94,7 @@ enum Credentials {
     static func password(for user: String, world: String = "") -> String {
         let m = load()
         if let p = m[passwordKey(user, world: world)], !p.isEmpty { return p }
-        if let p = m[user], !p.isEmpty { return p }
+        if inheritsLegacyAccount(world), let p = m[user], !p.isEmpty { return p }
         return ""
     }
 
@@ -410,24 +418,28 @@ enum Credentials {
 
     /// Rewrite the `command = ...` line of the Ashita boot profile with these credentials.
     /// Returns false if the profile is missing or unwritable.
+    ///
+    /// `options` (`Server.loaderOptions`) go after the account: arguments the world's own profile
+    /// passes its loader, which this line would otherwise drop (AscensionXI's `--hairpin`).
     @discardableResult
     static func apply(user: String, password: String, to install: Install,
                       profile: String = "horizonxi.ini",
-                      server: String = "play.horizonxi.com") -> Bool {
+                      server: String = "play.horizonxi.com", options: [String] = []) -> Bool {
         let name = install.bootProfileName(profile)
         let url = install.gameDir.appendingPathComponent("config/boot/\(name)")
         profileLock.lock(); defer { profileLock.unlock() }
         guard var text = readFile(at: url) else { return false }
+        let tail = options.isEmpty ? "" : " " + options.joined(separator: " ")
 
         if name.hasSuffix(".xml") {
             guard let out = xmlSetting("boot_command",
-                                       to: "--server \(server) --user \(user) --pass \(password)",
+                                       to: "--server \(server) --user \(user) --pass \(password)" + tail,
                                        in: text)
             else { return false }
             return writeFile(out, to: url)
         }
 
-        let line = "command     = --server \(server) --user \(user) --pass \(password)"
+        let line = "command     = --server \(server) --user \(user) --pass \(password)" + tail
         var replaced = false
         let eol = TextFile.terminator(of: text)
         let lines = TextFile.lines(of: text).map { l -> String in

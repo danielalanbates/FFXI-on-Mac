@@ -4,6 +4,10 @@ Updated 2026-10-14, ranked. Context, PR table and dead ends: [`HANDOFF.md`](HAND
 change and its live-test recipe: [`BETA-59.md`](BETA-59.md). The August version of this list is
 in `archive/docs-2026-08/`.
 
+0. **2026-10-24, b71:** log in to AscensionXI with Daniel's own account (BETA-71 › Needs
+   Daniel), then the next LandSandBoat worlds in [`LSB-SERVERS.md`](LSB-SERVERS.md) › Next, one at a
+   time, each the way AscensionXI was done: read the world's own launcher, port its update steps,
+   one throwaway-account Play to its login server.
 1. **Daniel's live test of b59.** Install with `./app/bundle.sh /Applications` (builds, then swaps)
    only when no launcher, client or wine runs (it refuses otherwise). Then the "Needs Daniel's live
    test" lists in `BETA-59.md`: no update text while v3.9 is latest, footer/strip text, #27 window,

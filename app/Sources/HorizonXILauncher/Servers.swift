@@ -119,6 +119,11 @@ struct Server: Codable, Identifiable, Hashable {
     /// gxiloader.exe and Supernova's xiloader.exe, and each of those profiles already names its
     /// own: they declare none, and keep exactly what they had.
     var loader: String = ""
+    /// Arguments the world's loader always gets after the account (`Credentials.apply`), from the
+    /// `command` line of the world's own boot profile. AscensionXI's profile passes `--hairpin`
+    /// (xiloader: reach the map server at the login server's own address), and rewriting `command`
+    /// with the account used to drop it. Refreshed from `builtins`, like `loader`.
+    var loaderOptions: [String] = []
     /// The boot profile shipped in the app that a new profile for this world is made from, and
     /// whose required settings an existing one is completed with (see `BootProfile`). Empty: a
     /// new profile is copied from one already in the client, as before. Refreshed from `builtins`.
@@ -138,7 +143,27 @@ struct Server: Codable, Identifiable, Hashable {
     ///   downloader whose only job is to fetch exactly such an archive (ValhallaXI's is a .NET
     ///   WinForms app that downloads `mirror.valhalla.group/ValhallaXI.zip`); going to the
     ///   archive directly skips a GUI that cannot be driven unattended under wine.
-    enum InstallKind: String, Codable { case website, installerExe, catseyeLauncher, horizonTorrent, retail, clientZip, none }
+    /// - `ascensionChannel`: AscensionXI's own update channel, read natively (AscensionChannel).
+    enum InstallKind: String, Codable {
+        case website, installerExe, catseyeLauncher, horizonTorrent, retail, clientZip, ascensionChannel, none
+
+        /// A kind this build does not know (a newer build wrote it) reads as `website`: one
+        /// unknown value must not make the whole servers.json unreadable, which resets every
+        /// world's folder and host.
+        init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = InstallKind(rawValue: raw) ?? .website
+        }
+
+        /// Written as a kind every earlier build can read. How a built-in world installs is
+        /// refreshed from `builtins` on every load (`ServerStore.merge`), so the stored value is
+        /// only ever read back by a build that predates the kind -- and 3.10 and older throw on a
+        /// value they do not know, which would reset that build's whole server list.
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.singleValueContainer()
+            try c.encode(self == .ascensionChannel ? InstallKind.website.rawValue : rawValue)
+        }
+    }
 
     // A hand-written decoder because the synthesised one treats a missing key as an error rather
     // than as "use the default". `servers.json` on disk was written by whichever build the user
@@ -151,7 +176,7 @@ struct Server: Codable, Identifiable, Hashable {
          installURL: String = "", installKind: InstallKind = .website, installNote: String = "",
          accountURL: String = "", accountHow: String = "", discordURL: String = "",
          renderer: Renderer? = nil, x87: Bool = true, msync: Bool = true,
-         maxClients: Int = 1, loader: String = "", bootTemplate: String = "",
+         maxClients: Int = 1, loader: String = "", loaderOptions: [String] = [], bootTemplate: String = "",
          newsURL: String = "", newsPageURL: String = "") {
         self.codebase = codebase; self.retired = retired
         self.name = name; self.host = host; self.bootProfile = bootProfile
@@ -162,7 +187,7 @@ struct Server: Codable, Identifiable, Hashable {
         self.accountURL = accountURL; self.accountHow = accountHow; self.discordURL = discordURL
         self.renderer = renderer; self.x87 = x87; self.msync = msync
         self.maxClients = maxClients
-        self.loader = loader; self.bootTemplate = bootTemplate
+        self.loader = loader; self.loaderOptions = loaderOptions; self.bootTemplate = bootTemplate
         self.newsURL = newsURL; self.newsPageURL = newsPageURL
     }
 
@@ -195,6 +220,7 @@ struct Server: Codable, Identifiable, Hashable {
         msync       = try c.decodeIfPresent(Bool.self, forKey: .msync) ?? Server.builtins.first { $0.name == name }?.msync ?? true
         maxClients  = Server.all.first { $0.name == name }?.maxClients ?? 1
         loader      = Server.all.first { $0.name == name }?.loader ?? ""
+        loaderOptions = Server.all.first { $0.name == name }?.loaderOptions ?? []
         bootTemplate = Server.all.first { $0.name == name }?.bootTemplate ?? ""
         newsURL     = Server.all.first { $0.name == name }?.newsURL ?? ""
         newsPageURL = Server.all.first { $0.name == name }?.newsPageURL ?? ""
@@ -296,6 +322,30 @@ struct Server: Codable, Identifiable, Hashable {
                // active character on two account's (dual box) is this allowed? Yes!" and
                // "A single person is allowed two active characters maximum."
                maxClients: 2),
+        // Added 2026-10-24 (b71). Port 54231 answers LandSandBoat's own JSON over TLS ("Your
+        // xiloader is too old... '2.1.x'"), and their loader's notice says it is LSB xiloader 2.1.2.
+        // Everything below is from their own site, their launcher (AscensionXI.exe 3.6.0, read with
+        // ILSpy) and their update channel; see docs/ASCENSION.md.
+        Server(name: AscensionChannel.worldName, host: "play.ascensionffxi.com",
+               bootProfile: AscensionChannel.bootProfile, verified: false,
+               note: "Level 75 era, Ironman: no auction house, gear is earned. Their client and "
+                     + "DATs come from their own update server.",
+               // ascensionffxi.com, 2026-10-24: "a Final Fantasy XI private server, level 75 era,
+               // Ironman". Their Discord had 65 members (26 online) that day: ordering only.
+               era: "Level 75 era · Ironman", population: 65, codebase: .landSandBoat,
+               installURL: "https://www.ascensionffxi.com/download", installKind: .ascensionChannel,
+               installNote: "AscensionXI's client (about 14 GB) from their update server, file by file and "
+                     + "checked, reusing identical files from other FFXI clients on this Mac; then their "
+                     + "DATs, addons and loader, as their launcher does at every Play.",
+               accountURL: "https://www.ascensionffxi.com/register",
+               accountHow: "Register on ascensionffxi.com with your email, then create your character on "
+                     + "their website — the game cannot make one. Log in here with that account.",
+               discordURL: "https://discord.gg/e924EXBC6m",
+               // Their rules (ascensionffxi.com/rules, 2026-10-24): "Each person may have one account
+               // ... Multiboxing, meaning one person controlling multiple characters at the same
+               // time, is not permitted."
+               maxClients: 1,
+               loader: AscensionChannel.loaderName, loaderOptions: ["--hairpin"]),
         Server(name: "Eden", host: "play.edenxi.com", bootProfile: "eden.ini", verified: false,
                note: "Login host from Eden's own new-player wiki. Untested by this project.",
                era: "Classic · 75 cap", population: 1925, codebase: .darkStarLineage,
@@ -439,6 +489,7 @@ final class ServerStore: ObservableObject {
                 out[i].local = b.local
                 out[i].maxClients = b.maxClients
                 out[i].loader = b.loader
+                out[i].loaderOptions = b.loaderOptions
                 out[i].bootTemplate = b.bootTemplate
                 if b.local { out[i].host = b.host }
                 // A stored blank host means the user never set one — adopt a host this project

@@ -417,7 +417,7 @@ struct ContentView: View {
         if runner.busy { x.ownJob = runner.busyReason.isEmpty ? "Working" : runner.busyReason }
         else if x.isLocal, local.busy { x.ownJob = local.activity.isEmpty ? "setting up" : local.activity }
         else if moveChecking { x.ownJob = "Checking" }
-        x.ownProgress = runner.updatingHorizon ? runner.updateProgress : runner.moveProgress
+        x.ownProgress = runner.updatingHorizon ? runner.updateProgress : runner.moveProgress ?? runner.ascensionProgress
         if !runner.busy, Runner.workInFlight { x.otherJob = Runner.workInFlightReason ?? "Another job is running" }
         x.runningHere = runner.running
         x.serverLost = runner.serverLost
@@ -1735,6 +1735,8 @@ struct ContentView: View {
             runner.installClientZip(from: u, into: s.dataPath, name: s.name)
         case .retail:
             runner.installRetail(for: s, in: i)
+        case .ascensionChannel:
+            ascensionJob(for: s, install: i, full: true, runner: runner) { _ in recheck() }
         case .website:
             if let u = URL(string: s.installURL) { NSWorkspace.shared.open(u) }
             info("Download page opened — then use Run installer…")
@@ -2351,6 +2353,26 @@ struct ContentView: View {
 
     /// A world other than HorizonXI with no folder yet: "<FFXI on Mac>/Games/<world>" in the
     /// folder already chosen, or one the user chooses now. False when cancelled.
+    /// AscensionXI's job (Runner.syncAscension) in its client folder, which is chosen first the
+    /// way every world's is (placeWorldData). Other worlds' clients are offered as donors of
+    /// identical files only when every file is going to be checked anyway (Setup, Repair, or a
+    /// folder no update has run in yet).
+    private func ascensionJob(for s: Server, install i: Install, full: Bool, runner r: Runner,
+                              done: @escaping (AscensionSync.Outcome) -> Void) {
+        var w = s
+        if w.dataPath.isEmpty {
+            guard placeWorldData(for: w), let again = store.servers.first(where: { $0.name == w.name }),
+                  !again.dataPath.isEmpty else { done(.failed("No folder chosen for \(w.name).")); return }
+            w = again
+        }
+        let root = URL(fileURLWithPath: w.dataPath, isDirectory: true)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let dats = Install.winePath(root.appendingPathComponent("Ashita/polplugins/DATs"), driveC: i.driveC)
+        let checksAll = full || !FileManager.default.fileExists(atPath: root.appendingPathComponent(".base-manifest.json").path)
+        let donors = checksAll ? AscensionChannel.donorClients(store.servers.filter { $0.name != w.name }, base: i) : []
+        r.syncAscension(root: root, datsWine: dats, install: full, donors: donors, done: done)
+    }
+
     private func placeWorldData(for s: Server) -> Bool {
         if let folder = InstallLocation.remembered,
            FileManager.default.fileExists(atPath: folder.path),
@@ -2426,6 +2448,13 @@ struct ContentView: View {
         if s.installKind == .horizonTorrent || s.local {
             return await withCheckedContinuation { c in
                 r.installHorizon(into: i.gameDir) { ok in c.resume(returning: ok) }
+            }
+        }
+        if s.installKind == .ascensionChannel {
+            return await withCheckedContinuation { c in
+                ascensionJob(for: s, install: i, full: true, runner: r) { outcome in
+                    if case .failed = outcome { c.resume(returning: false) } else { c.resume(returning: true) }
+                }
             }
         }
         if s.installKind == .website {
@@ -2720,10 +2749,22 @@ struct ContentView: View {
         launchClient(i, server: server, runner: r)
     }
 
-    private func launchClient(_ i: Install, server: Server, runner r: Runner) {
+    private func launchClient(_ i: Install, server: Server, runner r: Runner, synced: Bool = false) {
         // Restart was pressed while the local server was starting for this launch.
         if updateInstalling {
             r.logFileOnly("!! not playing: the launcher is restarting to update")
+            return
+        }
+        // AscensionXI's update, before every Play, as their own launcher does it (AscensionSync):
+        // whatever their client, DATs, addons and loader changed. A few seconds when nothing did;
+        // the button shows "Updating…" while it runs. play() has already refused a second client.
+        if server.installKind == .ascensionChannel, !synced {
+            ascensionJob(for: server, install: i, full: false, runner: r) { outcome in
+                if case .failed(let why) = outcome { notice = why; return }
+                // The Ashita folder is found again: a first update may have just created it.
+                let now = store.servers.first { $0.name == server.name } ?? server
+                launchClient((active ?? i).forServer(now), server: now, runner: r, synced: true)
+            }
             return
         }
         // Two servers on the list publish no login host anywhere this project could find. Ashita
@@ -2798,7 +2839,8 @@ struct ContentView: View {
             for line in Credentials.prepareProfile(for: server, in: i) { r.logFileOnly("i  " + line) }
             if !account.user.isEmpty, !account.pass.isEmpty {
                 if !Credentials.apply(user: account.user, password: account.pass, to: i,
-                                      profile: server.bootProfile, server: server.host) {
+                                      profile: server.bootProfile, server: server.host,
+                                      options: server.loaderOptions) {
                     notice = "Could not write config/boot/\(server.bootProfile) — launching with its existing account."
                     r.logFileOnly("!! " + notice)
                     if i.gameDir.path.hasPrefix("/Volumes/") {

@@ -278,6 +278,22 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
+  <!-- AscensionXI publishes its client, DATs and addon catalog only over plain HTTP
+       (http://dl.ascensionffxi.com:54290 and dl2), and every file is checked against the SHA-256
+       their manifest gives before it is used (AscensionChannel.swift). That one domain only. -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <!-- 127.0.0.1 only: --selftest-ascension serves a fake channel on loopback. -->
+    <key>NSAllowsLocalNetworking</key><true/>
+    <key>NSExceptionDomains</key>
+    <dict>
+      <key>ascensionffxi.com</key>
+      <dict>
+        <key>NSIncludesSubdomains</key><true/>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key><true/>
+      </dict>
+    </dict>
+  </dict>
   <key>HXILauncherRevision</key><string>${LAUNCHER_REVISION}</string>
   <key>HXIAddonRevisions</key>
   <dict>
