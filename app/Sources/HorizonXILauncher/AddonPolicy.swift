@@ -251,6 +251,7 @@ enum AddonPolicies {
         case "CatsEyeXI": return catseye
         case "FFEra": return ffera
         case "Gaia XI": return gaia
+        case AscensionChannel.worldName: return AscensionChannel.addonPolicy(clientRoot: server.dataPath)
         // Eden publishes its rules only in its Discord's rules channel; Supernova, ValhallaXI,
         // OmicronXI, Gaia XI and Tabula Rasa XI publish none anywhere this project could find
         // (checked 2026-08-19). They stay .unknown — the addon screen shows everything and says

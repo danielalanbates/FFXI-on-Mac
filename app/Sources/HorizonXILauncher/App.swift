@@ -417,7 +417,7 @@ struct ContentView: View {
         if runner.busy { x.ownJob = runner.busyReason.isEmpty ? "Working" : runner.busyReason }
         else if x.isLocal, local.busy { x.ownJob = local.activity.isEmpty ? "setting up" : local.activity }
         else if moveChecking { x.ownJob = "Checking" }
-        x.ownProgress = runner.updatingHorizon ? runner.updateProgress : runner.moveProgress
+        x.ownProgress = runner.updatingHorizon ? runner.updateProgress : runner.moveProgress ?? runner.ascensionProgress
         if !runner.busy, Runner.workInFlight { x.otherJob = Runner.workInFlightReason ?? "Another job is running" }
         x.runningHere = runner.running
         x.serverLost = runner.serverLost
@@ -1735,6 +1735,8 @@ struct ContentView: View {
             runner.installClientZip(from: u, into: s.dataPath, name: s.name)
         case .retail:
             runner.installRetail(for: s, in: i)
+        case .ascensionChannel:
+            ascensionJob(for: s, install: i, full: true, runner: runner) { _ in recheck() }
         case .website:
             if let u = URL(string: s.installURL) { NSWorkspace.shared.open(u) }
             info("Download page opened — then use Run installer…")
@@ -1963,7 +1965,7 @@ struct ContentView: View {
             case .assemble?: return 0.55
             case .prefix?: return 0.75
             }
-        case .gameWine?, .game?: return runner.updatingHorizon ? runner.updateProgress : 0
+        case .gameWine?, .game?: return runner.updatingHorizon ? runner.updateProgress : runner.ascensionProgress ?? 0
         case .files?: return runner.moveProgress ?? 0
         default: return 0
         }
@@ -2351,6 +2353,26 @@ struct ContentView: View {
 
     /// A world other than HorizonXI with no folder yet: "<FFXI on Mac>/Games/<world>" in the
     /// folder already chosen, or one the user chooses now. False when cancelled.
+    /// AscensionXI's job (Runner.syncAscension) in its client folder, which is chosen first the
+    /// way every world's is (placeWorldData). Other worlds' clients are offered as donors of
+    /// identical files only when every file is going to be checked anyway (Setup, Repair, or a
+    /// folder no update has run in yet).
+    private func ascensionJob(for s: Server, install i: Install, full: Bool, runner r: Runner,
+                              done: @escaping (AscensionSync.Outcome) -> Void) {
+        var w = s
+        if w.dataPath.isEmpty {
+            guard placeWorldData(for: w), let again = store.servers.first(where: { $0.name == w.name }),
+                  !again.dataPath.isEmpty else { done(.failed("No folder chosen for \(w.name).")); return }
+            w = again
+        }
+        let root = URL(fileURLWithPath: w.dataPath, isDirectory: true)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let dats = Install.winePath(root.appendingPathComponent("Ashita/polplugins/DATs"), driveC: i.driveC)
+        let checksAll = full || !FileManager.default.fileExists(atPath: root.appendingPathComponent(".base-manifest.json").path)
+        let donors = checksAll ? AscensionChannel.donorClients(store.servers.filter { $0.name != w.name }, base: i) : []
+        r.syncAscension(root: root, datsWine: dats, install: full, donors: donors, done: done)
+    }
+
     private func placeWorldData(for s: Server) -> Bool {
         if let folder = InstallLocation.remembered,
            FileManager.default.fileExists(atPath: folder.path),
@@ -2426,6 +2448,20 @@ struct ContentView: View {
         if s.installKind == .horizonTorrent || s.local {
             return await withCheckedContinuation { c in
                 r.installHorizon(into: i.gameDir) { ok in c.resume(returning: ok) }
+            }
+        }
+        if s.installKind == .ascensionChannel {
+            return await withCheckedContinuation { c in
+                ascensionJob(for: s, install: i, full: true, runner: r) { outcome in
+                    switch outcome {
+                    case .ok: c.resume(returning: true)
+                    case .offline(let why):
+                        // Setup and Repair check every file: an unreachable channel checked nothing.
+                        r.appendLine("!! " + why.replacingOccurrences(of: "; playing with the files from the last update", with: ""))
+                        c.resume(returning: false)
+                    case .stopped, .failed: c.resume(returning: false)
+                    }
+                }
             }
         }
         if s.installKind == .website {
@@ -2620,6 +2656,10 @@ struct ContentView: View {
             runner.appendLine("!! --play\(from): \(store.selected?.name ?? "this world") is already running in this launcher")
         }
         else {
+            // Selecting the world that was already selected changes nothing, so the account saved
+            // for it since the window opened was never read (b71, 2026-10-24: "--play --world
+            // AscensionXI" went in with empty fields). Read it here when the field is empty.
+            if user.isEmpty, let s = store.selected, !s.local { user = Credentials.username(forWorld: s.name) }
             if remember, !user.isEmpty, pass.isEmpty { pass = Credentials.password(for: user, world: store.selected?.name ?? "") }
             await recheckAsync()
             if store.selected?.local == true {
@@ -2720,7 +2760,7 @@ struct ContentView: View {
         launchClient(i, server: server, runner: r)
     }
 
-    private func launchClient(_ i: Install, server: Server, runner r: Runner) {
+    private func launchClient(_ i: Install, server: Server, runner r: Runner, synced: Bool = false) {
         // Restart was pressed while the local server was starting for this launch.
         if updateInstalling {
             r.logFileOnly("!! not playing: the launcher is restarting to update")
@@ -2769,6 +2809,30 @@ struct ContentView: View {
             return
         }
 
+        // AscensionXI's update, before every Play, as their own launcher does it (AscensionSync):
+        // whatever their client, DATs, addons and loader changed. A few seconds when nothing did;
+        // the button shows "Updating…" while it runs. After the gate, so a Play that would be
+        // refused anyway (another world's registry live) downloads nothing first.
+        if server.installKind == .ascensionChannel, !synced {
+            ascensionJob(for: server, install: i, full: false, runner: r) { outcome in
+                switch outcome {
+                case .ok, .offline: break
+                case .stopped: return
+                case .failed(let why): notice = why; return
+                }
+                // Another world picked while it updated: the window's account fields now hold that
+                // world's login, which must never go to AscensionXI's server (b71 review). Play again.
+                guard store.selectedID == server.name else {
+                    r.logFileOnly("!! \(server.name) updated; not started, \(store.selectedID) was selected meanwhile")
+                    return
+                }
+                // The Ashita folder is found again: a first update may have just created it.
+                let now = store.servers.first { $0.name == server.name } ?? server
+                launchClient((active ?? i).forServer(now), server: now, runner: r, synced: true)
+            }
+            return
+        }
+
         // Pre-game version check. The login server does this anyway and answers "The game's
         // data has been updated" — better to say so here, name the versions, and (for HorizonXI,
         // whose updates are public) fix it before launching.
@@ -2798,7 +2862,8 @@ struct ContentView: View {
             for line in Credentials.prepareProfile(for: server, in: i) { r.logFileOnly("i  " + line) }
             if !account.user.isEmpty, !account.pass.isEmpty {
                 if !Credentials.apply(user: account.user, password: account.pass, to: i,
-                                      profile: server.bootProfile, server: server.host) {
+                                      profile: server.bootProfile, server: server.host,
+                                      options: server.loaderOptions) {
                     notice = "Could not write config/boot/\(server.bootProfile) — launching with its existing account."
                     r.logFileOnly("!! " + notice)
                     if i.gameDir.path.hasPrefix("/Volumes/") {

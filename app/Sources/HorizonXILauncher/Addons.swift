@@ -167,6 +167,20 @@ struct AddonSuite {
         let pluginBody = items.filter { $0.isPlugin && $0.enabled }
             .map { "/load \($0.name)" }
 
+        // AscensionXI's launcher owns one fenced block of this file (AscensionScript). Markers of
+        // our own beside it would leave two blocks that each launcher rewrites in turn; write
+        // theirs instead, switching only the items shown here (winefix and the launcher's own
+        // addons are not offered, and keep whatever line they have).
+        if AscensionScript.hasFence(text), !(text.contains(pluginsStart) && text.contains(addonsStart)) {
+            var script = AscensionScript(text)
+            for item in items {
+                let kind = item.isPlugin ? "plugin" : "addon"
+                if item.enabled { script.enable(kind: kind, item.name) } else { script.disable(kind: kind, item.name) }
+            }
+            guard let out = script.changed else { return true }
+            return Credentials.writeFile(out, to: url)
+        }
+
         if !(text.contains(pluginsStart) && text.contains(addonsStart)) {
             adoptScript(&lines)
         }
