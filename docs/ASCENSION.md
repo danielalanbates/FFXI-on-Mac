@@ -121,12 +121,15 @@ Also part of b71 because AscensionXI exposed them:
   expected answer for that account, so the loader version is accepted. The launcher caught it and
   stopped the loader. The profile was put back as it was.
 
+- **Daniel's own account, 16:03–16:06 the same day** (he sent it mid-session): one Play through
+  the window. "Successfully logged in", "Connected to server!", "Hairpin fix applied!", the client
+  booted, "Receiving character list", and the game showed character select with the AscensionXI
+  title art (their DAT overlay) and his character. Left there for him; not entered into the world.
+  The client took about two minutes from login to character select (16:04:06 → 16:06:09).
+
 ## Not verified
 
-- **Logging in, character select, zoning, playing.** Needs a real AscensionXI account: register
-  at <https://www.ascensionffxi.com/register> (email), then create a character on their website
-  (`/account/create-character`) — the game cannot make one. Then type the account in the launcher
-  and Play.
+- **Zoning in and playing** (Daniel, at character select).
 - Frame rate on their client at their default graphics (their profile ships 1920×1080 with 2048
   background resolution; the Play-time fit opened it at 1648×928 on this screen).
 - Their HD pack on the Mac (11 GB) — off by default; unmeasured.

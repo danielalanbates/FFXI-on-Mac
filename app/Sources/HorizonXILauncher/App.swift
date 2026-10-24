@@ -2649,6 +2649,10 @@ struct ContentView: View {
             runner.appendLine("!! --play\(from): \(store.selected?.name ?? "this world") is already running in this launcher")
         }
         else {
+            // Selecting the world that was already selected changes nothing, so the account saved
+            // for it since the window opened was never read (b71, 2026-10-24: "--play --world
+            // AscensionXI" went in with empty fields). Read it here when the field is empty.
+            if user.isEmpty, let s = store.selected, !s.local { user = Credentials.username(forWorld: s.name) }
             if remember, !user.isEmpty, pass.isEmpty { pass = Credentials.password(for: user, world: store.selected?.name ?? "") }
             await recheckAsync()
             if store.selected?.local == true {

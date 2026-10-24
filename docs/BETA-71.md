@@ -15,6 +15,8 @@ One new world and four fixes it exposed:
   `--hairpin`).
 - The LuaJIT guard Play adds to addons no longer looks like a change to AscensionXI's sync.
 - The Addons… sheet edits AscensionXI's own block of `default.txt` instead of adding a second one.
+- A forwarded `--play` for the world already selected reads the account saved for it since the
+  window opened (it went in with empty fields).
 
 ## Files
 
@@ -46,10 +48,9 @@ One new world and four fixes it exposed:
 
 ## Needs Daniel
 
-1. An AscensionXI account (<https://www.ascensionffxi.com/register>, then a character on their
-   site). Select **AscensionXI**, type it, **Play**. Watch for: the button reads "Updating…" for a
-   few seconds, then the game; the title screen shows AscensionXI's own art; addons load
-   (`/addon list` in game shows their defaults: axmap, casper, chains, dlac, nexus, …).
+1. **Logged in on 2026-10-24** with Daniel's account: character select reached, his character
+   listed (ASCENSION.md › Verified). Still to see in the world: addons load (`/addon list` shows
+   their defaults: axmap, casper, chains, dlac, nexus, …), zoning, `/shutdown`.
 2. Frame rate on their default profile (1920×1080 window, 2048 background); compare with
    HorizonXI at the same settings.
 3. Nothing changed for HorizonXI: Play it once and confirm it is as before (its account fields,
