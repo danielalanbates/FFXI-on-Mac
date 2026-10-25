@@ -798,6 +798,7 @@ final class Sessions: ObservableObject {
     func refreshElsewhere(install: Install? = nil, profiles: [(world: String, profile: String)] = [],
                           servers: [Server] = []) async {
         let before = Runner.playingGroups
+        let knownGroups = Runner.playingPrefixes
         let prefix = install.map { $0.prefix.path } ?? ""
         let recorded = Runner.serverDirs
         let (snap, boot, evidence, prefixPath, serverless, staleDirs) = await Task.detached {
@@ -806,14 +807,20 @@ final class Sessions: ObservableObject {
             var boot: [String: String] = [:]
             if let install {
                 for p in profiles {
-                    if let h = Credentials.bootServer(in: install, profile: p.profile) {
+                    let worldInstall = servers.first(where: { $0.name == p.world }).map { install.forServer($0) } ?? install
+                    if let h = Credentials.bootServer(in: worldInstall, profile: p.profile) {
                         boot[p.world] = LiveClients.normalize(h)
                     }
                 }
             }
             let snap = LiveClients.snapshot()
             guard !prefix.isEmpty else { return (snap, boot, ([:], [:]), "", [], []) }
-            let ev = Leftovers.evidence(snap, ownGroups: before.groups, ownHostsWithoutGroup: before.hostsWithoutGroup)
+            var ev = Leftovers.evidence(snap, ownGroups: before.groups, ownHostsWithoutGroup: before.hostsWithoutGroup)
+            if let install {
+                let found = PrefixScope.prefixes(snap, knownGroups: knownGroups,
+                                                 knownPrefixes: Runner.prefixPaths(install))
+                ev.groups = found
+            }
             // The prefix is touched (realpath, stat; it may sit on a sleeping drive) only when
             // there is something to decide: almost every refresh has nothing left over.
             let left = snap.ownWineservers.isEmpty && !snap.ownSystemPrograms.isEmpty
@@ -838,24 +845,26 @@ final class Sessions: ObservableObject {
         if let install, !prefixPath.isEmpty, !Runner.workInFlight, !SingleInstance.otherLauncherAlive() {
             // Against this launcher's sessions as they are now, not as they were before the scan.
             let own = Runner.playingGroups
-            let orphans = Leftovers.adoptable(snap, ownGroups: own.groups, ownHostsWithoutGroup: own.hostsWithoutGroup,
-                                              prefix: prefixPath, prefixOfGroup: evidence.groups,
-                                              serverPrefixes: evidence.servers, otherLauncherAlive: false)
-            for o in orphans {
+            for w in servers {
+                let worldInstall = install.forServer(w)
+                let orphans = Leftovers.adoptable(snap, ownGroups: own.groups, ownHostsWithoutGroup: own.hostsWithoutGroup,
+                                                  prefix: OwnWine.resolve(worldInstall.prefix.path), prefixOfGroup: evidence.groups,
+                                                  serverPrefixes: evidence.servers, otherLauncherAlive: false)
+                for o in orphans where evidence.groups[o.group] == OwnWine.resolve(worldInstall.prefix.path) {
                 // The world whose Host field or boot profile's --server the loader was given. A
                 // client of no listed world stays elsewhere: its session would write its window
                 // size into some other world's boot profile when it ended.
-                guard let w = servers.first(where: { s in
-                    Set([LiveClients.normalize(s.host), self.bootHosts[s.name] ?? ""]).subtracting([""]).contains(o.host)
-                }) else { continue }
+                guard Set([LiveClients.normalize(w.host), self.bootHosts[w.name] ?? ""]).subtracting([""]).contains(o.host),
+                      !Runner.playingGroups.groups.contains(o.group) else { continue }
                 // The world's own session when it is idle, else a further one (a world that
                 // allows several clients, one of them running here already).
                 let idle = runner(for: w.name)
                 let r = !idle.running && !idle.busy ? idle : newSession(for: w.name)
                 // Pointed at that world's folder only now, for the one world adopted: finding a
                 // world's client can walk its drive, which no refresh should do for every world.
-                r.adopt(group: o.group, host: o.host, world: w.name, install: install.forServer(w),
+                r.adopt(group: o.group, host: o.host, world: w.name, install: worldInstall,
                         profile: w.bootProfile, pids: o.pids)
+                }
             }
             if !staleDirs.isEmpty, !cleaning {
                 cleaning = true

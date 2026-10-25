@@ -56,6 +56,7 @@ extension Headless {
         x.hasGame = p.hasGame
         x.patchedWineMissing = p.patchedWineMissing
         x.rosettaMissing = p.rosettaMissing
+        x.multiServerNeeded = p.multiServerNeeded
         x.horizonInstalled = p.horizonInstalled
         x.clientInstalled = p.clientInstalled
         x.clientRequired = server.requiredClient

@@ -91,6 +91,8 @@ enum PrimaryAction: Equatable {
         /// The patched game Wine (wine-coop) is not on this Mac: Setup downloads it
         /// (scripts/game-wine.sh). See docs/WINE-BUILD.md.
         case gameWine
+        /// An enabled world needs its own Windows environment before it can play alongside others.
+        case multiServer
         /// The local world's server is not built yet. `lowSpace`: the disk is below its floor
         /// and "Set up anyway" is not ticked, so the click asks first.
         case localServer(lowSpace: Bool)
@@ -137,6 +139,7 @@ enum PrimaryAction: Equatable {
             case .game(let partial): return partial ? "game-files" : "game"
             case .chooseFolder: return "choose-folder"
             case .gameWine: return "game-wine"
+            case .multiServer: return "multi-server"
             case .localServer: return "local-server"
             }
         case .repair(let n):
@@ -183,6 +186,7 @@ struct PrimaryInputs {
     var hasGame = true
     var patchedWineMissing = false
     var rosettaMissing = false
+    var multiServerNeeded = false
 
     var restartingLauncher = false
     /// Setup's chain is running (it shows progress even between its jobs).
@@ -268,6 +272,7 @@ enum Primary {
         if x.rosettaMissing { return make(.setup(.rosetta), x) }
         if bad.contains(where: { $0.id == "wine" }) { return make(.setup(.wine), x) }
         if x.patchedWineMissing { return make(.setup(.gameWine), x) }
+        if x.multiServerNeeded { return make(.setup(.multiServer), x) }
         if !x.hasGame || bad.contains(where: { gameFiles.contains($0.id) }) {
             // Partial: Ashita or the base data is there, so this is a repair of the download, not
             // a first one.
@@ -361,6 +366,9 @@ enum Primary {
                 return .init(action: a, label: "Setup", enabled: true, reason: "Choose where \(w)'s game files are.")
             case .gameWine:
                 return .init(action: a, label: "Setup", enabled: true, reason: "The game's Wine isn't installed yet.")
+            case .multiServer:
+                return .init(action: a, label: "Setup", enabled: true,
+                             reason: "Set up multi-server play (about 1 GB extra).")
             case .localServer(let lowSpace):
                 return .init(action: a, label: "Setup", enabled: true,
                              reason: lowSpace ? "Not enough free space for the local server."
@@ -404,6 +412,7 @@ enum Primary {
         var clientInstalled: String?
         var patchedWineMissing = false
         var rosettaMissing = false
+        var multiServerNeeded = false
         var profileHasAccount = false
         /// The game's files are on (or link to) another drive than Wine, and every drive is there:
         /// the Setup line offers Move… (InstallMove.offered).
@@ -415,6 +424,7 @@ enum Primary {
                       loader: String = "", template: String = "") -> Probe {
         var p = Probe()
         p.checks = Preflight.run(i, profile: profile, loader: loader, template: template)
+        p.multiServerNeeded = !WorldPrefix.ready(i)
         for d in Set(p.checks.filter { $0.state == .bad }.compactMap(\.drive)) {
             p.driveStates[d] = Preflight.driveState(d)
         }

@@ -170,14 +170,15 @@ enum RendererSetup {
 
     /// The file half of `apply` for a `.skip`: put the DXVK shim beside this world's own client
     /// if it is not there yet. No registry write, no wineserver.
-    static func ensureFiles(_ renderer: Renderer, for install: Install, log: (String) -> Void) {
+    static func ensureFiles(_ renderer: Renderer, for install: Install, sharedGameLive: Bool = false,
+                            log: (String) -> Void) {
         guard renderer.needsDXVK,
               let d3d8to9 = Bundle.main.url(forResource: "d3d8to9", withExtension: "dll"),
               let dxvk = Bundle.main.url(forResource: "dxvk-1.10.3-x32-d3d9-horizonxi", withExtension: "dll")
         else { return }
         let fm = FileManager.default
         var placed = 0
-        for dir in dllDirs(install) where fm.fileExists(atPath: dir.path) {
+        for dir in dllDirs(install, prefixOnly: sharedGameLive) where fm.fileExists(atPath: dir.path) {
             for (src, name) in [(d3d8to9, "d3d8.dll"), (dxvk, "d3d9.dll")] {
                 let dst = dir.appendingPathComponent(name)
                 guard !fm.contentsEqual(atPath: src.path, andPath: dst.path) else { continue }
@@ -192,7 +193,8 @@ enum RendererSetup {
     /// is a wine start under Rosetta through osascript, and the old unconditional dozen of them
     /// (plus re-copying the DLLs into five folders) was most of the Play beach-ball in #25.
     /// The order is unchanged; steps that find nothing to do are skipped, and say nothing.
-    static func apply(_ renderer: Renderer, to install: Install, log: (String) -> Void) {
+    static func apply(_ renderer: Renderer, to install: Install, sharedGameLive: Bool = false,
+                      sharedRuntimeLive: Bool = false, log: (String) -> Void) {
         stopWineserver(install)
         // Read after the stop: a wineserver flushes the registry as it exits, so this is what the
         // next wine will see. nil (unreadable) means every value is written, as before.
@@ -204,14 +206,16 @@ enum RendererSetup {
                                type: "REG_DWORD", data: String(format: "0x%x", maxVersionGL))
 
         if renderer.needsDXVK {
-            changed += installDXVK(install, hive: hive, log: log)
+            changed += installDXVK(install, hive: hive, sharedGameLive: sharedGameLive,
+                                   sharedRuntimeLive: sharedRuntimeLive, log: log)
         } else {
-            changed += removeDXVK(install, hive: hive, log: log)
+            changed += removeDXVK(install, hive: hive, sharedGameLive: sharedGameLive,
+                                  sharedRuntimeLive: sharedRuntimeLive, log: log)
         }
         if renderer == .vulkan {
-            patchDXTFormats(install, log: log)
+            if !sharedRuntimeLive { patchDXTFormats(install, log: log) }
             // wined3d's Vulkan renderer needs a MoltenVK that is not the ancient bundled one.
-            if linkMoltenVK(install, toCX: true) { changed += 1 }
+            if !sharedRuntimeLive, linkMoltenVK(install, toCX: true) { changed += 1 }
         }
         stopWineserver(install)
         if changed > 0 { log("renderer: \(renderer.title)") }
@@ -315,8 +319,9 @@ enum RendererSetup {
 
     /// Directories whose processes load d3d8: Ashita injects into the loader, so the shim has to
     /// sit beside every one of them, not only the game directory.
-    private static func dllDirs(_ i: Install) -> [URL] {
-        [i.driveC.appendingPathComponent("windows/syswow64"),
+    private static func dllDirs(_ i: Install, prefixOnly: Bool = false) -> [URL] {
+        if prefixOnly { return [i.driveC.appendingPathComponent("windows/syswow64")] }
+        return [i.driveC.appendingPathComponent("windows/syswow64"),
          i.gameDir,
          // v3 clients (Eden, ValhallaXI, FFEra) call it ffxi-bootmod, not bootloader.
          i.bootLoaderDir,
@@ -325,7 +330,8 @@ enum RendererSetup {
     }
 
     /// Returns how many things it changed (DLLs, registry values, links, config).
-    private static func installDXVK(_ i: Install, hive: Hive?, log: (String) -> Void) -> Int {
+    private static func installDXVK(_ i: Install, hive: Hive?, sharedGameLive: Bool,
+                                    sharedRuntimeLive: Bool, log: (String) -> Void) -> Int {
         let fm = FileManager.default
         guard let d3d8to9 = Bundle.main.url(forResource: "d3d8to9", withExtension: "dll"),
               let dxvk = Bundle.main.url(forResource: "dxvk-1.10.3-x32-d3d9-horizonxi", withExtension: "dll")
@@ -344,7 +350,7 @@ enum RendererSetup {
             }
         }
         // Same guard as ensureFiles: a DLL that is already the bundled one is left alone.
-        for dir in dllDirs(i) where fm.fileExists(atPath: dir.path) {
+        for dir in dllDirs(i, prefixOnly: sharedGameLive) where fm.fileExists(atPath: dir.path) {
             for (src, name) in [(d3d8to9, "d3d8.dll"), (dxvk, "d3d9.dll")] {
                 let dst = dir.appendingPathComponent(name)
                 guard !fm.contentsEqual(atPath: src.path, andPath: dst.path) else { continue }
@@ -353,18 +359,21 @@ enum RendererSetup {
         }
         changed += regIfNeeded(i, hive, add: #"HKCU\Software\Wine\DllOverrides"#, name: "*d3d8", type: "REG_SZ", data: "native")
         changed += regIfNeeded(i, hive, add: #"HKCU\Software\Wine\DllOverrides"#, name: "*d3d9", type: "REG_SZ", data: "native")
-        if linkMoltenVK(i, toCX: true) { changed += 1 }
-        if upgradeCoopMoltenVK(log: log) { changed += 1 }
+        if !sharedRuntimeLive {
+            if linkMoltenVK(i, toCX: true) { changed += 1 }
+            if upgradeCoopMoltenVK(log: log) { changed += 1 }
+        }
         if syncDXVKConfig(i) { log("renderer: dxvk.conf updated"); changed += 1 }
         if changed > 0 { log("renderer: DXVK 1.10.3 + d3d8to9 installed") }
         return changed
     }
 
     /// Returns how many things it changed.
-    private static func removeDXVK(_ i: Install, hive: Hive?, log: (String) -> Void) -> Int {
+    private static func removeDXVK(_ i: Install, hive: Hive?, sharedGameLive: Bool,
+                                   sharedRuntimeLive: Bool, log: (String) -> Void) -> Int {
         let fm = FileManager.default
         var changed = 0
-        for dir in dllDirs(i) {
+        for dir in dllDirs(i, prefixOnly: sharedGameLive) {
             for name in ["d3d8.dll", "d3d9.dll"] {
                 let f = dir.appendingPathComponent(name)
                 // syswow64 holds wine's own builtins — restore, do not delete
@@ -392,7 +401,7 @@ enum RendererSetup {
             regDelete(i, key: #"HKCU\Software\Wine\DllOverrides"#, name: name)
             changed += 1
         }
-        if linkMoltenVK(i, toCX: false) { changed += 1 }
+        if !sharedRuntimeLive, linkMoltenVK(i, toCX: false) { changed += 1 }
         return changed
     }
 

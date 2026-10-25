@@ -97,6 +97,13 @@ Pick one from **CHANGE WORLD**. Each world keeps its own game folder and its own
 have several installed side by side. **Every one of them is a single *Setup* button** — the
 differences below are just what happens behind it.
 
+**Beta 81: optional multi-server play.** Check **Enable multi-server play** under each world's
+title, then press **Setup**, to give that world its own Windows environment. It uses about
+1 GB extra per enabled world on the Wine drive and reuses existing game files. With separate
+environments, different worlds can start in either order; server client limits still apply.
+The option starts off and unchecking it retains its files. This is a local beta feature;
+see [the beta notes and validation status](docs/BETA-81.md).
+
 | World | What *Setup* does for the game | Tested end-to-end here |
 | --- | --- | --- |
 | **HorizonXI** | fetches their client the way their own launcher does — a 9.4 GB download, then their updates, up to the current version | ✅ downloaded, launched, reached login |

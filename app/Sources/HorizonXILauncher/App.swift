@@ -363,6 +363,7 @@ struct ContentView: View {
     /// Setup's chain (runSetup) is running, and how far, for the button: the whole chain as one
     /// figure that only rises (SetupMeter), the step it is on, and the setup sheet's own step.
     @State private var setupRunning = false
+    @State private var preparingMultiServer = false
     final class MeterBox { var meter = SetupMeter() }
     @State private var setupMeter = MeterBox()
     @State private var setupAt: SetupMeter.Step?
@@ -411,6 +412,7 @@ struct ContentView: View {
         x.hasGame = probe.hasGame
         x.patchedWineMissing = probe.patchedWineMissing
         x.rosettaMissing = probe.rosettaMissing
+        x.multiServerNeeded = probe.multiServerNeeded
         x.restartingLauncher = updateInstalling
         x.setupRunning = setupRunning
         if setupRunning {
@@ -634,6 +636,7 @@ struct ContentView: View {
                         LinearGradient(colors: [Vana.text, Vana.crystal],
                                        startPoint: .top, endPoint: .bottom))
                     .shadow(color: Vana.crystal.opacity(0.35), radius: 12, y: 2)
+                multiServerControl
                 Text("FINAL FANTASY XI ON APPLE SILICON")
                     .font(.system(size: 13, weight: .semibold))
                     .tracking(3.5)
@@ -682,6 +685,69 @@ struct ContentView: View {
             logStrip
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// A separate Windows environment is optional: selecting this alone downloads nothing.
+    /// Setup is the explicit action that creates it, after the extra space is shown here.
+    private var multiServerControl: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 7) {
+                Toggle("Enable multi-server play", isOn: Binding(
+                    get: { store.selected?.multiServerPlay == true },
+                    set: { setMultiServerPlay($0) }))
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Vana.text)
+                    .disabled(store.selected == nil || multiServerToggleBlocked)
+                    .help("Allows this world to play alongside other worlds. Server client and account limits still apply. Changing this never closes a game; unchecking keeps its extra files for reuse.")
+                if preparingMultiServer { ProgressView().controlSize(.small) }
+            }
+            if store.selected?.multiServerPlay == true {
+                Text("About 1 GB extra per server on \(selected?.volume?.lastPathComponent == "/" ? "this Mac" : selected?.volume?.lastPathComponent ?? "the Wine drive"). Existing game files are reused.")
+                    .font(.system(size: 11)).foregroundStyle(Vana.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var multiServerToggleBlocked: Bool {
+        guard let s = store.selected else { return true }
+        return setupRunning || preparingMultiServer || Runner.workInFlight || LocalServer.workInFlight
+            || launchUnderWay || sessions.live.contains { $0.world == s.name }
+            || sessions.runningElsewhere(world: s.name, host: s.host)
+            || sessions.elsewhere.keys.contains("")
+    }
+
+    /// The launch lock makes the final process check and setting change one operation. A launch
+    /// that has not yet appeared in `ps` holds that same lock, so it cannot be missed here.
+    private func setMultiServerPlay(_ enabled: Bool) {
+        guard var s = store.selected, s.multiServerPlay != enabled else { return }
+        guard !multiServerToggleBlocked else {
+            notice = "Wait for this world's game and any setup work to finish before changing multi-server play."
+            return
+        }
+        guard let lock = LaunchLock.acquire() else {
+            notice = "A game is starting or setup is running. Try changing multi-server play again when it finishes."
+            return
+        }
+        defer { LaunchLock.release(lock) }
+        let hosts = Set(([s.host] + [active.flatMap { Credentials.bootServer(in: $0, profile: s.bootProfile) }]
+            .compactMap { $0 }).map(LiveClients.normalize).filter { !$0.isEmpty })
+        let live = LiveClients.snapshot().clients
+        guard !live.contains(where: { $0.host.isEmpty || hosts.contains(LiveClients.normalize($0.host)) }) else {
+            notice = "This world or an unidentified Wine client is running. Finish it before changing multi-server play."
+            return
+        }
+        s.multiServerPlay = enabled
+        store.update(s)
+        notice = ""
+        checksGeneration += 1
+        checksWorld = nil
+        probe = Primary.Probe()
+        Task {
+            await refreshElsewhere()
+            await recheckAsync()
+        }
     }
 
     /// The selected world's posts, when it publishes a feed and has any: the news panel's rows.
@@ -1815,7 +1881,7 @@ struct ContentView: View {
 
     /// Clients elsewhere, and what an earlier launcher left behind (Sessions.refreshElsewhere).
     private func refreshElsewhere() async {
-        await sessions.refreshElsewhere(install: active, profiles: bootProfiles, servers: store.servers)
+        await sessions.refreshElsewhere(install: selected, profiles: bootProfiles, servers: store.servers)
     }
 
     /// Clients this window did not start, named by the world whose host (or boot profile's
@@ -2029,6 +2095,7 @@ struct ContentView: View {
             case .prefix?: return 0.75
             }
         case .gameWine?, .game?: return runner.updatingHorizon ? runner.updateProgress : runner.ascensionProgress ?? 0
+        case .multiServer?: return 0
         case .files?: return runner.moveProgress ?? 0
         default: return 0
         }
@@ -2042,6 +2109,7 @@ struct ContentView: View {
         case .wine?: return bootstrapStep.map(SetupStage.init)
         case .files?: return runner.busy ? .copyingFiles : .movingFiles
         case .gameWine?: return .gameWine
+        case .multiServer?: return .multiServer
         case .game?: return runner.updatingHorizon ? runner.stage : nil
         case .configure?: return .finishing
         case .localServer?: return .buildingServer
@@ -2163,10 +2231,29 @@ struct ContentView: View {
             case .gameWine:
                 setupStep(.gameWine)
                 guard await setupGameWineStep(r) else { return }
+            case .multiServer:
+                setupStep(.multiServer)
+                guard await setupMultiServerStep(r) else { return }
             case .localServer:
                 setupStep(.localServer)
                 guard await setupLocalServerStep(r) else { return }
             }
+        }
+    }
+
+    private func setupMultiServerStep(_ r: Runner) async -> Bool {
+        guard let base = selected, let server = store.selected, server.multiServerPlay else { return false }
+        guard !preparingMultiServer else { return false }
+        preparingMultiServer = true
+        defer { preparingMultiServer = false }
+        do {
+            try await r.prepareMultiServer(base: base, server: server)
+            return true
+        } catch {
+            let why = "Multi-server setup failed: \(error.localizedDescription)"
+            r.appendLine("!! " + why)
+            if store.selectedID == server.name { notice = why }
+            return false
         }
     }
 
@@ -2782,7 +2869,7 @@ struct ContentView: View {
             runner.logFileOnly("!! not playing: the launcher is restarting to update")
             return
         }
-        if runner.busy {
+        if runner.busy || setupRunning || preparingMultiServer {
             // Only a forwarded --play gets here (the button is the job's progress); not an error to keep.
             info("Wait for the install/update to finish")
             runner.logFileOnly("!! " + notice)
@@ -2855,6 +2942,12 @@ struct ContentView: View {
             r.logFileOnly("!! " + notice)
             return
         }
+        guard WorldPrefix.ready(i) else {
+            notice = "Set up multi-server play before starting \(server.name)."
+            r.logFileOnly("!! " + notice)
+            recheck()
+            return
+        }
         // A world the install has no boot profile for — the local one, on every machine — needs
         // that file to exist before anything can be written into it.
         if !Credentials.ensureProfile(server.bootProfile, in: i, loader: server.loader,
@@ -2880,11 +2973,12 @@ struct ContentView: View {
         }
         // Every refusal before any shared client file is rewritten: pivot.ini and the boot
         // profile belong to whatever world is already running too.
-        if let why = r.gate(i, renderer: effective.renderer,
+        let launchGate = r.gate(i, renderer: effective.renderer,
                             sync: MultiWorld.syncMode(msync: effective.msync, esync: effective.esync),
                             msyncAllowed: server.msync, profile: server.bootProfile,
                             world: server.name, host: server.host,
-                            maxClients: server.maxClients).refusal {
+                            maxClients: server.maxClients)
+        if let why = launchGate.refusal {
             notice = why
             r.logFileOnly("!! " + why)
             return
@@ -2894,7 +2988,7 @@ struct ContentView: View {
         // VanadreamsSync): whatever the client, DATs, addons and loader changed. Seconds when nothing did;
         // the button shows "Updating…" while it runs. After the gate, so a Play that would be
         // refused anyway (another world's registry live) downloads nothing first.
-        if server.installKind.updatesBeforePlay, !synced {
+        if server.installKind.updatesBeforePlay, !synced, !launchGate.gameFilesLive {
             worldJob(for: server, install: i, full: false, runner: r) { outcome in
                 switch outcome {
                 case .ok, .offline: break

@@ -74,6 +74,13 @@ enum Preflight {
             install.wine.path, "missing \(install.wine.path)",
             short: "Wine isn't installed yet.", path: install.wine.path)
 
+        if install.isWorldPrefix {
+            add("multiserver", "Multi-server Windows configuration", WorldPrefix.ready(install),
+                "Ready — existing game files are reused",
+                "This world's separate Windows configuration needs Setup.",
+                short: "Set up multi-server play for this world.", path: install.prefix.path)
+        }
+
         add("client", "Game folder", fm.fileExists(atPath: install.gameDir.path),
             install.gameDir.path, "no client at \(install.gameDir.path)",
             short: "The game isn't installed yet.", path: install.gameDir.path)

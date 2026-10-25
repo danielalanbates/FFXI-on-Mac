@@ -107,6 +107,9 @@ struct Server: Codable, Identifiable, Hashable {
     /// rules read and stays at 1. Not the user's to edit: refreshed from `builtins` like the other
     /// curated fields.
     var maxClients: Int = 1
+    /// Opt-in to a separate Windows environment for this world. Existing game files are reused.
+    /// A user choice: never refreshed from the curated built-in client limits.
+    var multiServerPlay: Bool = false
     var allowsMultipleClients: Bool { maxClients > 1 }
     static let noClientCap = Int.max
     /// The boot loader (in the client's `bootloader/`) this world's login server needs, when it
@@ -194,7 +197,7 @@ struct Server: Codable, Identifiable, Hashable {
          installURL: String = "", installKind: InstallKind = .website, installNote: String = "",
          accountURL: String = "", accountHow: String = "", discordURL: String = "",
          renderer: Renderer? = nil, x87: Bool = true, msync: Bool = true,
-         maxClients: Int = 1, loader: String = "", loaderOptions: [String] = [], createsAccountAtLogin: Bool = false,
+         maxClients: Int = 1, multiServerPlay: Bool = false, loader: String = "", loaderOptions: [String] = [], createsAccountAtLogin: Bool = false,
          bootTemplate: String = "",
          newsURL: String = "", newsPageURL: String = "") {
         self.codebase = codebase; self.retired = retired
@@ -205,7 +208,7 @@ struct Server: Codable, Identifiable, Hashable {
         self.installURL = installURL; self.installKind = installKind; self.installNote = installNote
         self.accountURL = accountURL; self.accountHow = accountHow; self.discordURL = discordURL
         self.renderer = renderer; self.x87 = x87; self.msync = msync
-        self.maxClients = maxClients
+        self.maxClients = maxClients; self.multiServerPlay = multiServerPlay
         self.loader = loader; self.loaderOptions = loaderOptions; self.bootTemplate = bootTemplate
         self.createsAccountAtLogin = createsAccountAtLogin
         self.newsURL = newsURL; self.newsPageURL = newsPageURL
@@ -239,6 +242,7 @@ struct Server: Codable, Identifiable, Hashable {
         x87         = try c.decodeIfPresent(Bool.self, forKey: .x87) ?? Server.builtins.first { $0.name == name }?.x87 ?? true
         msync       = try c.decodeIfPresent(Bool.self, forKey: .msync) ?? Server.builtins.first { $0.name == name }?.msync ?? true
         maxClients  = Server.all.first { $0.name == name }?.maxClients ?? 1
+        multiServerPlay = try c.decodeIfPresent(Bool.self, forKey: .multiServerPlay) ?? false
         loader      = Server.all.first { $0.name == name }?.loader ?? ""
         loaderOptions = Server.all.first { $0.name == name }?.loaderOptions ?? []
         createsAccountAtLogin = Server.all.first { $0.name == name }?.createsAccountAtLogin ?? false
