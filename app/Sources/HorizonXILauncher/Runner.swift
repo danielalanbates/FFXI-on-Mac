@@ -697,6 +697,13 @@ final class Runner: ObservableObject {
         }, done: done)
     }
 
+    /// DriftwoodXI's client (retail files from `donors`), Ashita and addons (DriftwoodSync).
+    func syncDriftwood(root: URL, install: Bool, donors: [URL], done: @escaping (AscensionSync.Outcome) -> Void) {
+        runWorldJob(world: DriftwoodChannel.worldName, root: root, install: install, work: { stop, log, progress in
+            DriftwoodSync(root: root, stop: stop, log: log, progress: { _, f in progress(f) }).run(install: install, donors: donors)
+        }, done: done)
+    }
+
     /// Run CatsEyeXI's own launcher inside the prefix (scripts/catseye-launcher.sh). Their
     /// client only comes from that launcher; running it under wine is the whole integration.
     /// Make `C:\Games\<name>` inside the prefix point at the folder the user chose, so a Windows
