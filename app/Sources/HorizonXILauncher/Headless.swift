@@ -57,6 +57,8 @@ enum Headless {
             || a.contains("--pegasus-sync")
             || a.contains("--selftest-retail-world")
             || a.contains("--retail-world-sync")
+            || a.contains("--selftest-scythe")
+            || a.contains("--scythe-sync")
             || a.contains("--send-ashita")
             || a.contains("--carryover-report")
             || a.contains("--carryover-apply")
@@ -159,6 +161,8 @@ enum Headless {
         if args.contains("--pegasus-sync") { runPegasusSync(args) }
         if args.contains("--selftest-retail-world") { runRetailWorldSelfTest() }
         if args.contains("--retail-world-sync") { runRetailWorldSync(args) }
+        if args.contains("--selftest-scythe") { runScytheSelfTest() }
+        if args.contains("--scythe-sync") { runScytheSync(args) }
         if args.contains("--selftest-carryover") {
             runCarryOverSelfTest()
         }
@@ -779,9 +783,11 @@ enum Headless {
                        refusal(horizon, [], own: [-1]) != nil))
         // Vanadreams (b72): "As many accounts and characters as you want, boxing welcome" (fairywitch.ca).
         // MistXI (b75): "Dual boxing: Allowed ( maximum 2 per IP )" (mistxi.com/server-info).
-        checks.append(("only the local world, CatsEyeXI, MistXI and Vanadreams (cited rules) allow several clients",
+        // LevelDown 99 (b76): "Accounts – 2 Active, 1 Mule (only two logged in at a time)" (their wiki).
+        // Scythe (b76): "up to two accounts per player for dual-boxing, with both online simultaneously".
+        checks.append(("only the local world, CatsEyeXI, LevelDown 99, MistXI, Scythe and Vanadreams (cited rules) allow several clients",
                        Server.all.filter(\.allowsMultipleClients).map(\.name).sorted()
-                           == ["CatsEyeXI", "Local server", "MistXI", "Vanadreams"]))
+                           == ["CatsEyeXI", "LevelDown 99", "Local server", "MistXI", "Scythe", "Vanadreams"]))
         let oneCats = LiveClients.parse("62001 62000 C:\\CatsEye\\xiloader.exe --server server.catseyexi.com\n"
                                         + "62002 62000 /x/x87sidecar-coop --cooperative /x/wine C:\\CatsEye\\xiloader.exe --server server.catseyexi.com\n").clients
         let twoCats = oneCats + LiveClients.parse("63001 63000 C:\\CatsEye\\xiloader.exe --server server.catseyexi.com\n").clients

@@ -63,6 +63,8 @@ the whole test in about ten seconds.
 | PegasusXI (added 2026-10-24) | open | yes (TLS 1.3) | `Your xiloader is too old. Please update to version '2.1.x'` (LSB JSON); their client ships stock LandSandBoat xiloader 2.1.1.0 | **LandSandBoat** |
 | MistXI (added 2026-10-24) | open | yes (TLS 1.3) | `Your xiloader is too old. Please update to version '2.1.x'` (LSB JSON) | **LandSandBoat** |
 | Moghouse XI (added 2026-10-24) | open | yes (TLS 1.3) | `Unsupported xiloader version 0.0.0. This server requires version 2.2.x.` (LSB JSON) | **LandSandBoat** |
+| LevelDown 99 (added 2026-10-24) | open | yes (TLS 1.3) | `Unsupported xiloader version 0.0.0. This server requires version 2.2.x.` (LSB JSON) | **LandSandBoat** |
+| Scythe (added 2026-10-24) | open | yes (TLS 1.3) | `Your xiloader is too old. Please update to version '2.1.x'` (LSB JSON); site footer "Powered by LandSandBoat" | **LandSandBoat** |
 | AscensionXI (added 2026-10-24) | open | yes (TLS 1.3) | `{"error_message":"Your xiloader is too old.\nPlease update to version '2.1.x'…"}`; their loader's own notice: "Based on LandSandBoat xiloader v2.1.2" | **LandSandBoat** |
 | Local server | n/a | n/a | it is LSB, built by `scripts/lsb-server.sh` | **LandSandBoat** |
 | Eden | open | **no** (handshake times out) | — | DarkStar lineage — *cut*. Corroborated twice over: their community wiki says Eden forked from DarkStar, and the loader in their own client identifies itself as `DarkStar Boot Loader (c) 2015 DarkStar Team` from `github.com/EdenServer/xiloader` |
