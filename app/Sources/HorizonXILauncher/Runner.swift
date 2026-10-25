@@ -93,6 +93,9 @@ final class Runner: ObservableObject {
     /// checks. A scan cannot see a launch until its injector exists; this can.
     private struct Playing {
         var world: String; var host: String; var group: pid_t?
+        var prefix: String = ""
+        var gameDir: String = ""
+        var renderer: Renderer? = nil
         /// The group has been seen holding the loader; see `MultiWorld.sessionPIDs`.
         var groupHeldLoader = false
     }
@@ -101,6 +104,43 @@ final class Runner: ObservableObject {
     static var anyPlaying: Bool { !playing.isEmpty }
 
     private func othersPlaying() -> Int { Runner.playing.keys.filter { $0 != ObjectIdentifier(self) }.count }
+
+    private func othersPlaying(in install: Install) -> Int {
+        let path = OwnWine.resolve(install.prefix.path)
+        return Runner.playing.filter { $0.key != ObjectIdentifier(self) }
+            .values.filter { $0.prefix.isEmpty || $0.prefix == path }.count
+    }
+
+    static var playingPrefixes: [pid_t: String] {
+        Dictionary(playing.values.compactMap { p in
+            p.group.map { ($0, p.prefix) }
+        }, uniquingKeysWith: { a, _ in a })
+    }
+
+    nonisolated static func prefixPaths(_ install: Install) -> [String] {
+        let children = (try? FileManager.default.contentsOfDirectory(at: install.sharedSupport,
+                                                                    includingPropertiesForKeys: nil)) ?? []
+        return children.filter { $0.lastPathComponent.hasPrefix("prefix") }.map(\.path)
+            + [install.prefix.path]
+    }
+
+    /// Unknown processes stay in the set. Only evidence of another prefix permits a mutation.
+    private func prefixClients(_ snapshot: LiveClients.Snapshot, install: Install) -> [LiveClients.Client] {
+        PrefixScope.clients(in: snapshot, prefix: install.prefix, knownGroups: Self.playingPrefixes,
+                            knownPrefixes: Self.prefixPaths(install))
+    }
+
+    /// Separate Windows drives may still share actual client files (Horizon and the local world).
+    /// Those files must stay untouched while either uses them.
+    private func sharedGameClients(_ snapshot: LiveClients.Snapshot, install: Install) -> Bool {
+        let path = OwnWine.resolve(install.gameDir.path)
+        let known = Self.playing.values.filter { $0.gameDir == path }
+        if known.contains(where: { $0.world != currentWorld || $0.group != sessionGroup }) { return true }
+        let ownGroups = Set(Self.playing.values.compactMap(\.group))
+        // An untracked client cannot prove which client files it uses. Preserve the files until
+        // adoption supplies that evidence, while prefix-only work can still proceed.
+        return snapshot.clients.contains { !ownGroups.contains($0.group) }
+    }
 
     /// A session whose group has not yet held its loader is also known by its host, in case
     /// the loader turns up in a group of its own.
@@ -143,9 +183,12 @@ final class Runner: ObservableObject {
     /// neither belongs under a client that is playing or starting, from this window or another
     /// launcher. On success the launch lock is held until `endMaintenance`, so no launch in any
     /// launcher process can start underneath it.
-    private func claimForMaintenance(_ what: String) -> Bool {
+    private func claimForMaintenance(_ what: String, prefixOnly install: Install? = nil) -> Bool {
         let lock = LaunchLock.acquire()
-        if let why = MultiWorld.maintenanceBlocker(LiveClients.scan(), sessionsPlaying: Runner.playing.count,
+        let snap = LiveClients.snapshot()
+        let clients = install.map { prefixClients(snap, install: $0) } ?? snap.clients
+        let sessions = install.map { othersPlaying(in: $0) } ?? Runner.playing.count
+        if let why = MultiWorld.maintenanceBlocker(LiveClients.byHost(clients), sessionsPlaying: sessions,
                                                    lockHeldElsewhere: lock == nil) {
             if let lock { LaunchLock.release(lock) }
             appendLine("!! not starting \(what): \(why). Wait for it to finish or stop it first.")
@@ -759,6 +802,19 @@ final class Runner: ObservableObject {
 
     nonisolated static func playWine(_ install: Install) -> URL { X87Sidecar.patchedWine() ?? install.wine }
 
+    /// Explicit setup only: participates in the existing quit alert and Stop cancellation.
+    func prepareMultiServer(base: Install, server: Server) async throws {
+        guard !refuseWhileBusy("multi-server setup") else {
+            throw WorldPrefix.Failure("Wait for the current job to finish, then try Setup again.")
+        }
+        beginBusy("Setting up multi-server play")
+        prefixUpdateStop.reset()
+        defer { busy = false }
+        try await WorldPrefix.prepare(base: base, server: server, stop: prefixUpdateStop, log: { [weak self] line in
+            Task { @MainActor in self?.appendLine(line) }
+        })
+    }
+
     /// Runs `wineboot -u` with Mono and Gecko disabled (their installers are what ask questions).
     /// Bounded: a wineboot (or the wait for its wineserver) still going after `limit` seconds, or
     /// ended by Stop, ends this prefix's Wine session and counts as not done -- "Updating Wine"
@@ -799,11 +855,12 @@ final class Runner: ObservableObject {
 
     /// Background check at launcher start and after a Repair. Skipped while any client runs.
     func syncPrefixIfStale(_ install: Install) async {
-        guard !running, LiveClients.snapshot().clients.isEmpty else { return }
+        guard !running, prefixClients(LiveClients.snapshot(), install: install).isEmpty,
+              othersPlaying(in: install) == 0, WorldPrefix.ready(install) else { return }
         guard await Task.detached(operation: { Self.prefixStale(install) }).value else { return }
         // A stale prefix is shared maintenance. Hold the same lock as Play and Repair so a
         // click during wineboot cannot start the client against half-updated registry files.
-        guard claimForMaintenance("Wine prefix update") else { return }
+        guard claimForMaintenance("Wine prefix update", prefixOnly: install) else { return }
         beginBusy("Updating Wine")
         defer { busy = false; endMaintenance() }
         guard await Task.detached(operation: { Self.prefixStale(install) }).value else { return }
@@ -1223,6 +1280,7 @@ final class Runner: ObservableObject {
         var refusal: String?
         var snapshot = LiveClients.Snapshot()
         var clientsLive = false
+        var gameFilesLive = false
         var rendererStep = RendererSetup.Step.stopAndApply
         /// The sync mode the client must use: the running wineserver's when there is one.
         var sync = MultiWorld.SyncMode.off
@@ -1236,17 +1294,32 @@ final class Runner: ObservableObject {
     /// client dies with msync on (Server.msync).
     func gate(_ install: Install, renderer: Renderer, sync: MultiWorld.SyncMode = .off,
               msyncAllowed: Bool = true, profile: String, world: String, host: String,
-              maxClients: Int) -> LaunchGate {
+              maxClients: Int, snapshot: LiveClients.Snapshot? = nil,
+              prefixEvidence: [pid_t: String]? = nil) -> LaunchGate {
         if running { return LaunchGate(refusal: "\(session.isEmpty ? world : session) is already running.") }
+        guard WorldPrefix.ready(install) else {
+            return LaunchGate(refusal: "Set up multi-server play for this world before pressing Play.")
+        }
         // Every client shares this prefix and, usually, this game folder. Everything that would
         // stop the wineserver or pull files out from under a running client is gated on this.
-        var g = LaunchGate(snapshot: LiveClients.snapshot(), sync: sync)
+        var g = LaunchGate(snapshot: snapshot ?? LiveClients.snapshot(), sync: sync)
         let hosts = [host] + [Credentials.bootServer(in: install, profile: profile)].compactMap { $0 }
         if let why = Self.duplicateRefusal(world: world, hosts: hosts, maxClients: maxClients,
                                            clients: g.snapshot.clients, install: install) {
             g.refusal = why; return g
         }
-        g.clientsLive = MultiWorld.clientsLive(g.snapshot.clients, otherSessionsPlaying: othersPlaying())
+        let local = prefixEvidence.map { PrefixScope.clients(g.snapshot.clients, prefix: install.prefix, groupPrefixes: $0) }
+            ?? prefixClients(g.snapshot, install: install)
+        g.clientsLive = MultiWorld.clientsLive(local,
+                                              otherSessionsPlaying: othersPlaying(in: install))
+        g.gameFilesLive = g.clientsLive || sharedGameClients(g.snapshot, install: install)
+        let dataPath = OwnWine.resolve(install.gameDir.path)
+        if Self.playing.filter({ $0.key != ObjectIdentifier(self) }).values.contains(where: {
+            $0.gameDir == dataPath && $0.renderer != nil && $0.renderer != renderer
+        }) {
+            g.refusal = "This client folder is already using another graphics mode. Use the same mode for worlds sharing game files."
+            return g
+        }
         // msync/esync belong to the wineserver every client shares; see MultiWorld.SyncMode.
         if g.clientsLive {
             let running = LiveClients.runningSyncMode(prefix: install.prefix.path,
@@ -1332,7 +1405,9 @@ final class Runner: ObservableObject {
         // What the loader will really be given, for the fallback in `sessionPIDs`.
         hostKey = LiveClients.normalize(Credentials.bootServer(in: install, profile: profile) ?? host)
         launchHasAccount = Credentials.bootHasAccount(in: install, profile: profile)
-        Runner.playing[ObjectIdentifier(self)] = Playing(world: worldName, host: hostKey)
+        Runner.playing[ObjectIdentifier(self)] = Playing(world: worldName, host: hostKey,
+                                                         prefix: OwnWine.resolve(install.prefix.path),
+                                                         gameDir: OwnWine.resolve(install.gameDir.path), renderer: perf.renderer)
         loginFailure = ""
         currentInstall = install
         currentProfile = profile
@@ -1352,14 +1427,15 @@ final class Runner: ObservableObject {
         // of the registry has exited.
         // A wrapper that has been copied or moved still has its dylib links aimed at the old
         // copy; fix that before anything tries to load one. See relinkStrayDylibs.
-        RendererSetup.relinkStrayDylibs(install) { [weak self] in self?.appendLine($0) }
+        if g.snapshot.clients.isEmpty { RendererSetup.relinkStrayDylibs(install) { [weak self] in self?.appendLine($0) } }
         if rendererStep == .stopAndApply {
-            RendererSetup.apply(perf.renderer, to: install) { [weak self] in self?.appendLine($0) }
+            RendererSetup.apply(perf.renderer, to: install, sharedGameLive: g.gameFilesLive,
+                                sharedRuntimeLive: !g.snapshot.clients.isEmpty) { [weak self] in self?.appendLine($0) }
             // Same moment, same reason: the registry has to name *this* world's SquareEnix folder.
             GameRegistry.point(install) { [weak self] in self?.appendLine($0) }
         } else {
             logFileOnly("renderer: \(perf.renderer.title) already set up; left alone for the running world")
-            RendererSetup.ensureFiles(perf.renderer, for: install) { [weak self] in self?.appendLine($0) }
+            RendererSetup.ensureFiles(perf.renderer, for: install, sharedGameLive: g.gameFilesLive) { [weak self] in self?.appendLine($0) }
         }
         // b70: what a Wine session that already died left running ends before a new one starts
         // beside it (2026-10-16 16:37: five of the 14:15 session's programs were still spinning
@@ -1425,16 +1501,16 @@ final class Runner: ObservableObject {
         // Cutscene narration, if the user asked for it: install VanaVoice's addon and start the
         // narrator. Never fatal -- a failure here leaves the game exactly as silent as before.
         Narration.prepare(install, enabled: perf.narrateCutscenes, policy: addonPolicy,
-                          profile: profile, othersLive: clientsLive) { [weak self] in self?.appendLine($0) }
+                          profile: profile, othersLive: g.gameFilesLive) { [weak self] in self?.appendLine($0) }
         if perf.narrateCutscenes, Narration.allowed(by: addonPolicy), Narration.narratorAvailable {
             Runner.narratorStarted = true
         }
         // Quest guide, same policy gate as narration: LSB / unrestricted only; scrubbed on
         // allowlist worlds. Never fatal.
         Guide.prepare(install, enabled: perf.enableVanaguide, policy: addonPolicy,
-                      profile: profile, othersLive: clientsLive) { [weak self] in self?.appendLine($0) }
+                      profile: profile, othersLive: g.gameFilesLive) { [weak self] in self?.appendLine($0) }
         CursorFix.prepare(install, policy: addonPolicy, profile: profile,
-                          othersLive: clientsLive) { [weak self] in
+                          othersLive: g.gameFilesLive) { [weak self] in
             self?.appendLine($0)
         }
         // Frame-rate monitors never load on a hosted world, even if they were switched on earlier.
@@ -2109,6 +2185,9 @@ final class Runner: ObservableObject {
         launchGeneration += 1
         hostKey = host
         Runner.playing[ObjectIdentifier(self)] = Playing(world: world, host: host, group: group,
+                                                         prefix: OwnWine.resolve(install.prefix.path),
+                                                         gameDir: OwnWine.resolve(install.gameDir.path),
+                                                         renderer: RendererSetup.current(install),
                                                          groupHeldLoader: true)
         running = true
         // It is long past starting: no "Starting…", and no "didn't start" line when it ends.

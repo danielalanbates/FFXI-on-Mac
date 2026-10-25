@@ -30,6 +30,9 @@ enum Headless {
             || a.contains("--selftest-guide-disabled")
             || a.contains("--selftest-narration-disabled")
             || a.contains("--selftest-multiworld")
+            || a.contains("--selftest-world-prefix")
+            || a.contains("--selftest-prefix-scope")
+            || a.contains("--selftest-runner-gate")
             || a.contains("--selftest-retroachievements")
             || a.contains("--selftest-updater")
             || a.contains("--selftest-perf")
@@ -106,6 +109,9 @@ enum Headless {
         if args.contains("--selftest-multiworld") {
             runMultiWorldSelfTest()
         }
+        if args.contains("--selftest-world-prefix") { runWorldPrefixSelfTest() }
+        if args.contains("--selftest-prefix-scope") { runPrefixScopeSelfTest() }
+        if args.contains("--selftest-runner-gate") { runRunnerGateSelfTest() }
         if args.contains("--selftest-retroachievements") {
             runRetroAchievementsSelfTest()
         }

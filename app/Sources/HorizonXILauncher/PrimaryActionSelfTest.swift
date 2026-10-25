@@ -97,6 +97,21 @@ extension Headless {
         x = base; x.patchedWineMissing = true; x.checks = [bad("wine")]
         expect("Wine and the game's Wine both missing -> Wine first", x, .setup(.wine))
 
+        // Opting in never borrows the shared Windows environment while its own is incomplete.
+        x = base; x.multiServerNeeded = true; x.checks = [bad("reg32"), bad("com")]
+        expect("enabled multi-server environment missing -> explicit Setup, ahead of registry repair", x,
+               .setup(.multiServer), enabled: true,
+               reason: "Set up multi-server play (about 1 GB extra).")
+        results.append(("multi-server Setup is included in the progress plan", SetupMeter.plan(x).contains(.multiServer)))
+        x.patchedWineMissing = true
+        expect("game Wine installs before the separate environment", x, .setup(.gameWine))
+        x = base; x.multiServerNeeded = true; x.runningHere = true
+        expect("a running single-client world keeps Stop before setup", x, .stop)
+        x = base; x.multiServerNeeded = true; x.ownJob = "Enabling multi-server play"
+        expect("preparing the separate environment shows progress", x, .working(.settingUp, progress: nil), enabled: false)
+        x = base; x.multiServerNeeded = false
+        expect("ready multi-server environment -> Play", x, .play, enabled: true, reason: .some(nil))
+
         // Repair, and what Play fixes itself.
         x = base; x.checks = [bad("rpath"), bad("reg32")]
         expect("Wine's library links -> Repair", x, .repair(.wine), enabled: true, reason: "Wine needs a quick repair.")
