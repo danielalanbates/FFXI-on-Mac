@@ -50,6 +50,9 @@ enum Headless {
             || a.contains("--selftest-vanadreams")
             || a.contains("--vanadreams-sync")
             || a.contains("--login-version")
+            || a.contains("--selftest-driftwood")
+            || a.contains("--driftwood-sync")
+            || a.contains("--driftwood-treehash")
             || a.contains("--send-ashita")
             || a.contains("--carryover-report")
             || a.contains("--carryover-apply")
@@ -146,6 +149,8 @@ enum Headless {
         if args.contains("--selftest-vanadreams") { runVanadreamsSelfTest() }
         if args.contains("--vanadreams-sync") { runVanadreamsSync(args) }
         if args.contains("--login-version") { runLoginVersion(args) }
+        if args.contains("--selftest-driftwood") { runDriftwoodSelfTest() }
+        if args.contains("--driftwood-sync") || args.contains("--driftwood-treehash") { runDriftwoodSync(args) }
         if args.contains("--selftest-carryover") {
             runCarryOverSelfTest()
         }

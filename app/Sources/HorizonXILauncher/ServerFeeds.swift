@@ -66,6 +66,8 @@ final class ServerFeeds: ObservableObject {
         ("Eden", "https://edenxi.com/api/v1/misc/active", nil),
         // {"state":"online","client_ver":…,"stats":{"online":22,…}} — the counter their launcher shows.
         ("Vanadreams", "https://vanadreams.org/api/public/vanadreams/status", "stats.online"),
+        // {"playersOnline":44} -- the count on their home page.
+        ("DriftwoodXI", "https://xi.driftwoodgaming.com/api/players", "playersOnline"),
     ]
 
     /// Fetch every published online counter. Cheap (three tiny GETs), silent on failure, and a

@@ -148,12 +148,14 @@ struct Server: Codable, Identifiable, Hashable {
     ///   WinForms app that downloads `mirror.valhalla.group/ValhallaXI.zip`); going to the
     ///   archive directly skips a GUI that cannot be driven unattended under wine.
     /// - `ascensionChannel`: AscensionXI's own update channel, read natively (AscensionChannel).
+    /// - `driftwoodContent`: DriftwoodXI's public content repo, with retail files from this Mac (DriftwoodSync).
     enum InstallKind: String, Codable {
-        case website, installerExe, catseyeLauncher, horizonTorrent, retail, clientZip, ascensionChannel, vanadreamsPackage, none
+        case website, installerExe, catseyeLauncher, horizonTorrent, retail, clientZip, ascensionChannel, vanadreamsPackage,
+             driftwoodContent, none
 
         /// Worlds whose own launcher updates the client before every Play; this one does the same
-        /// (AscensionSync, VanadreamsSync).
-        var updatesBeforePlay: Bool { self == .ascensionChannel || self == .vanadreamsPackage }
+        /// (AscensionSync, VanadreamsSync, DriftwoodSync).
+        var updatesBeforePlay: Bool { self == .ascensionChannel || self == .vanadreamsPackage || self == .driftwoodContent }
 
         /// A kind this build does not know (a newer build wrote it) reads as `website`: one
         /// unknown value must not make the whole servers.json unreadable, which resets every
@@ -374,6 +376,24 @@ struct Server: Codable, Identifiable, Hashable {
                // fairywitch.ca: "As many accounts and characters as you want, boxing welcome, mules
                // welcome, your addons welcome."
                maxClients: Server.noClientCap, loader: "xiloader.exe", createsAccountAtLogin: true),
+        // Added 2026-10-24 (b73). LSB: port 54231 answers LSB's JSON, their loader is LSB xiloader
+        // 2.1.2. From their site, their Linux guide, their launcher (0.36.15) and their public
+        // content repo; see docs/DRIFTWOOD.md.
+        Server(name: DriftwoodChannel.worldName, host: DriftwoodChannel.host,
+               bootProfile: DriftwoodChannel.bootProfile, verified: false,
+               note: "Level 99 with no limit-break quests, custom systems (arena, merits, politics, a player market). "
+                     + "Retail FFXI plus their own Ashita and addons.",
+               // xi.driftwoodgaming.com/api/players, 2026-10-24: {"playersOnline":44}.
+               era: "99 cap · custom systems", population: 44, codebase: .landSandBoat,
+               installURL: DriftwoodChannel.site + "/download", installKind: .driftwoodContent,
+               installNote: "No game files come from DriftwoodXI: their client is retail FFXI (build "
+                     + DriftwoodChannel.clientBuild + "), put together from the identical files of another world's client on "
+                     + "this Mac (AscensionXI or Vanadreams), then their Ashita and addons from their public repo.",
+               accountURL: DriftwoodChannel.site + "/register",
+               accountHow: "Register on xi.driftwoodgaming.com, then log in here with that account.",
+               discordURL: "https://discord.gg/DriftwoodGaming",
+               // Their home page, 2026-10-24: "Sixteen character slots, one account, one game window."
+               maxClients: 1),
         Server(name: "Eden", host: "play.edenxi.com", bootProfile: "eden.ini", verified: false,
                note: "Login host from Eden's own new-player wiki. Untested by this project.",
                era: "Classic · 75 cap", population: 1925, codebase: .darkStarLineage,
