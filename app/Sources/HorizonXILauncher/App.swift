@@ -492,6 +492,8 @@ struct ContentView: View {
             }
         }
         .onChange(of: store.selectedID) { _ in
+            // The page's population line: a world without a counter shows its Discord's.
+            Task { await feeds.refreshDiscord(for: store.selected) }
             // Notices and play-time lines belong to the world they were said about.
             notice = ""
             playWarnings = []
@@ -559,9 +561,9 @@ struct ContentView: View {
         // Keep the players-online line current: on launch, whenever the world changes, and
         // every two minutes while the window is open. The fetch is three tiny GETs and silent
         // on failure, so this costs nothing when offline.
-        .task { await feeds.refreshPopulations() }
+        .task { await feeds.refreshPopulations(); await feeds.refreshDiscord(for: store.selected) }
         .onReceive(populationTick) { _ in
-            Task { await feeds.refreshPopulations() }
+            Task { await feeds.refreshPopulations(); await feeds.refreshDiscord(for: store.selected) }
             // RetroAchievements: gated to once per 10 minutes inside; a no-op until set up.
             ra.refresh(.automatic, gameDir: active?.gameDir, log: { runner.appendLine($0) })
         }
@@ -838,8 +840,9 @@ struct ContentView: View {
         return false
     }
 
-    /// Live players-online for the selected world. Only shown when the server publishes a
-    /// counter (its own website's number); no counter, no line — never a 0.
+    /// Live players-online for the selected world: the server's own counter (its website's number)
+    /// when it publishes one; otherwise its Discord's people online and members, said to be the
+    /// Discord's (ServerFeeds.discordCounts). Neither, no line — never a 0 made up.
     @ViewBuilder
     private var populationLine: some View {
         if let name = store.selected?.name, let n = feeds.populations[name] {
@@ -849,7 +852,19 @@ struct ContentView: View {
                     .font(.callout).foregroundStyle(Vana.muted)
             }
             .padding(.top, 2)
+        } else if let name = store.selected?.name, let d = feeds.discordCounts[name] {
+            HStack(spacing: 8) {
+                Circle().fill(Vana.crystal.opacity(0.8)).frame(width: 6, height: 6)
+                Text(Self.discordLine(d))
+                    .font(.callout).foregroundStyle(Vana.muted)
+            }
+            .padding(.top, 2)
+            .help("\(name) publishes no players-online count, so this is their Discord's, live: people online there, not in the game.")
         }
+    }
+
+    static func discordLine(_ d: ServerFeeds.DiscordCount) -> String {
+        "\(d.online.formatted()) online in their Discord · \(d.members.formatted()) members"
     }
 
     // Built outside the view body: as interpolated expressions inline, the type-checker gave up

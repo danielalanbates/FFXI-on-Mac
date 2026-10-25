@@ -57,7 +57,7 @@ final class ServerFeeds: ObservableObject {
     /// Where each server publishes its live online count, and how the payload reads. All three
     /// are the same numbers the servers' own websites display (verified 2026-08-19); nothing is
     /// scraped from HTML, so a redesign of their pages cannot silently break this.
-    private static let populationSources: [(server: String, url: String, jsonKey: String?)] = [
+    nonisolated static let populationSources: [(server: String, url: String, jsonKey: String?)] = [
         // Plain integer body, the counter horizonxi.com shows.
         ("HorizonXI", "https://api.horizonxi.com/api/v1/misc/status", nil),
         // {"online":true,"playerCount":647,...} — catseyexi.com's homepage counter.
@@ -75,6 +75,61 @@ final class ServerFeeds: ObservableObject {
         // {"online":true,"maintenance":false,"playersOnline":2,…} -- their site's counter.
         ("Olympus XI", "https://olympus-games.dev/api/status", "playersOnline"),
     ]
+
+    /// A world's Discord, live: members online and in all, from Discord's public invite API
+    /// (`/api/v9/invites/<code>?with_counts=true`, no account, no key). Only for a world that
+    /// publishes no players-online counter of its own (Daniel, 2026-10-24: "if there's no such data
+    /// for a server, maybe it can pull the active discord numbers"), and always said to be the
+    /// Discord's: people online in a world's Discord are not players in it.
+    struct DiscordCount: Equatable { var online: Int; var members: Int }
+    @Published private(set) var discordCounts: [String: DiscordCount] = [:]
+    private var discordFetched: [String: Date] = [:]
+
+    /// The invite code of a `discord.gg/<code>` or `discord.com/invite/<code>` link, or nil.
+    nonisolated static func inviteCode(_ link: String) -> String? {
+        guard let u = URL(string: link), let host = u.host?.lowercased() else { return nil }
+        var parts = u.path.split(separator: "/").map(String.init)
+        switch host {
+        case "discord.gg", "www.discord.gg": break
+        case "discord.com", "www.discord.com", "discordapp.com", "www.discordapp.com":
+            guard parts.first == "invite" else { return nil }
+            parts.removeFirst()
+        default: return nil
+        }
+        guard parts.count == 1, let c = parts.first,
+              c.range(of: #"^[A-Za-z0-9-]{2,64}$"#, options: .regularExpression) != nil else { return nil }
+        return c
+    }
+
+    /// Discord's answer for an invite: `approximate_presence_count` online of
+    /// `approximate_member_count`; nil when either is missing or makes no sense.
+    nonisolated static func parseInvite(_ d: Data) -> DiscordCount? {
+        guard let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+              let on = (o["approximate_presence_count"] as? NSNumber)?.intValue,
+              let all = (o["approximate_member_count"] as? NSNumber)?.intValue, on >= 0, all >= on else { return nil }
+        return DiscordCount(online: on, members: all)
+    }
+
+    /// Whether a world's page falls back to its Discord: it has an invite, and no counter of its own.
+    nonisolated static func wantsDiscord(_ s: Server) -> Bool {
+        !s.local && inviteCode(s.discordURL) != nil && !populationSources.contains { $0.server == s.name }
+    }
+
+    /// The selected world's Discord count, at most once every ten minutes per world (one small GET);
+    /// a failed fetch removes the number rather than keeping a stale one.
+    func refreshDiscord(for server: Server?, minInterval: TimeInterval = 600,
+                        api: String = "https://discord.com/api/v9/invites/") async {
+        guard let s = server, Self.wantsDiscord(s), let code = Self.inviteCode(s.discordURL) else { return }
+        if let t = discordFetched[s.name], Date().timeIntervalSince(t) < minInterval { return }
+        discordFetched[s.name] = Date()
+        var count: DiscordCount?
+        if let url = URL(string: api + code + "?with_counts=true"),
+           let (data, resp) = try? await URLSession.shared.data(from: url),
+           (resp as? HTTPURLResponse)?.statusCode == 200 {
+            count = Self.parseInvite(data)
+        }
+        discordCounts[s.name] = count
+    }
 
     /// Fetch every published online counter. Cheap (three tiny GETs), silent on failure, and a
     /// stale number is worse than none: a failed fetch removes the entry rather than keeping it.
