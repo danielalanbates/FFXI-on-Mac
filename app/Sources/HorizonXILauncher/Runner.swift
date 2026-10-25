@@ -1259,8 +1259,12 @@ final class Runner: ObservableObject {
                                             current: g.clientsLive ? RendererSetup.current(install) : nil,
                                             clientsLive: g.clientsLive)
         if case .refuse(let why) = g.rendererStep { g.refusal = why; return g }
-        // GameRegistry.point re-registers through wine and then stops the wineserver.
-        if g.clientsLive, GameRegistry.current(install) != install.squareEnixWine {
+        // GameRegistry.point re-registers through wine and then stops the wineserver. A world whose
+        // client takes its registry and COM from Sandbox reads none of it, so it starts beside a
+        // client whatever the registry names (b80, Daniel 2026-10-25: AscensionXI beside HorizonXI).
+        // Nothing is re-pointed for it: with a client live the renderer step is never stopAndApply.
+        if g.clientsLive, GameRegistry.current(install) != install.squareEnixWine,
+           !Sandbox.suppliesRegistry(install, profile: profile) {
             g.refusal = "\(world) plays from \(install.squareEnixWine), but the running world's "
                       + "registry names \(GameRegistry.current(install) ?? "another folder"). "
                       + "Stop the other world first; the game folder cannot change under a running client."

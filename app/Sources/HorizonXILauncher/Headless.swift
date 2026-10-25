@@ -1198,6 +1198,21 @@ enum Headless {
                           othersLive: false, log: { _ in })
             checks.append(("with nothing else live, a strict allowlist world still gets the folder removed",
                            !fm.fileExists(atPath: addons.appendingPathComponent(Guide.addonDirName).path)))
+            // b80: a Sandbox world (AscensionXI's profile as their launcher writes it) starts beside a
+            // client whatever the prefix's registry names; one without Sandbox, or with Sandbox but no
+            // paths, still reads the registry.
+            try ("[ashita.polplugins]\nsandbox=1\npivot=1\n\n[sandbox.paths]\ncommon=C:\\Program Files (x86)\\Common Files\n"
+                 + "pol=..\\..\\Game\\PlayOnlineViewer\nffxi=..\\..\\Game\\FINAL FANTASY XI\n")
+                .write(to: boot.appendingPathComponent("sandboxed.ini"), atomically: true, encoding: .utf8)
+            try "[ashita.polplugins]\nsandbox = 1\n".write(to: boot.appendingPathComponent("nopaths.ini"), atomically: true, encoding: .utf8)
+            try "[ashita.polplugins]\nsandbox = 0\npivot = 1\n\n[sandbox.paths]\npol=x\nffxi=y\n"
+                .write(to: boot.appendingPathComponent("unsandboxed.ini"), atomically: true, encoding: .utf8)
+            checks.append(("a world whose profile loads Sandbox with its paths does not read the prefix's registry",
+                           Sandbox.suppliesRegistry(install, profile: "sandboxed.ini")
+                               && !Sandbox.suppliesRegistry(install, profile: "nopaths.ini")
+                               && !Sandbox.suppliesRegistry(install, profile: "unsandboxed.ini")
+                               && !Sandbox.suppliesRegistry(install, profile: "horizonxi.ini")
+                               && !Sandbox.suppliesRegistry(install, profile: "missing.ini")))
 
             // The real path: Runner reads the injector's boot profile from the install.
             try "[ashita.boot]\ncommand     = --server play.horizonxi.com --user x --pass y\n"

@@ -39,12 +39,40 @@ their POL listen port, and those worlds are capped at 1 anyway. Each client stil
 1–1.5 GB on an 8 GB Mac. The memory warning (non-blocking) still appears before a client starts
 when swap or free memory is low.
 
+## AscensionXI beside HorizonXI
+
+Daniel, 2026-10-25: AscensionXI would not start while HorizonXI ran ("plays from …\AscensionXI\Game, but
+the running world's registry names C:\HorizonXI\SquareEnix"). Every world shares one wine prefix,
+and its registry names one game folder at a time, so the launch gate refused any world whose
+folder differed from the one the registry named while a client ran.
+
+That is only needed for a world that reads the registry. AscensionXI's profile (as their launcher
+writes it) loads Ashita's Sandbox with `[sandbox.paths]` into its own folder. Sandbox "can virtualize the
+registry and COM information required to load and play PlayOnline, Final Fantasy XI" (its README),
+and its imports are ntdll's registry calls (NtOpenKeyEx, NtQueryValueKey, NtSetValueKey, …) plus
+CoCreateInstance/DllGetClassObject, which every registry and COM lookup under wine goes through. Such
+a world now starts beside a running client whatever the registry names (`Sandbox.suppliesRegistry`),
+and nothing is re-pointed for it (with a client live the renderer step never runs `GameRegistry.point`).
+A world started alone still points the registry at itself, as before.
+
+Worlds on this Mac that load Sandbox (2026-10-25): AscensionXI, CatsEyeXI, Gaia XI. Each can start
+beside HorizonXI or the local world. The others (Vanadreams, DriftwoodXI, PegasusXI, MistXI, Moghouse XI,
+LevelDown 99, Scythe, Olympus XI, Legendary Relaunch, Supernova) read the registry, so two of them with
+different folders still cannot run together. Order matters: start the registry world (e.g. HorizonXI)
+first. A Sandbox world started first points the registry at itself, and HorizonXI is then refused.
+Next pathway: a wine prefix per world (about 340 MB each on the x10; HFS+, so no clones), or Sandbox on for
+every world.
+
+Not yet tried live: AscensionXI started while HorizonXI runs.
+
 ## Tests
 
 - `--selftest-multiworld`: a world without a cap takes a twelfth client beside eleven running, this
   window's own starting session and another launcher's injector whose world cannot be told. Each
   built-in's cap is checked against the table above.
 - `--selftest-retail-world`: Moghouse XI and Olympus XI have no cap.
+- `--selftest-multiworld`: a profile with Sandbox and its paths does not read the registry; one without Sandbox, or without paths, does.
+- All 32 suites pass (1,019 checks).
 - Not yet done: three or more live clients of one world on this Mac.
 
 ## Next
