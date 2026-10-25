@@ -73,9 +73,13 @@ extension Headless {
         let listFiles: [DriftwoodChannel.ClientFile] = [.init(path: "FFXiMain.dll", size: Int64(main.count), sha256: AscensionChannel.sha256(main)),
                                                        .init(path: "ROM/1/1.DAT", size: Int64(dat.count), sha256: AscensionChannel.sha256(dat))]
         sources.retailDigest = RetailWorld.entriesDigest(listFiles)
-        check("the retail list is pinned by its entries, not its bytes; the real pin is the 30260904_1 list",
-              RetailWorld.entriesDigest(listFiles) == RetailWorld.entriesDigest(listFiles.reversed())
-                && RetailWorld.retailListDigest == "464d8608d81cb1b85caa1dbb19ce5d18c98bf882b0586b724e2f75f7584c9849")
+        // The pinned digest of the real 30260904_1 list was computed (2026-10-24) by a separate script
+        // as SHA-256 over sorted lower-cased "path\0size\0sha256\n"; this vector came from that script.
+        check("the retail list digest is the pinned one's algorithm (an independent script's vector), order-free",
+              RetailWorld.entriesDigest([.init(path: "FFXiMain.dll", size: 8, sha256: String(repeating: "cd", count: 32)),
+                                         .init(path: "ROM/1/1.DAT", size: 3, sha256: String(repeating: "AB", count: 32))])
+                == "1b3b66a66ce6c1aca543c5f3b699dec5c3c2e09bde4b1211440b182b2e0c442f"
+                && RetailWorld.entriesDigest(listFiles) == RetailWorld.entriesDigest(listFiles.reversed()))
         let root = tmp.appendingPathComponent("MistXI")
         func sync(_ s: RetailWorld.Sources? = nil, install: Bool = false, donors: [URL]? = nil, stop: StopFlag = StopFlag()) -> AscensionSync.Outcome {
             ch.clearLog()
@@ -241,10 +245,16 @@ extension Headless {
             if delta { e["delta"] = ["pack": "pack-01.bin", "offset": junk.count, "csize": packed.count] }
             return e
         }
+        // A viewer file only their pack has; and a file the donor's viewer has that their list does not.
+        write(Data("donor's own".utf8), donor.appendingPathComponent("PlayOnlineViewer/pub/home00/mail.dat"))
+        let appDll = Data("their app.dll".utf8), packedApp = zlibStream(appDll)
+        ch.put("/rel/download/client-30260904_1/pack-01.bin", junk + packed + junk + packedApp, t0)
+        var appEntry = cf("PlayOnlineViewer/viewer/com/app.dll", appDll)
+        appEntry["delta"] = ["pack": "pack-01.bin", "offset": junk.count * 2 + packed.count, "csize": packedApp.count]
         let olClient: [String: Any] = ["schemaVersion": 1, "version": "30260904_1",
                                        "files": [cf("FINAL FANTASY XI/FFXiMain.dll", main), cf("FINAL FANTASY XI/ROM/1/1.DAT", dat),
                                                  cf("FINAL FANTASY XI/VTABLE.DAT", vtable, delta: true),
-                                                 cf("PlayOnlineViewer/viewer/com/polcore.dll", Data("pol".utf8))]]
+                                                 cf("PlayOnlineViewer/viewer/com/polcore.dll", Data("pol".utf8)), appEntry]]
         ch.put("/rel/download/client-30260904_1/client-manifest.json", try! JSONSerialization.data(withJSONObject: olClient), t0)
         let olRoot = tmp.appendingPathComponent("Olympus XI")
         func ol(install: Bool = false) -> AscensionSync.Outcome {
@@ -259,10 +269,31 @@ extension Headless {
               { if case .ok = olFirst { return true }; return false }() && olFile("Ashita/polplugins/pivot.dll") == Data("pivot".utf8)
                 && olFile("Ashita/polplugins/DATs/Olympus/ROM/181/73.DAT") == d1 && olFile("Ashita/polplugins/DATs/Olympus/ROM/1/2.DAT") == d2
                 && olFile("Game/FINAL FANTASY XI/ROM/1/1.DAT") == dat)
-        check("Olympus client: their list, the donor's identical files, a table only their pack has (zlib stream by Range), the viewer by hash",
+        check("Olympus client: their list, the donor's identical files, a table only their pack has (zlib stream by Range), the viewer file by file",
               olFile("Game/FINAL FANTASY XI/VTABLE.DAT") == vtable && olFile("Game/FINAL FANTASY XI/FFXiMain.dll") == main
                 && olFile("Game/PlayOnlineViewer/viewer/com/polcore.dll") == Data("pol".utf8)
+                && olFile("Game/PlayOnlineViewer/viewer/com/app.dll") == appDll
+                && olFile("Game/PlayOnlineViewer/pub/home00/mail.dat") == nil
                 && RetailWorld.parseOlympusClient(try! JSONSerialization.data(withJSONObject: ["version": "30260904_1", "files": [["path": "SquareEnix/../x", "size": 1, "sha256": String(repeating: "a", count: 64)]]])) == nil)
+        func olList(_ path: String, delta: [String: Any]? = nil) -> Data {
+            var e: [String: Any] = ["path": path, "size": 1, "sha256": String(repeating: "a", count: 64)]
+            if let delta { e["delta"] = delta }
+            return try! JSONSerialization.data(withJSONObject: ["version": "30260904_1", "files": [e]])
+        }
+        check("Olympus client list: the player's USER folder, '.' and offsets that overflow are refused",
+              RetailWorld.parseOlympusClient(olList("SquareEnix/FINAL FANTASY XI/USER")) == nil
+                && RetailWorld.parseOlympusClient(olList("SquareEnix/FINAL FANTASY XI/user/123/mcr.dat")) == nil
+                && RetailWorld.parseOlympusClient(olList("SquareEnix/FINAL FANTASY XI/ROM/.")) == nil
+                && RetailWorld.parseOlympusClient(olList("SquareEnix/FINAL FANTASY XI/ROM/1/1.DAT",
+                                                         delta: ["pack": "pack-01.bin", "offset": Int64.max, "csize": 2])) == nil
+                && RetailWorld.parseOlympusClient(olList("SquareEnix/FINAL FANTASY XI/ROM/1/1.DAT")) != nil)
+        // A list naming as a file what is a folder here: the folder is never deleted to make room.
+        let guardRoot = tmp.appendingPathComponent("Olympus-guard")
+        write(Data("keep".utf8), guardRoot.appendingPathComponent("Game/FINAL FANTASY XI/ROM/9/keep.txt"))
+        check("a folder where their list names a file is left alone (RetailClient.replaceable)",
+              !RetailClient.replaceable(guardRoot.appendingPathComponent("Game/FINAL FANTASY XI/ROM/9"))
+                && RetailClient.replaceable(guardRoot.appendingPathComponent("Game/FINAL FANTASY XI/ROM/9/keep.txt"))
+                && RetailClient.replaceable(guardRoot.appendingPathComponent("Game/FINAL FANTASY XI/ROM/9/new.dat")))
         check("overlay world: pivot = 1 and their --profileport in the profile, the overlay first in pivot.ini",
               BootProfile.value("pivot", section: "ashita.polplugins", in: olIni) == "1"
                 && BootProfile.value("command", section: "ashita.boot", in: olIni) == "--server 172.96.141.132 --profileport 51220"
