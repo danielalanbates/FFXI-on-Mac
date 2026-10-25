@@ -49,6 +49,22 @@ enum Sandbox {
         return false
     }
 
+    /// Does this world's client take its PlayOnline paths, registry and COM from Sandbox instead of
+    /// from the prefix's registry? Sandbox's README: it "can virtualize the registry and COM
+    /// information required to load and play PlayOnline, Final Fantasy XI ... Play on as many private
+    /// servers ... with unique 'installs' as you want!" Its imports (sandbox.dll, read 2026-10-25)
+    /// are ntdll's own registry calls (NtCreateKey, NtOpenKeyEx, NtQueryKey, NtQueryValueKey,
+    /// NtSetValueKey) plus CoCreateInstance and DllGetClassObject. Under wine every registry and COM
+    /// lookup goes through those, so such a client never reads what `GameRegistry.point` wrote, and
+    /// the registry may name another world's folder while it plays. Needs Sandbox loaded and its
+    /// `[sandbox.paths]` naming both folders.
+    static func suppliesRegistry(_ install: Install, profile: String) -> Bool {
+        guard isEnabled(in: install, profile: profile),
+              let text = Credentials.readFile(at: install.gameDir.appendingPathComponent("config/boot/\(profile)"))
+        else { return false }
+        return ["pol", "ffxi"].allSatisfy { !(BootProfile.value($0, section: "sandbox.paths", in: text) ?? "").isEmpty }
+    }
+
     static func iniURL(_ install: Install) -> URL {
         install.gameDir.appendingPathComponent("config/sandbox/sandbox.ini")
     }

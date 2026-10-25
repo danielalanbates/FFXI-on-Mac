@@ -786,9 +786,19 @@ enum Headless {
         // LevelDown 99 (b76): "Accounts – 2 Active, 1 Mule (only two logged in at a time)" (their wiki).
         // Scythe (b76): "up to two accounts per player for dual-boxing, with both online simultaneously".
         // Legendary Relaunch (b77): "no account limits and no cap on how many characters you run at once" (their FAQ).
-        checks.append(("only the local world, CatsEyeXI, LevelDown 99, Legendary Relaunch, MistXI, Scythe and Vanadreams (cited rules) allow several clients",
+        // b80, rules read 2026-10-25: Gaia XI 2 ("Maximum 2 Accounts Per Player", "Dual-Boxing Allowed"),
+        // Supernova 6 (no "more than 6 characters at once"), OmicronXI 2 ("2 active characters on at a time"),
+        // Moghouse XI and Olympus XI no cap (nothing against boxing). HorizonXI, AscensionXI, DriftwoodXI and
+        // PegasusXI forbid it.
+        checks.append(("the worlds whose rules allow it, and only those, allow several clients",
                        Server.all.filter(\.allowsMultipleClients).map(\.name).sorted()
-                           == ["CatsEyeXI", "Legendary Relaunch", "LevelDown 99", "Local server", "MistXI", "Scythe", "Vanadreams"]))
+                           == ["CatsEyeXI", "Gaia XI", "Legendary Relaunch", "LevelDown 99", "Local server", "MistXI",
+                               "Moghouse XI", "Olympus XI", "OmicronXI", "Scythe", "Supernova", "Vanadreams"]))
+        let caps = Dictionary(Server.builtins.map { ($0.name, $0.maxClients) }, uniquingKeysWith: { a, _ in a })
+        checks.append(("each world's cap is its rules' number: HorizonXI/AscensionXI/DriftwoodXI/PegasusXI 1, Supernova 6, Gaia XI/OmicronXI 2",
+                       caps["HorizonXI"] == 1 && caps["AscensionXI"] == 1 && caps["DriftwoodXI"] == 1 && caps["PegasusXI"] == 1
+                           && caps["Supernova"] == 6 && caps["Gaia XI"] == 2 && caps["OmicronXI"] == 2
+                           && caps["Moghouse XI"] == Server.noClientCap && caps["Olympus XI"] == Server.noClientCap))
         let oneCats = LiveClients.parse("62001 62000 C:\\CatsEye\\xiloader.exe --server server.catseyexi.com\n"
                                         + "62002 62000 /x/x87sidecar-coop --cooperative /x/wine C:\\CatsEye\\xiloader.exe --server server.catseyexi.com\n").clients
         let twoCats = oneCats + LiveClients.parse("63001 63000 C:\\CatsEye\\xiloader.exe --server server.catseyexi.com\n").clients
@@ -881,6 +891,15 @@ enum Headless {
         checks.append(("CatsEyeXI: one running plus another launcher's injector for it is at the cap of two",
                        refusalSeeing(catseye, oneCats + catsInjecting,
                                      resolve: ["catseye.ini": "server.catseyexi.com"])?.contains("at most 2") == true))
+        // b80 (Daniel, 2026-10-25: as many clients as each server's rules allow): a world without
+        // a cap takes a twelfth client beside eleven running, this window's own starting session and
+        // another launcher's injector whose world cannot be told.
+        let elevenLocal = LiveClients.parse((1...11).map {
+            "\(83000 + $0 * 10 + 1) \(83000 + $0 * 10) .\\\\bootloader\\\\horizon-loader.exe --server 127.0.0.1\n"
+        }.joined()).clients
+        checks.append(("a world without a cap takes a twelfth client",
+                       elevenLocal.count == 11 && Set(elevenLocal.map(\.group)).count == 11
+                           && refusalSeeing(local, elevenLocal + otherInjecting, own: [-1], resolve: [:]) == nil))
         checks.append(("a launch while another world is injecting treats the prefix as in use",
                        MultiWorld.clientsLive(injecting, otherSessionsPlaying: 0)))
         checks.append(("a launch while another session of this window is playing but not yet visible treats the prefix as in use",
@@ -1179,6 +1198,21 @@ enum Headless {
                           othersLive: false, log: { _ in })
             checks.append(("with nothing else live, a strict allowlist world still gets the folder removed",
                            !fm.fileExists(atPath: addons.appendingPathComponent(Guide.addonDirName).path)))
+            // b80: a Sandbox world (AscensionXI's profile as their launcher writes it) starts beside a
+            // client whatever the prefix's registry names; one without Sandbox, or with Sandbox but no
+            // paths, still reads the registry.
+            try ("[ashita.polplugins]\nsandbox=1\npivot=1\n\n[sandbox.paths]\ncommon=C:\\Program Files (x86)\\Common Files\n"
+                 + "pol=..\\..\\Game\\PlayOnlineViewer\nffxi=..\\..\\Game\\FINAL FANTASY XI\n")
+                .write(to: boot.appendingPathComponent("sandboxed.ini"), atomically: true, encoding: .utf8)
+            try "[ashita.polplugins]\nsandbox = 1\n".write(to: boot.appendingPathComponent("nopaths.ini"), atomically: true, encoding: .utf8)
+            try "[ashita.polplugins]\nsandbox = 0\npivot = 1\n\n[sandbox.paths]\npol=x\nffxi=y\n"
+                .write(to: boot.appendingPathComponent("unsandboxed.ini"), atomically: true, encoding: .utf8)
+            checks.append(("a world whose profile loads Sandbox with its paths does not read the prefix's registry",
+                           Sandbox.suppliesRegistry(install, profile: "sandboxed.ini")
+                               && !Sandbox.suppliesRegistry(install, profile: "nopaths.ini")
+                               && !Sandbox.suppliesRegistry(install, profile: "unsandboxed.ini")
+                               && !Sandbox.suppliesRegistry(install, profile: "horizonxi.ini")
+                               && !Sandbox.suppliesRegistry(install, profile: "missing.ini")))
 
             // The real path: Runner reads the injector's boot profile from the install.
             try "[ashita.boot]\ncommand     = --server play.horizonxi.com --user x --pass y\n"
