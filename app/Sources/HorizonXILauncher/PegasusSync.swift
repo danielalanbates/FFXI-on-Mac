@@ -190,7 +190,11 @@ enum PegasusChannel {
 
 final class PegasusSync: @unchecked Sendable {
     typealias Outcome = AscensionSync.Outcome
-    struct Failure: Error, CustomStringConvertible { let description: String }
+    /// LocalizedError too, so a catch that only has `localizedDescription` prints this text.
+    struct Failure: LocalizedError, CustomStringConvertible {
+        let description: String
+        var errorDescription: String? { description }
+    }
 
     let root: URL
     private let src: PegasusChannel.Sources
@@ -297,9 +301,12 @@ final class PegasusSync: @unchecked Sendable {
         log("==> PegasusXI: \(kept) files already right, \(need.count) to fetch (\(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)))")
         try fetch(need, from: pack.zipURL, totalBytes: bytes)
         try checkStop()
-        // Files their previous release had and this one does not.
+        // Files their previous release had and this one does not, compared without letter case as the
+        // Mac's disk and Wine compare paths: a folder a release only renames by case is the same
+        // folder, and its files must stay.
         var removed = 0
-        for (rel, _) in before where listing[rel] == nil && !PegasusChannel.userEditable(rel) && !PegasusChannel.skipped(rel) {
+        let present = Set(listing.keys.map { $0.lowercased() })
+        for (rel, _) in before where !present.contains(rel.lowercased()) && !PegasusChannel.userEditable(rel) && !PegasusChannel.skipped(rel) {
             let f = root.appendingPathComponent(rel)
             guard let (c, _) = old(rel), AscensionSync.isRegularFile(f), crcs.verified(rel, at: f, sha: c) else { continue }
             try? fm.removeItem(at: f); crcs.forget(rel); removed += 1

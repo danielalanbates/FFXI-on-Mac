@@ -1404,6 +1404,11 @@ final class Runner: ObservableObject {
             appendLine("==> local world: no graphics settings yet, seeding 640x480 "
                        + "(change them in Graphics; they will be kept)")
         }
+        // The game in its own titled window on every world (GraphicsSettings.windowedOnMac): a
+        // borderless mode from the world's own profile cannot be moved, resized or fitted here.
+        if let was = GraphicsSettings.makeWindowed(install, profile: profile) {
+            logFileOnly("==> window mode: windowed (the profile had \(was)); on the Mac the game needs its own titled window")
+        }
         // A window bigger than this screen opens cut down on one side and FFXI draws it squeezed;
         // open it whole, same shape (WindowMemory.playSettings). Logged to launcher.log only.
         if let limit = WindowMemory.screenLimit(scale: WindowMemory.scale(for: install)),

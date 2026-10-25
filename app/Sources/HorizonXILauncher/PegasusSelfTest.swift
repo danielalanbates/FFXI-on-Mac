@@ -1,8 +1,10 @@
 import Foundation
+import Network
 
 /// `--selftest-pegasus`: PegasusSync against a fake CDN on 127.0.0.1 (TestChannel, with Range
 /// requests), in a temporary folder: their pack index, release zips made with Info-ZIP (one forced to
-/// ZIP64), install, Play-time check, Repair, an update, a damaged member.
+/// ZIP64), install, Play-time check, Repair, an update, a damaged member. Then FileDownload's resume
+/// against TestChannel and against ScriptedHTTPServer's servers that do not honour Range.
 extension Headless {
     @MainActor static func runPegasusSelfTest() -> Never {
         var checks: [(String, Bool)] = []
@@ -152,6 +154,15 @@ extension Headless {
         publish("1.2.6", release("1.2.6", v1))
         check("the same release, intact: ok", { if case .ok = sync() { return true }; return false }())
 
+        // Their next release renames a folder by letter case only: on the Mac's disk it is the same
+        // folder, so the file in it is not one the release removed.
+        v1["Game/bootloader/xiloader.exe"] = nil
+        v1["Game/Bootloader/xiloader.exe"] = Data("xiloader 2.1.1".utf8)
+        publish("1.2.7", release("1.2.7", v1))
+        let recased = sync()
+        check("update: a folder renamed only by letter case keeps its file on disk",
+              { if case .ok = recased { return true }; return false }() && file("Game/Bootloader/xiloader.exe") == Data("xiloader 2.1.1".utf8))
+
         // Offline after a finished update plays; Stop stops; a zip off their CDN is refused.
         let down = PegasusChannel.Sources(index: "http://127.0.0.1:9/pack.json", zipPrefix: site + "/")
         check("offline after a finished update: play with what is there", { if case .offline = sync(down) { return true }; return false }())
@@ -170,6 +181,70 @@ extension Headless {
                 && w?.accountURL == "https://pegasusxi.com/new_accounts/index.html")
         let enc = w.flatMap { try? JSONEncoder().encode([$0]) }.flatMap { String(data: $0, encoding: .utf8) } ?? ""
         check("servers.json: its kind is stored as one older builds read", enc.contains("\"installKind\":\"website\""))
+        check("failures read as their own text wherever they are caught (PegasusSync, FileDownload)",
+              (PegasusSync.Failure(description: "PegasusXI: a.dat came down damaged.") as Error).localizedDescription == "PegasusXI: a.dat came down damaged."
+                && (FileDownload.Failure(description: "HTTP 404 for x") as Error).localizedDescription == "HTTP 404 for x")
+
+        // FileDownload (a client archive into its folder, resumed): TestChannel answers Range with 206
+        // and Content-Range, 416 (without one) past the end, and 200 with Last-Modified.
+        let blob = Data((0..<300_000).map { _ in UInt8.random(in: 0...255, using: &gen) })
+        ch.put("/dl/client.archive", blob, t0)
+        let dl = tmp.appendingPathComponent("dl/client.archive")
+        let dlValidator = URL(fileURLWithPath: dl.path + ".validator")
+        func fetchFile(_ url: String) -> Error? {
+            guard let u = URL(string: url) else { return FileDownload.Failure(description: "bad URL") }
+            do { try FileDownload.run(u, to: dl, stop: StopFlag()); return nil } catch { return error }
+        }
+        func saved() -> Data? { try? Data(contentsOf: dl) }
+        func validator() -> String? { try? String(contentsOf: dlValidator, encoding: .utf8) }
+        ch.clearLog()
+        let fresh = fetchFile(site + "/dl/client.archive")
+        check("FileDownload: a fresh copy whole, its Last-Modified kept beside it for If-Range",
+              fresh == nil && saved() == blob && validator() == AscensionSync.httpDate(t0) && ch.log == ["/dl/client.archive 200"])
+        try? blob.prefix(120_000).write(to: dl)
+        ch.clearLog()
+        let resumed = fetchFile(site + "/dl/client.archive")
+        check("FileDownload: a resume onto a partial file gives the whole file, only the rest asked for, the validator kept",
+              resumed == nil && saved() == blob && ch.log == ["/dl/client.archive 206"] && validator() == AscensionSync.httpDate(t0))
+        try? (blob + Data("not theirs".utf8)).write(to: dl)
+        let longer = fetchFile(site + "/dl/client.archive")
+        let emptied = saved() == Data()
+        let again = fetchFile(site + "/dl/client.archive")
+        check("FileDownload: a file longer than theirs (416 without bytes */N) is emptied, and the next try fetches it whole",
+              longer != nil && emptied && again == nil && saved() == blob)
+
+        // Servers TestChannel does not play: one that ignores Range, one that answers from the wrong place.
+        let other = ScriptedHTTPServer()
+        guard (try? other.start()) != nil, other.port != 0 else { print("  FAIL could not listen"); exit(1) }
+        let otherURL = "http://127.0.0.1:\(other.port)/client.archive"
+        // A header of the first request since the last `answer`.
+        func header(_ name: String) -> String? {
+            (other.log.first ?? []).dropFirst().first { $0.lowercased().hasPrefix(name.lowercased() + ":") }
+                .map { String($0.dropFirst(name.count + 1)).trimmingCharacters(in: .whitespaces) }
+        }
+        let blob2 = Data(blob.reversed())
+        try? blob.prefix(100_000).write(to: dl)
+        try? Data("\"v1\"".utf8).write(to: dlValidator)
+        other.answer { _ in ("200 OK", ["ETag: \"v2\""], blob2) }
+        let restarted = fetchFile(otherURL)
+        check("FileDownload: a resume asks If-Range with the copy's validator; a 200 to it restarts cleanly, the new ETag kept",
+              header("Range") == "bytes=100000-" && header("If-Range") == "\"v1\""
+                && restarted == nil && saved() == blob2 && validator() == "\"v2\"")
+        try? blob.prefix(100_000).write(to: dl)
+        other.answer { _ in ("206 Partial Content", ["Content-Range: bytes 0-\(blob.count - 1)/\(blob.count)"], blob) }
+        let misplaced = fetchFile(otherURL)
+        check("FileDownload: a 206 that does not continue where the file stopped is refused, the file emptied to start again",
+              (misplaced as? FileDownload.Failure)?.description.contains("did not continue where it stopped") == true
+                && saved() == Data() && validator() == nil)
+        try? blob.write(to: dl)
+        other.answer { _ in ("416 Range Not Satisfiable", ["Content-Range: bytes */\(blob.count)"], Data()) }
+        let whole = fetchFile(otherURL)
+        let wholeKept = saved() == blob
+        try? (blob + Data("not theirs".utf8)).write(to: dl)
+        let notWhole = fetchFile(otherURL)
+        check("FileDownload: 416 means complete only when bytes */N is the size here",
+              whole == nil && wholeKept && notWhole != nil && saved() == Data())
+        other.stop()
 
         ch.stop()
         var failures = 0
@@ -204,5 +279,64 @@ extension Headless {
         while done.wait(timeout: .now() + 0.1) == .timedOut { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
         print("outcome: \(outcome)")
         switch outcome { case .ok, .offline: exit(0); default: exit(1) }
+    }
+}
+
+/// A fake server that answers every request as it is told, whatever it asks for: the servers
+/// TestChannel never plays (one ignoring Range, one answering from the wrong place, a 416 with a
+/// size). One request per connection; each request's header lines are kept.
+final class ScriptedHTTPServer: @unchecked Sendable {
+    typealias Reply = (status: String, headers: [String], body: Data)
+    private(set) var port: UInt16 = 0
+    private var listener: NWListener?
+    private let queue = DispatchQueue(label: "pegasus-selftest-scripted")
+    private let lock = NSLock()
+    private var reply: ([String]) -> Reply = { _ in ("404 Not Found", [], Data()) }
+    private var requests: [[String]] = []
+
+    /// The header lines of every request since the last `answer` (the request line first).
+    var log: [[String]] { lock.lock(); defer { lock.unlock() }; return requests }
+    /// How the next requests are answered, given each one's header lines.
+    func answer(_ f: @escaping ([String]) -> Reply) { lock.lock(); reply = f; requests = []; lock.unlock() }
+
+    func start() throws {
+        let params = NWParameters.tcp
+        params.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: .any)
+        let l = try NWListener(using: params)
+        let ready = DispatchSemaphore(value: 0)
+        l.stateUpdateHandler = { st in
+            switch st { case .ready, .failed, .cancelled: ready.signal() default: break }
+        }
+        l.newConnectionHandler = { [weak self] c in self?.serve(c) }
+        l.start(queue: queue)
+        _ = ready.wait(timeout: .now() + 5)
+        listener = l
+        port = l.port?.rawValue ?? 0
+    }
+
+    func stop() { listener?.cancel() }
+
+    private func serve(_ c: NWConnection) {
+        c.start(queue: queue)
+        read(c, Data())
+    }
+
+    private func read(_ c: NWConnection, _ buf: Data) {
+        c.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, done, err in
+            guard let self else { return }
+            let b = buf + (data ?? Data())
+            if let end = b.range(of: Data("\r\n\r\n".utf8)) {
+                let lines = String(decoding: b[..<end.lowerBound], as: UTF8.self).components(separatedBy: "\r\n")
+                self.lock.lock(); self.requests.append(lines); let f = self.reply; self.lock.unlock()
+                let r = f(lines)
+                let extra = r.headers.map { $0 + "\r\n" }.joined()
+                let head = "HTTP/1.1 \(r.status)\r\nContent-Length: \(r.body.count)\r\n\(extra)Connection: close\r\n\r\n"
+                c.send(content: Data(head.utf8) + r.body, completion: .contentProcessed { _ in c.cancel() })
+            } else if done || err != nil {
+                c.cancel()
+            } else {
+                self.read(c, b)
+            }
+        }
     }
 }

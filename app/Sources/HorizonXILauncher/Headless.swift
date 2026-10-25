@@ -785,9 +785,10 @@ enum Headless {
         // MistXI (b75): "Dual boxing: Allowed ( maximum 2 per IP )" (mistxi.com/server-info).
         // LevelDown 99 (b76): "Accounts – 2 Active, 1 Mule (only two logged in at a time)" (their wiki).
         // Scythe (b76): "up to two accounts per player for dual-boxing, with both online simultaneously".
-        checks.append(("only the local world, CatsEyeXI, LevelDown 99, MistXI, Scythe and Vanadreams (cited rules) allow several clients",
+        // Legendary Relaunch (b77): "no account limits and no cap on how many characters you run at once" (their FAQ).
+        checks.append(("only the local world, CatsEyeXI, LevelDown 99, Legendary Relaunch, MistXI, Scythe and Vanadreams (cited rules) allow several clients",
                        Server.all.filter(\.allowsMultipleClients).map(\.name).sorted()
-                           == ["CatsEyeXI", "LevelDown 99", "Local server", "MistXI", "Scythe", "Vanadreams"]))
+                           == ["CatsEyeXI", "Legendary Relaunch", "LevelDown 99", "Local server", "MistXI", "Scythe", "Vanadreams"]))
         let oneCats = LiveClients.parse("62001 62000 C:\\CatsEye\\xiloader.exe --server server.catseyexi.com\n"
                                         + "62002 62000 /x/x87sidecar-coop --cooperative /x/wine C:\\CatsEye\\xiloader.exe --server server.catseyexi.com\n").clients
         let twoCats = oneCats + LiveClients.parse("63001 63000 C:\\CatsEye\\xiloader.exe --server server.catseyexi.com\n").clients

@@ -37,6 +37,9 @@ extension Headless {
         write(Data(LuaJITGuard.shim.utf8) + Data("x".utf8), th.appendingPathComponent("A.lua"))
         check("treeHash: an entry file with LuaJITGuard's lines in front counts as the same",
               DriftwoodChannel.treeHash(of: th, entry: "a.lua") == want && DriftwoodChannel.treeHash(of: th) != want)
+        write(Data("finder".utf8), th.appendingPathComponent(".DS_Store")); write(Data("ad".utf8), th.appendingPathComponent("sub/._b.txt"))
+        check("treeHash: skipFinderFiles leaves out Finder's .DS_Store and ._* files; without it they count",
+              DriftwoodChannel.treeHash(of: th, entry: "a.lua", skipFinderFiles: true) == want && DriftwoodChannel.treeHash(of: th, entry: "a.lua") != want)
         let prof = DriftwoodChannel.profile(fromExample: "[ashita.launcher]\r\nname        = Example\r\n[ashita.boot]\r\nfile        = .\\\\bootloader\\\\pol.exe\r\ncommand     = --server homepointxi.com\r\nscript      = default.txt\r\n[ashita.polplugins]\r\nsandbox = 0\r\n")
         check("profile: their loader, server and script, the rest of the example kept",
               BootProfile.loaderName(in: prof) == "xiloader.exe" && BootProfile.value("command", section: "ashita.boot", in: prof) == "--server xi.driftwoodgaming.com"
@@ -170,6 +173,11 @@ extension Headless {
         try? (Data(LuaJITGuard.shim.utf8) + Data("-- market v2".utf8)).write(to: entry)
         check("update: an entry file LuaJITGuard patched is not downloaded again",
               sync(donors: []) == .ok(changed: 0) && !ch.log.contains { $0.contains(".zip") })
+        // Nor are the .DS_Store and ._* files Finder leaves in a folder it shows.
+        write(Data("finder".utf8), root.appendingPathComponent("Ashita/addons/dwah/.DS_Store"))
+        write(Data("ad".utf8), root.appendingPathComponent("Ashita/addons/dwah/lib/._util.lua"))
+        check("update: an addon folder with Finder's .DS_Store and ._* files in it is not downloaded again",
+              sync(donors: []) == .ok(changed: 0) && !ch.log.contains { $0.contains(".zip") })
         // A package that is not what it says, a damaged bundle.
         let evil = zip(["dwbad/dwbad.lua": Data("x".utf8)]); ch.put("/packages/dwbad.zip", evil, t0)
         packages.append(["id": "dwbad", "kind": "ashita-addon", "version": "1", "url": site + "/packages/dwbad.zip",
@@ -190,6 +198,32 @@ extension Headless {
               { if case .failed(let why) = sync() { return why.contains("ROM/2/2.DAT") && why.contains("30260904_1") }; return false }())
         files.removeLast(); publishClient(t0.addingTimeInterval(120))
         _ = sync()
+        // A first install stopped part way through the client, then /api/manifest down.
+        let halfway = tmp.appendingPathComponent("DriftwoodXI-halfway")
+        let noList = DriftwoodChannel.Sources(manifest: "http://127.0.0.1:9/m", ashita: site + "/ashita.json", content: site + "/content.json")
+        func halfState() -> [String: Any] {
+            (try? Data(contentsOf: halfway.appendingPathComponent(".ffxi-on-mac/driftwood.json")))
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        }
+        // Stop as the client starts (its first line); FFXiMain.dll then stands for what a list of
+        // 65,053 files gets done between two of assemble's Stop checks.
+        let stopAtClient = StopFlag()
+        let stopped = DriftwoodSync(root: halfway, sources: src, stop: stopAtClient, log: { _ in stopAtClient.raise() }).run(install: true, donors: [donor])
+        check("stop part way through a first install's client: its list is left unverified",
+              stopped == .stopped && halfState()["clientList"] as? String == "" && halfState()["finished"] as? Bool == false)
+        write(main, halfway.appendingPathComponent("Game/FINAL FANTASY XI/FFXiMain.dll"))
+        let listCopy = halfway.appendingPathComponent(".ffxi-on-mac/client-manifest.json")
+        let keptList = try? Data(contentsOf: listCopy)
+        try? fm.removeItem(at: listCopy)
+        let noCopy = DriftwoodSync(root: halfway, sources: noList, log: { _ in }).run(donors: [donor])
+        check("then /api/manifest down and no copy of it: refused, not finished",
+              { if case .failed(let why) = noCopy { return why.contains("client list") }; return false }() && halfState()["finished"] as? Bool != true)
+        if let keptList { write(keptList, listCopy) }
+        let fromCopy = DriftwoodSync(root: halfway, sources: noList, log: { _ in }).run(donors: [donor])
+        check("then /api/manifest down with the copy kept from it: the client completes from the donor",
+              { if case .ok = fromCopy { return true }; return false }() && keptList != nil
+                && (try? Data(contentsOf: halfway.appendingPathComponent("Game/FINAL FANTASY XI/ROM/1/1.DAT"))) == dat
+                && halfState()["clientList"] as? String == keptList.map { AscensionChannel.sha256($0) } && halfState()["finished"] as? Bool == true)
         // Offline after a finished update plays; Stop stops.
         let down = DriftwoodChannel.Sources(manifest: "http://127.0.0.1:9/m", ashita: "http://127.0.0.1:9/a", content: "http://127.0.0.1:9/c")
         check("offline after a finished update: play with what is there", { if case .offline = sync(down) { return true }; return false }())

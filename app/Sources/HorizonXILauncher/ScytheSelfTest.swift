@@ -25,6 +25,24 @@ extension Headless {
                 && rel?.clientVersion == "30260429_1" && rel?.targetCount == 65062 && rel?.targetSHA.hasPrefix("E4A9B818") == true)
         let tampered = Data(String(decoding: real, as: UTF8.self).replacingOccurrences(of: "\"bytes\": 140", with: "\"bytes\": 141").utf8)
         check("a release changed by one byte is refused", ScytheChannel.verify(tampered, key: ScytheChannel.releaseKey) == nil)
+        // Their signed release, as served (one level deep), and a different one beside it.
+        let realText = String(decoding: real, as: UTF8.self)
+        let releaseAt = realText.range(of: "\"release\": ")?.upperBound ?? realText.endIndex
+        let signatureAt = realText.range(of: ",\r\n  \"signature\"")?.lowerBound ?? realText.endIndex
+        let genuine = String(realText[releaseAt..<signatureAt]), signature = String(realText[signatureAt...])
+        let other = genuine.replacingOccurrences(of: "scythe-30260429-1-r1", with: "scythe-30260429-9-r1")
+        let smuggled = Data(("{\r\n  \"previous\": {\r\n  \"release\": " + genuine + "\r\n  },\r\n  \"release\": " + other + signature).utf8)
+        check("their signed release nested under an earlier key, another one at the top level: the top-level one is checked, and refused",
+              !genuine.isEmpty && ScytheChannel.signedBytes(smuggled) != ScytheChannel.signedBytes(real)
+                && ScytheChannel.verify(smuggled, key: ScytheChannel.releaseKey) == nil)
+        // Two top-level releases (one key spelled with an escape, which JSON reads as the same key):
+        // whichever one JSONSerialization keeps, the signed fields are read or nothing.
+        let twice = [Data(("{\r\n  \"release\": " + genuine + ",\r\n  \"release\": " + other + signature).utf8),
+                     Data(("{\r\n  \"\\u0072elease\": " + other + ",\r\n  \"release\": " + genuine + signature).utf8)]
+        check("two top-level releases: only the signed one is read, or none",
+              rel != nil && twice.allSatisfy { d in let v = ScytheChannel.verify(d, key: ScytheChannel.releaseKey); return v == nil || v == rel })
+        check("its failures read as their own text wherever they are caught",
+              (ScytheSync.Failure(description: "Scythe's file list could not be read.") as Error).localizedDescription == "Scythe's file list could not be read.")
         // Their tree hash sorts the Windows way: on "ROM\\1.DAT", where '\\' (0x5C) comes before '_' (0x5F).
         let tf: [DriftwoodChannel.ClientFile] = [.init(path: "ROM_X.DAT", size: 1, sha256: "aa"), .init(path: "ROM/1.DAT", size: 2, sha256: "bb")]
         let manual = AscensionChannel.sha256(Data("scythe-client-tree-v1\nROM/1.DAT\u{0}2\u{0}BB\nROM_X.DAT\u{0}1\u{0}AA\n".utf8)).uppercased()
