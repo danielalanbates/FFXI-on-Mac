@@ -16,7 +16,7 @@ Downloads it made (864 MB, never executed) are in `~/Downloads/lsb-survey/`.
 
 HorizonXI, CatsEyeXI, Gaia XI, Supernova, OmicronXI, the local world, **AscensionXI** (b71),
 **Vanadreams** (b72), **DriftwoodXI** (b73), **PegasusXI** (b74), **MistXI** and **Moghouse XI** (b75),
-**LevelDown 99** and **Scythe** (b76).
+**LevelDown 99** and **Scythe** (b76), **Olympus XI** and **Legendary Relaunch** (b77).
 Cut for their codebase: Eden, FFEra, ValhallaXI (DarkStar lineage). Stopped: Tabula Rasa XI.
 
 ## LandSandBoat worlds not yet in the launcher
@@ -32,8 +32,8 @@ Cut for their codebase: Eden, FFEra, ValhallaXI (DarkStar lineage). Stopped: Tab
 | **Moghouse XI** (moghouse.cc) | `ffxi.cc` (2.2.x) | low | Retail client + xiloader `--server ffxi.cc` | Fun server (GM level 1 for all); dual box yes (listing) | **Added in b75** ([`RETAIL-WORLDS.md`](RETAIL-WORLDS.md)): retail client from this Mac + Ashita + xiloader 2.2.0 |
 | **Scythe** (scythe-bbq.pages.dev) | `212.28.177.210` (2.1.x) | none found | Retail client, which their launcher pins (and may downgrade) to `30260429_1` from a signed public channel (`/launcher/channel/current.json`: 65,062 files, 14.9 GB) | Two accounts per player, dual box allowed | **Added in b76** ([`SCYTHE.md`](SCYTHE.md)): their signed release, ~0.9 GB from them, the rest from this Mac |
 | **LevelDown 99** | `LevelDownFFXI.com` (2.2.x) | none found | Retail + patch files from a Google Drive folder + LSB xiloader | 2 active + 1 mule (listing) | **Added in b76** ([`RETAIL-WORLDS.md`](RETAIL-WORLDS.md)): their own client archive (30260203_0) + Ashita + xiloader 2.2.0 |
-| **Olympus XI** (olympus-games.dev) | `172.96.141.132` (2.2.x) | 1 online (open beta) | Their Electron launcher installs or reuses retail, then patch sets from public GitHub releases; custom login cert | No multibox/addon rules published | Later — beta, one player |
-| **Legendary Relaunch** | `15.204.112.102` (2.1.x, custom ports) | none found | Retail + their launcher | **Invite-only**: "Ask in our Discord and a GM will set you up with a login." Multibox freely | Later — needs a GM-made account anyway |
+| **Olympus XI** (olympus-games.dev) | `172.96.141.132` (2.2.x) | 1 online (open beta) | Their Electron launcher installs or reuses retail, then patch sets from public GitHub releases; custom login cert | No multibox/addon rules published | **Added in b77** ([`RETAIL-WORLDS.md`](RETAIL-WORLDS.md)): their client list + delta pack, their DATs as an XIPivot overlay |
+| **Legendary Relaunch** | `15.204.112.102` (2.1.x, custom ports) | none found | Retail + their launcher | **Invite-only**: "Ask in our Discord and a GM will set you up with a login." Multibox freely | **Added in b77** ([`RETAIL-WORLDS.md`](RETAIL-WORLDS.md)): retail client + their DATs as an overlay; accounts from a GM |
 | **Eventide XI** (eventide-xi.com) | `66.85.152.250` | ~50 online (Reddit, 2025-12) | Public full client zip, 8.2 GB, ranges, sha256 published | Single-box. Account made in the loader | **Codebase unclear** — answers the binary `0x02` (an old login build, like Gaia XI), and the operator maintains an AirSkyBoat fork. Daniel's rule is LSB only; decide before adding |
 | **ff11sf** (Chinese, 99 + 75) | `game.ff11sf.com`, `75.ff11sf.com` (2.1.x) | none found | Own launcher via lanzouj file-share links | **Allows speed hacks and auto-play bots**; their README threatens to attack every other server if theirs is attacked | **Not added** — not a community this launcher should send anyone to |
 
@@ -71,6 +71,6 @@ such.
 3. **DriftwoodXI** (b73), **MistXI** and **Moghouse XI** (b75) — done: a retail client first. All three are on the same
    retail patch as AscensionXI and Vanadreams (`30260904_1`) or close to it: copy the identical
    retail files the way AscensionXI's install does instead of running Square Enix's installer.
-4. **Scythe** and **LevelDown 99** (done, b76); **Olympus XI** (open beta, 1 player), **Legendary Relaunch** (invite-only: a GM makes each account).
+4. **Scythe** and **LevelDown 99** (done, b76); **Olympus XI** and **Legendary Relaunch** (done, b77).
 5. **Phoenix XI** and **Titan XI** only with each staff's written OK (Daniel asks; this project does
    not contact them). **Eventide XI** after Daniel decides on its codebase.

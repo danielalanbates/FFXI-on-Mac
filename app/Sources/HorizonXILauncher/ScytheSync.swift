@@ -76,36 +76,71 @@ enum ScytheChannel {
         }
     }
 
-    /// The bytes their signature covers: the received `release` object, re-indented to top level with
-    /// CRLF line ends (their launcher re-serializes it with System.Text.Json; the server writes it the
-    /// same way, one level deeper).
+    /// The bytes their signature covers: the document's own `release` object, re-indented to top level
+    /// with CRLF line ends (their launcher re-serializes it with System.Text.Json; the server writes it
+    /// the same way, one level deeper). Only a key of the top-level object counts: a `release` nested
+    /// under another key, or inside a string, is not the one their launcher reads.
     static func signedBytes(_ raw: Data) -> Data? {
-        guard let text = String(data: raw, encoding: .utf8), let key = text.range(of: "\"release\": ") else { return nil }
-        var depth = 0, inString = false, escaped = false
-        var i = key.upperBound, end: String.Index?
-        while i < text.endIndex {
-            let c = text[i]
+        // Byte by byte: JSON's structure is ASCII, and no UTF-8 sequence holds an ASCII byte.
+        // `depth` counts open objects and arrays; a string at depth 1 right after `{` or `,` is a key.
+        let b = [UInt8](raw)
+        let quote = UInt8(ascii: "\""), openBrace = UInt8(ascii: "{"), closeBrace = UInt8(ascii: "}")
+        func space(_ c: UInt8) -> Bool { c == 0x20 || c == 0x09 || c == 0x0A || c == 0x0D }
+        var depth = 0, inString = false, escaped = false, wantKey = false
+        var key: Int?, start: Int?, end: Int?
+        var i = 0
+        while i < b.count, end == nil {
+            let c = b[i]
             if inString {
-                if escaped { escaped = false } else if c == "\\" { escaped = true } else if c == "\"" { inString = false }
-            } else if c == "\"" { inString = true }
-            else if c == "{" { depth += 1 }
-            else if c == "}" { depth -= 1; if depth == 0 { end = i; break } }
-            i = text.index(after: i)
+                if escaped { escaped = false } else if c == UInt8(ascii: "\\") { escaped = true } else if c == quote {
+                    inString = false
+                    if let k = key {
+                        key = nil
+                        if b[(k + 1)..<i].elementsEqual("release".utf8) {
+                            // `"release": {`, JSON whitespace allowed around the colon; any other value is not theirs.
+                            var j = i + 1
+                            while j < b.count, space(b[j]) { j += 1 }
+                            guard j < b.count, b[j] == UInt8(ascii: ":") else { return nil }
+                            j += 1
+                            while j < b.count, space(b[j]) { j += 1 }
+                            guard j < b.count, b[j] == openBrace else { return nil }
+                            start = j; i = j
+                            continue
+                        }
+                    }
+                }
+            } else if c == quote {
+                inString = true
+                if depth == 1, wantKey { key = i; wantKey = false }
+            } else if c == openBrace || c == UInt8(ascii: "[") {
+                depth += 1; wantKey = depth == 1 && c == openBrace
+            } else if c == closeBrace || c == UInt8(ascii: "]") {
+                depth -= 1
+                if depth == 1, start != nil { end = i }
+                if depth <= 0 { break }
+            } else if c == UInt8(ascii: ","), depth == 1 {
+                wantKey = true
+            }
+            i += 1
         }
-        guard let end, text[key.upperBound] == "{" else { return nil }
-        let lines = String(text[key.upperBound...end]).replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+        guard let start, let end, let text = String(bytes: b[start...end], encoding: .utf8) else { return nil }
+        let lines = text.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
         let out = [lines[0]] + lines.dropFirst().map { $0.hasPrefix("  ") ? String($0.dropFirst(2)) : $0 }
         return Data(out.joined(separator: "\r\n").utf8)
     }
 
     /// The release, when `raw` carries a valid signature by `key` and the fields their launcher checks.
+    /// The fields are read from the signed bytes themselves (CRLF is JSON whitespace), and the
+    /// document's own `release` must be that same object.
     static func verify(_ raw: Data, key: P256.Signing.PublicKey?) -> Release? {
         guard let key, let signed = signedBytes(raw),
               let o = (try? JSONSerialization.jsonObject(with: raw)) as? [String: Any],
               let sigText = o["signature"] as? String, let sig = Data(base64Encoded: sigText), sig.count == 64,
               let ecdsa = try? P256.Signing.ECDSASignature(rawRepresentation: sig),
               key.isValidSignature(ecdsa, for: signed),
-              let r = o["release"] as? [String: Any], (r["schemaVersion"] as? NSNumber)?.intValue == 1,
+              let r = (try? JSONSerialization.jsonObject(with: signed)) as? [String: Any],
+              let top = o["release"] as? [String: Any], (r as NSDictionary).isEqual(to: top),
+              (r["schemaVersion"] as? NSNumber)?.intValue == 1,
               let id = r["releaseId"] as? String, id.range(of: #"^[A-Za-z0-9._-]{1,100}$"#, options: .regularExpression) != nil,
               let cv = r["clientVersion"] as? String,
               let t = r["target"] as? [String: Any], let tc = (t["fileCount"] as? NSNumber)?.intValue,
@@ -193,7 +228,11 @@ enum ScytheChannel {
 
 final class ScytheSync: @unchecked Sendable {
     typealias Outcome = AscensionSync.Outcome
-    struct Failure: Error, CustomStringConvertible { let description: String }
+    /// LocalizedError too, so a catch that only has `localizedDescription` prints this text.
+    struct Failure: LocalizedError, CustomStringConvertible {
+        let description: String
+        var errorDescription: String? { description }
+    }
 
     let root: URL
     private let src: ScytheChannel.Sources

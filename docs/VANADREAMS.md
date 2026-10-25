@@ -59,7 +59,7 @@ an address they moved from is pointed at the new one.
 
 ## Verified (2026-10-24)
 
-- `--selftest-vanadreams`: 24 checks against a fake site on 127.0.0.1 (install, effects off, profile,
+- `--selftest-vanadreams`: 42 checks (b77) against a fake site on 127.0.0.1 (install, effects off, profile,
   script, pivot order, the record, an added zip, a moved server, a damaged loader refused, offline,
   Stop, a destination outside the folder refused, servers.json).
 - The real install: see BETA-72.

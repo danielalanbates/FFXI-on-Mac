@@ -72,6 +72,8 @@ final class ServerFeeds: ObservableObject {
         ("PegasusXI", "https://pegasusxi.com/api/status", "playerCount"),
         // {"ok":true,"status":"online","onlinePlayers":0,"totalCharacters":34,"clientVersion":"30260805_0",…}
         ("MistXI", "https://api.mistxi.com/status.php", "onlinePlayers"),
+        // {"online":true,"maintenance":false,"playersOnline":2,…} -- their site's counter.
+        ("Olympus XI", "https://olympus-games.dev/api/status", "playersOnline"),
     ]
 
     /// Fetch every published online counter. Cheap (three tiny GETs), silent on failure, and a

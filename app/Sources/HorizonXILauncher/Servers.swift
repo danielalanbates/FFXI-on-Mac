@@ -483,6 +483,34 @@ struct Server: Codable, Identifiable, Hashable {
                // scythe-bbq.pages.dev/getting-started, 2026-10-24: "You may use up to two accounts per player for
                // dual-boxing, with both online simultaneously."
                maxClients: 2, createsAccountAtLogin: true),
+        // Added 2026-10-24 (b77). LSB: port 54231 answers "requires version 2.2.x". From their site and
+        // their launcher (0.7.18, app.asar read as data); see docs/RETAIL-WORLDS.md.
+        Server(name: RetailWorld.olympus.world, host: RetailWorld.olympus.host, bootProfile: RetailWorld.olympus.profile, verified: false,
+               note: "Open beta. 75 cap, Chains of Promathia and Treasures of Aht Urhgan, era plus.",
+               era: "75 cap · CoP + ToAU · open beta", population: 2, codebase: .landSandBoat,
+               installURL: "https://olympus-games.dev/", installKind: .retailWorld,
+               installNote: "Retail FFXI from the identical files of another world's client on this Mac, Ashita and LandSandBoat's "
+                     + "xiloader 2.2, then their DATs (about 1.2 GB) as an overlay, as their launcher sets it up.",
+               accountURL: "https://olympus-games.dev/create",
+               accountHow: "Sign up on olympus-games.dev (that also makes your first character), or type the account name "
+                     + "and password you want above and Create account.",
+               discordURL: "https://discord.gg/apYsQ4b4GN",
+               // No multibox rule on their site or in their launcher (2026-10-24): one client.
+               maxClients: 1, loaderOptions: RetailWorld.olympus.loaderOptions, createsAccountAtLogin: true),
+        // Added 2026-10-24 (b77). LSB (their FAQ says so; port 54231 answers "'2.1.x'"). From their site and
+        // their launcher (1.0.29, read with ILSpy); see docs/RETAIL-WORLDS.md.
+        Server(name: RetailWorld.legendary.world, host: RetailWorld.legendary.host, bootProfile: RetailWorld.legendary.profile,
+               verified: false,
+               note: "Invite-only. Level 99 custom: fast progression and a deep custom endgame.",
+               era: "99 cap · custom · invite-only", population: 0, codebase: .landSandBoat,
+               installURL: "https://www.ffxi-legendary.com/", installKind: .retailWorld,
+               installNote: "Retail FFXI from the identical files of another world's client on this Mac, Ashita and LandSandBoat's "
+                     + "xiloader 2.1, then their DATs as an overlay from their portal, as their launcher sets it up.",
+               accountHow: "Invite-only: \"new accounts aren't created automatically. Ask in our Discord and a GM will set "
+                     + "you up with a login.\" Then log in here with it.",
+               discordURL: "https://discord.gg/BWaSwqn5Fq",
+               // Their FAQ (2026-10-24): "There are no account limits and no cap on how many characters you run at once."
+               maxClients: Server.noClientCap),
         Server(name: "Eden", host: "play.edenxi.com", bootProfile: "eden.ini", verified: false,
                note: "Login host from Eden's own new-player wiki. Untested by this project.",
                era: "Classic · 75 cap", population: 1925, codebase: .darkStarLineage,

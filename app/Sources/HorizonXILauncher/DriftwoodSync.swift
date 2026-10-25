@@ -100,13 +100,16 @@ enum DriftwoodChannel {
     }
 
     /// Their `hashTree` over a folder. The addon's own entry file is read without LuaJITGuard's lines.
-    static func treeHash(of dir: URL, entry: String? = nil) -> String? {
+    /// `skipFinderFiles`: without Finder's `.DS_Store` and AppleDouble `._*` files, which are not the
+    /// addon's (for an installed folder; a downloaded package is hashed as it came).
+    static func treeHash(of dir: URL, entry: String? = nil, skipFinderFiles: Bool = false) -> String? {
         let fm = FileManager.default
         guard let walk = fm.enumerator(atPath: dir.path) else { return nil }
         var files: [(String, URL)] = []
         for case let rel as String in walk {
             let u = dir.appendingPathComponent(rel)
             guard AscensionSync.isRegularFile(u), !rel.hasSuffix(".driftwood-content.json") else { continue }
+            if skipFinderFiles, u.lastPathComponent == ".DS_Store" || u.lastPathComponent.hasPrefix("._") { continue }
             files.append((rel.lowercased(), u))
         }
         files.sort { $0.0 < $1.0 }
@@ -233,17 +236,24 @@ final class DriftwoodSync: @unchecked Sendable {
         }
         writeState(["finished": false])
         // 1. The retail client, when their list is not the one it was last put together from, on
-        // Setup/Repair, or when it is not there.
+        // Setup/Repair, or when it is not there. With /api/manifest down, the copy kept from the last
+        // time it answered stands in for it; with neither, only a client whose last assembly ran to
+        // the end goes on (`clientList` is "" from the start of an assembly until it finishes, so a
+        // Stop or a failure part way leaves it so).
         let clientMissing = !client.present
-        if let m = gotManifest {
-            let listSHA = AscensionChannel.sha256(m.data)
-            if install || clientMissing || readState()["clientList"] as? String != listSHA {
-                guard let files = DriftwoodChannel.parseClientManifest(m.data) else { throw Failure(description: "DriftwoodXI's client list could not be read.") }
+        let assembledFrom = readState()["clientList"] as? String ?? ""
+        if let list = gotManifest?.data ?? (try? Data(contentsOf: manifestCopy)) {
+            let listSHA = AscensionChannel.sha256(list)
+            if install || clientMissing || assembledFrom != listSHA {
+                guard let files = DriftwoodChannel.parseClientManifest(list) else { throw Failure(description: "DriftwoodXI's client list could not be read.") }
+                writeState(["clientList": ""])
                 try client.assemble(files, donors: donors, build: DriftwoodChannel.clientBuild)
                 writeState(["clientList": listSHA])
             }
-        } else if clientMissing {
-            throw Failure(description: "DriftwoodXI's client list didn't load, and there is no client here yet.")
+        } else if clientMissing || assembledFrom.isEmpty {
+            throw Failure(description: "DriftwoodXI's client list (xi.driftwoodgaming.com/api/manifest) didn't load, and "
+                          + (clientMissing ? "there is no client here yet" : "the client here was not finished last time")
+                          + ". Try again in a few minutes.")
         }
         try client.ensureViewer(donors: donors)
         try checkStop()
@@ -262,7 +272,11 @@ final class DriftwoodSync: @unchecked Sendable {
             try checkStop()
             progress("Updating DriftwoodXI's addons", Double(n) / Double(max(packages.count, 1)))
             let dir = ashita.appendingPathComponent("addons/\(p.id)")
-            if DriftwoodChannel.treeHash(of: dir, entry: "\(p.id).lua") != p.treeHash {
+            // Current when it hashes to their treeHash as it is, or without the .DS_Store and ._* files
+            // Finder leaves in a folder it shows; else one of those would reinstall it at every Play.
+            let entry = "\(p.id).lua"
+            if DriftwoodChannel.treeHash(of: dir, entry: entry) != p.treeHash,
+               DriftwoodChannel.treeHash(of: dir, entry: entry, skipFinderFiles: true) != p.treeHash {
                 try installPackage(p, into: dir)
                 changed += 1
             }

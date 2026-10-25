@@ -18,7 +18,8 @@ import Foundation
 ///     and `PlayOnlineViewer` under the game folder, `{ashita}/…` under Ashita's (here the same
 ///     folder, as their defaults are). Each zip is downloaded, checked, unpacked and deleted, and a
 ///     line `<client_ver> <zip> <sha256>` is added to `.vanadreams-client.txt`, their own record, so a
-///     stopped install carries on and a zip they add later is fetched by the next update.
+///     stopped install carries on and a zip they add later is fetched by the next update. Here a zip
+///     also leaves a list of its files, which Setup and Repair check (theirs re-checks nothing).
 ///  5. **Profile** `config/boot/vanadreams.ini` from Ashita's `example-privateserver.ini`:
 ///     `file = .\bootloader\xiloader.exe`, `command = --server vanadreams.online`,
 ///     `script = vanadreams.txt`. An old `--server` they have moved from is pointed at the new one.
@@ -74,14 +75,32 @@ enum VanadreamsChannel {
         var totalSize: Int64 { chunks.reduce(0) { $0 + $1.size } }
     }
 
+    /// `client_ver` in their shape (`30260904_1`), else nil: it goes into every download path and
+    /// names the folder the zips wait in.
+    static func validVersion(_ v: String?) -> String? {
+        guard let v, v.range(of: #"\A3[0-9]{7}_[0-9]+\z"#, options: .regularExpression) != nil else { return nil }
+        return v
+    }
+
+    /// A zip's name as a plain file name (no folder, not hidden, not `.` or `..`): it goes into its
+    /// download path and names the file it waits in and its list.
+    static func safeChunkName(_ n: String) -> Bool {
+        !n.isEmpty && !n.hasPrefix(".") && !n.contains("/") && !n.contains("\\")
+    }
+
+    /// Their download list, or nil. A `client_ver` not in their shape or a zip named with a path
+    /// refuses the whole list; a folder to make that would leave the client is dropped.
     static func parseManifest(_ d: Data) -> Manifest? {
         guard let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
-              let v = o["client_ver"] as? String, !v.isEmpty else { return nil }
-        func strings(_ k: String) -> [String] { ((o[k] as? [Any]) ?? []).compactMap { $0 as? String } }
+              let v = validVersion(o["client_ver"] as? String) else { return nil }
+        func strings(_ k: String) -> [String] {
+            ((o[k] as? [Any]) ?? []).compactMap { $0 as? String }.filter(AscensionSync.safeRelative)
+        }
         var chunks: [Chunk] = []
         for raw in (o["chunks"] as? [Any]) ?? [] {
             guard let c = raw as? [String: Any], let name = c["name"] as? String, !name.isEmpty,
                   let sha = c["sha256"] as? String else { continue }
+            guard safeChunkName(name) else { return nil }
             chunks.append(Chunk(name: name, size: (c["size"] as? NSNumber)?.int64Value ?? 0, sha256: sha.lowercased(),
                                 dest: (c["dest"] as? String) ?? "FINAL FANTASY XI",
                                 unpacked: (c["unpacked"] as? NSNumber)?.int64Value ?? 0))
@@ -100,13 +119,14 @@ enum VanadreamsChannel {
         return parts.reduce(root) { $0.appendingPathComponent($1) }
     }
 
-    /// `<client_ver> <zip> <sha256>` lines already unpacked here, as "zip sha256".
-    static func done(in root: URL, version: String) -> Set<String> {
+    /// Zips already unpacked here, as "zip sha256", from the record's `<client_ver> <zip> <sha256>`
+    /// lines whatever their version: a zip a new client version carries unchanged is not fetched again.
+    static func done(in root: URL) -> Set<String> {
         guard let text = try? String(contentsOf: root.appendingPathComponent(recordName), encoding: .utf8) else { return [] }
         var out = Set<String>()
         for line in TextFile.lines(of: text) {
             let f = line.split(separator: " ").map(String.init)
-            if f.count >= 3, f[0] == version { out.insert(f[1] + " " + f[2]) }
+            if f.count >= 3 { out.insert(f[1] + " " + f[2]) }
         }
         return out
     }
@@ -198,6 +218,8 @@ final class VanadreamsSync: @unchecked Sendable {
     private var changed = 0
     private var stateDir: URL { root.appendingPathComponent(".ffxi-on-mac") }
     private var stateURL: URL { stateDir.appendingPathComponent("vanadreams.json") }
+    /// `<zip>.txt` per zip unpacked: its files and sizes, for Setup and Repair to check.
+    private var listsDir: URL { stateDir.appendingPathComponent("vanadreams-files") }
 
     init(root: URL, sources: VanadreamsChannel.Sources = .init(), stop: StopFlag = StopFlag(),
          log: @escaping (String) -> Void, progress: @escaping (String, Double) -> Void = { _, _ in }) {
@@ -231,21 +253,23 @@ final class VanadreamsSync: @unchecked Sendable {
 
     private func steps(install: Bool) throws -> Outcome {
         try fm.createDirectory(at: stateDir, withIntermediateDirectories: true)
-        // 0. Which client: their status API, the version their own launcher installs.
+        // 0. Which client: their status API, the version their own launcher installs. Without it, the
+        //    one this folder was fetching or has (recordedVersion); the built-in one only for a new folder.
         let status = try? getJSON(src.status)
         if status == nil {
             try checkStop()
             if installedBefore, lastUpdateFinished { return .offline("Vanadreams' site didn't answer; playing with the files from the last update.") }
         }
-        let version = (status?["client_ver"] as? String).flatMap { $0.range(of: #"^3\d{7}_\d+$"#, options: .regularExpression) != nil ? $0 : nil }
-            ?? VanadreamsChannel.knownClientVersion
+        let version = VanadreamsChannel.validVersion(status?["client_ver"] as? String) ?? recordedVersion() ?? VanadreamsChannel.knownClientVersion
+        // A list for another client than the one asked for is not used.
         guard let mData = try? get(src.clientBase + version + "/manifest.json"),
-              let manifest = VanadreamsChannel.parseManifest(mData) else {
+              let manifest = VanadreamsChannel.parseManifest(mData), manifest.version == version else {
             try checkStop()
             if installedBefore, lastUpdateFinished { return .offline("Vanadreams' download list didn't load; playing with the files from the last update.") }
             throw Failure(description: "Vanadreams' download list (client \(version)) could not be read. Try again in a few minutes.")
         }
-        writeState(["finished": false])
+        // Written first, so a stopped update carries on with this client even while their site is down.
+        writeState(["finished": false, "target": version])
         // 1. Ashita.
         if install || !fm.fileExists(atPath: root.appendingPathComponent("Ashita-cli.exe").path) {
             try installAshita()
@@ -255,9 +279,13 @@ final class VanadreamsSync: @unchecked Sendable {
         try ensureFile(src.loader, sha: src.loaderSHA, at: root.appendingPathComponent("bootloader/xiloader.exe"), label: "xiloader v2.2.0")
         try ensurePivot()
         try checkStop()
-        // 4. The client.
-        let done = VanadreamsChannel.done(in: root, version: manifest.version)
-        let todo = manifest.chunks.filter { !done.contains($0.key) }
+        // 4. The client. Setup and Repair also check each zip's files (toFetch).
+        let todo = toFetch(manifest.chunks, done: VanadreamsChannel.done(in: root), checkFiles: install)
+        // Zips wait in tmp/client-<version> until unpacked; a folder left from another version goes.
+        for old in (try? fm.contentsOfDirectory(at: stateDir.appendingPathComponent("tmp"), includingPropertiesForKeys: nil)) ?? []
+        where old.lastPathComponent.hasPrefix("client-") && old.lastPathComponent != "client-\(manifest.version)" {
+            try? fm.removeItem(at: old)
+        }
         if !todo.isEmpty {
             let mb = Double(todo.reduce(Int64(0)) { $0 + $1.size }) / 1_048_576
             log("==> Vanadreams: \(todo.count) of \(manifest.chunks.count) client packages to fetch (\(String(format: "%.0f", mb)) MB), client \(manifest.version)")
@@ -373,20 +401,142 @@ final class VanadreamsSync: @unchecked Sendable {
         let zip = tmp.appendingPathComponent(c.name)
         if !(AscensionSync.isRegularFile(zip) && ((try? fm.attributesOfItem(atPath: zip.path))?[.size] as? NSNumber)?.int64Value == c.size
              && AscensionChannel.sha256(of: zip) == c.sha256) {
-            try download(src.clientBase + version + "/" + c.name, to: zip, sha: c.sha256, onProgress: onProgress)
+            try fetchChunk(c, version: version, to: zip, onProgress: onProgress)
         }
         let out = tmp.appendingPathComponent("x-\(c.name)")
         try? fm.removeItem(at: out)
         defer { try? fm.removeItem(at: out) }
         try unzip(zip, into: out)
+        try writeList(c, of: out)
         try fm.createDirectory(at: dest, withIntermediateDirectories: true)
         try merge(out, into: dest)
-        let line = "\(version) \(c.name) \(c.sha256)\r\n"
-        let record = root.appendingPathComponent(VanadreamsChannel.recordName)
-        if let h = try? FileHandle(forWritingTo: record) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
-        else { try line.write(to: record, atomically: true, encoding: .utf8) }
+        try Self.appendLine("\(version) \(c.name) \(c.sha256)\r\n", to: root.appendingPathComponent(VanadreamsChannel.recordName))
         try? fm.removeItem(at: zip)
         log("i  Vanadreams: \(c.name) unpacked into \(dest.lastPathComponent)")
+    }
+
+    /// One zip with FileDownload, straight into the folder it waits in (a zip can be GBs; URLSession's
+    /// own downloads pass through the Mac's internal disk), carried on from what an earlier try left,
+    /// then checked. One that does not hash right is started again: a whole one (their server answers
+    /// a carry-on with 416) can only be damaged.
+    private func fetchChunk(_ c: VanadreamsChannel.Chunk, version: String, to zip: URL, onProgress: @escaping (Double) -> Void) throws {
+        let s = src.clientBase + version + "/" + c.name
+        guard let u = URL(string: s) else { throw Failure(description: "bad URL \(s)") }
+        var lastError: Error = Failure(description: "\(c.name) came down damaged")
+        for attempt in 0..<3 {
+            try checkStop()
+            do {
+                try FileDownload.run(u, to: zip, userAgent: "FFXI-on-Mac (Vanadreams client)", stop: stop) { have, total in
+                    if total > 0 { onProgress(Double(have) / Double(total)) }
+                }
+            } catch {
+                lastError = error; try checkStop(); Thread.sleep(forTimeInterval: Double(attempt + 1)); continue
+            }
+            if AscensionChannel.sha256(of: zip) == c.sha256 { return }
+            try? fm.removeItem(at: zip)
+            lastError = Failure(description: "\(c.name) came down damaged")
+        }
+        throw lastError
+    }
+
+    /// One line onto the end of their record (made when missing), with FileHandle's throwing calls: a
+    /// full or unplugged drive is an error here, where the old `write(_:)` raised and crashed the launcher.
+    static func appendLine(_ line: String, to record: URL) throws {
+        guard let h = try? FileHandle(forWritingTo: record) else {
+            try line.write(to: record, atomically: true, encoding: .utf8); return
+        }
+        defer { try? h.close() }
+        try h.seekToEnd()
+        try h.write(contentsOf: Data(line.utf8))
+    }
+
+    // MARK: - File lists (Setup and Repair)
+
+    private func listURL(_ c: VanadreamsChannel.Chunk) -> URL { listsDir.appendingPathComponent(c.name + ".txt") }
+
+    /// `size<TAB>path` for every file a zip unpacked into `out`, the path as it lands under the zip's
+    /// folder. Written before the merge: a merge cut short leaves a list its files do not match.
+    private func writeList(_ c: VanadreamsChannel.Chunk, of out: URL) throws {
+        var lines: [String] = []
+        if let walk = fm.enumerator(atPath: out.path) {
+            for case let rel as String in walk {
+                autoreleasepool {
+                    let a = try? fm.attributesOfItem(atPath: out.appendingPathComponent(rel).path)
+                    guard a?[.type] as? FileAttributeType == .typeRegular, let n = (a?[.size] as? NSNumber)?.int64Value else { return }
+                    lines.append("\(n)\t\(rel)")
+                }
+            }
+        }
+        try fm.createDirectory(at: listsDir, withIntermediateDirectories: true)
+        try (lines.joined(separator: "\n") + "\n").write(to: listURL(c), atomically: true, encoding: .utf8)
+    }
+
+    /// A zip's list, or nil when it has none (unpacked before lists were kept) or a line is not one writeList writes.
+    private func readList(_ c: VanadreamsChannel.Chunk) -> [(size: Int64, path: String)]? {
+        guard let text = try? String(contentsOf: listURL(c), encoding: .utf8) else { return nil }
+        var out: [(size: Int64, path: String)] = []
+        for line in TextFile.lines(of: text) where !line.isEmpty {
+            guard let tab = line.firstIndex(of: "\t"), let n = Int64(line[..<tab]) else { return nil }
+            let p = String(line[line.index(after: tab)...])
+            guard AscensionSync.safeRelative(p) else { return nil }
+            out.append((size: n, path: p))
+        }
+        return out
+    }
+
+    /// The zips to fetch. A Play-time update: those not in their record. Setup and Repair: also those
+    /// whose listed files are not all there at their size, and those with no list (fetched once more).
+    /// A file two zips hold is the later zip's (it is unpacked last), so only that zip is checked
+    /// against it; and a zip fetched again puts its own copy back, so a later zip sharing a file with
+    /// it is fetched again too.
+    private func toFetch(_ chunks: [VanadreamsChannel.Chunk], done: Set<String>, checkFiles: Bool) -> [VanadreamsChannel.Chunk] {
+        guard checkFiles else { return chunks.filter { !done.contains($0.key) } }
+        // Each listed file's place on disk, keyed lower-cased (the Mac's disk ignores case), with its size.
+        typealias Listed = (key: String, path: String, size: Int64)
+        let lists: [[Listed]?] = chunks.map { c -> [Listed]? in
+            guard let dest = VanadreamsChannel.destFolder(c, root: root), let l = readList(c) else { return nil }
+            return l.map { f in
+                let p = dest.path + "/" + f.path
+                return (key: p.lowercased(), path: p, size: f.size)
+            }
+        }
+        var owner: [String: Int] = [:]
+        for (i, l) in lists.enumerated() { for f in l ?? [] { owner[f.key] = i } }
+        var putBack = Set<String>(), out: [VanadreamsChannel.Chunk] = []
+        for (i, c) in chunks.enumerated() {
+            var again = !done.contains(c.key)
+            if !again {
+                if let l = lists[i] {
+                    again = l.contains { f in
+                        if putBack.contains(f.key) { return true }
+                        guard owner[f.key] == i else { return false }
+                        let there: Bool = autoreleasepool { present(f.path, size: f.size) }
+                        return !there
+                    }
+                } else {
+                    again = true
+                }
+            }
+            if again {
+                out.append(c)
+                for f in lists[i] ?? [] { putBack.insert(f.key) }
+            }
+        }
+        return out
+    }
+
+    /// A listed file there at its size. Their effects beside the loader count when switched off
+    /// (`.off`, see VanadreamsChannel's notes), as every update leaves them.
+    private func present(_ path: String, size: Int64) -> Bool {
+        func sized(_ p: String) -> Bool {
+            let a = try? fm.attributesOfItem(atPath: p)
+            return a?[.type] as? FileAttributeType == .typeRegular && (a?[.size] as? NSNumber)?.int64Value == size
+        }
+        if sized(path) { return true }
+        let ns = path as NSString
+        return VanadreamsChannel.effectWrappers.contains(ns.lastPathComponent)
+            && ns.deletingLastPathComponent.lowercased() == root.appendingPathComponent("bootloader").path.lowercased()
+            && sized(path + ".off")
     }
 
     private func writeProfile() throws {
@@ -490,6 +640,15 @@ final class VanadreamsSync: @unchecked Sendable {
 
     private func readState() -> [String: Any] {
         (try? Data(contentsOf: stateURL)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+    }
+    /// The client this folder knows, for when their status API does not answer: the one an update
+    /// was fetching, else the last one finished, else the version on their record's last line.
+    private func recordedVersion() -> String? {
+        let s = readState()
+        if let v = VanadreamsChannel.validVersion(s["target"] as? String) ?? VanadreamsChannel.validVersion(s["client"] as? String) { return v }
+        guard let text = try? String(contentsOf: root.appendingPathComponent(VanadreamsChannel.recordName), encoding: .utf8),
+              let last = TextFile.lines(of: text).last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) else { return nil }
+        return VanadreamsChannel.validVersion(last.split(separator: " ").first.map(String.init))
     }
     private func writeState(_ merge: [String: Any]) {
         var s = readState()

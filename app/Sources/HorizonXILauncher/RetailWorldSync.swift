@@ -32,34 +32,64 @@ final class RetailClient {
 
     var present: Bool { fm.fileExists(atPath: game.appendingPathComponent("FINAL FANTASY XI/FFXiMain.dll").path) }
 
-    /// Every file of `files` in place: kept when it already hashes right, copied from a donor that has
-    /// it byte for byte, else `fetch`ed (a world that serves its own files) when there is one.
-    /// `mayDiffer`: files a donor's copy of which is taken as it is when none matches.
-    func assemble(_ files: [DriftwoodChannel.ClientFile], donors: [URL], build: String,
+    /// Every file of `files` in place under `subfolder` ("FINAL FANTASY XI", or "PlayOnlineViewer"): kept
+    /// when it already hashes right, copied from a donor that has it byte for byte, else `fetch`ed (a
+    /// world that serves its own files) when there is one. `mayDiffer`: files a donor's copy of which
+    /// is taken as it is when none matches.
+    ///
+    /// All or nothing: every file that is not already right must be available (a donor holds a file of
+    /// that path and size, or `fetch` is given) before the first one is replaced, so a list this Mac
+    /// cannot satisfy leaves the client as it was instead of half one build and half another.
+    func assemble(_ files: [DriftwoodChannel.ClientFile], donors: [URL], build: String, subfolder: String = "FINAL FANTASY XI",
                   mayDiffer: Set<String> = RetailClient.mayDiffer,
+                  canFetch: ((DriftwoodChannel.ClientFile) -> Bool)? = nil,
                   fetch: ((DriftwoodChannel.ClientFile, URL) throws -> Void)? = nil) throws {
-        log("==> \(world): checking the client against the list of \(files.count) files of \(fetch == nil ? "retail " : "")\(build)")
-        let ffxi = game.appendingPathComponent("FINAL FANTASY XI")
-        var kept = 0, copied = 0, fetched = 0, missing: [String] = []
+        log("==> \(world): checking \(subfolder) against the list of \(files.count) files of \(fetch == nil ? "retail " : "")\(build)")
+        let base = game.appendingPathComponent(subfolder)
+        func stopped() throws { if stop.raised { throw Failure(description: "Stopped. Press the button again to carry on; nothing finished is lost.") } }
+        // 1. What is already right.
+        var kept = 0, need: [DriftwoodChannel.ClientFile] = []
         for (n, f) in files.enumerated() {
-            if n % 500 == 0 {
-                if stop.raised { throw Failure(description: "Stopped. Press the button again to carry on; nothing finished is lost.") }
-                progress("Checking \(world)'s client", Double(n) / Double(files.count))
-            }
+            if n % 500 == 0 { try stopped(); progress("Checking \(world)'s client", Double(n) / Double(max(files.count, 1)) * 0.5) }
             guard AscensionSync.safeRelative(f.path) else { throw Failure(description: "\(world)'s client list names an unsafe path: \(f.path)") }
-            let key = keyPrefix + "FINAL FANTASY XI/" + f.path
-            let dest = ffxi.appendingPathComponent(f.path)
+            let right: Bool = autoreleasepool { hashes.verified(keyPrefix + subfolder + "/" + f.path, at: base.appendingPathComponent(f.path), sha: f.sha256) }
+            if right { kept += 1 } else { need.append(f) }
+        }
+        // 2. Whether the rest can be had, before anything is replaced.
+        let fetchable = canFetch ?? { _ in fetch != nil }
+        do {
+            let unavailable = need.filter { f in
+                autoreleasepool {
+                    if f.size == 0 || fetchable(f) { return false }
+                    if mayDiffer.contains(f.path.lowercased()) { return false }
+                    return !donors.contains { d in
+                        let c = d.appendingPathComponent(subfolder).appendingPathComponent(f.path)
+                        return ((try? fm.attributesOfItem(atPath: c.path))?[.size] as? NSNumber)?.int64Value == f.size
+                    }
+                }
+            }
+            if let first = unavailable.first {
+                throw Failure(description: "\(unavailable.count) of \(world)'s client files are not on this Mac (first: \(subfolder)/\(first.path)). They come from "
+                              + "retail FFXI on build \(build): install a world whose client is that build first (AscensionXI or Vanadreams carry 30260904_1). "
+                              + "Nothing was changed.")
+            }
+        }
+        // 3. In place.
+        var copied = 0, fetched = 0, missing: [String] = []
+        for (n, f) in need.enumerated() {
+            if n % 100 == 0 { try stopped(); progress("Copying \(world)'s client", 0.5 + Double(n) / Double(max(need.count, 1)) * 0.5) }
+            let key = keyPrefix + subfolder + "/" + f.path
+            let dest = base.appendingPathComponent(f.path)
             // A pool per file: stat results and copies are autoreleased, and this thread drains none.
             enum Got { case kept, copied, fetched, missing }
             let got: Got = try autoreleasepool {
-                if hashes.verified(key, at: dest, sha: f.sha256) { return .kept }
                 if f.size == 0 {
                     try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
                     try Data().write(to: dest); hashes.record(key, at: dest, sha: f.sha256); return .copied
                 }
-                if copy(f, from: donors, to: dest, key: key, exact: true) { return .copied }
+                if copy(f, from: donors, subfolder: subfolder, to: dest, key: key, exact: true) { return .copied }
                 if mayDiffer.contains(f.path.lowercased()),
-                   fm.fileExists(atPath: dest.path) || copy(f, from: donors, to: dest, key: key, exact: false) { return .kept }
+                   fm.fileExists(atPath: dest.path) || copy(f, from: donors, subfolder: subfolder, to: dest, key: key, exact: false) { return .kept }
                 if let fetch {
                     try fetch(f, dest)
                     hashes.record(key, at: dest, sha: f.sha256)
@@ -75,20 +105,22 @@ final class RetailClient {
             }
         }
         hashes.save()
-        log("==> \(world): \(kept) client files already right, \(copied) copied from other clients on this Mac, "
+        log("==> \(world): \(kept) files of \(subfolder) already right, \(copied) copied from other clients on this Mac, "
             + (fetch == nil ? "\(missing.count) missing" : "\(fetched) downloaded"))
         if !missing.isEmpty {
-            throw Failure(description: "\(missing.count) of \(world)'s client files are not on this Mac (first: \(missing[0])). They come from "
-                          + "retail FFXI on build \(build): install AscensionXI or Vanadreams first, which carry that build.")
+            // A donor of the right size held different bytes: rare, and the file stays as it was.
+            throw Failure(description: "\(missing.count) of \(world)'s client files are not on this Mac byte for byte (first: \(subfolder)/\(missing[0])). "
+                          + "They come from retail FFXI on build \(build).")
         }
     }
 
     /// A donor's copy of `f` into `dest`, hashed after copying. `exact: false` takes any same-path file.
-    private func copy(_ f: DriftwoodChannel.ClientFile, from donors: [URL], to dest: URL, key: String, exact: Bool) -> Bool {
+    private func copy(_ f: DriftwoodChannel.ClientFile, from donors: [URL], subfolder: String = "FINAL FANTASY XI",
+                      to dest: URL, key: String, exact: Bool) -> Bool {
         let part = dest.deletingLastPathComponent().appendingPathComponent("." + dest.lastPathComponent + ".ffxi-part")
         let order = lastDonor.map { l in [l] + donors.filter { $0 != l } } ?? donors
         for d in order {
-            let c = d.appendingPathComponent("FINAL FANTASY XI").appendingPathComponent(f.path)
+            let c = d.appendingPathComponent(subfolder).appendingPathComponent(f.path)
             guard AscensionSync.isRegularFile(c) else { continue }
             if exact, ((try? fm.attributesOfItem(atPath: c.path))?[.size] as? NSNumber)?.int64Value != f.size { continue }
             do {
@@ -184,16 +216,154 @@ enum RetailWorld {
         var loaderSeries: String
         /// Addons the world's own launcher deletes from Ashita's bundle; never left in place here.
         var removedAddons: [String] = []
+        /// Plugins (`plugins/<name>.dll`) the world's own launcher deletes.
+        var removedPlugins: [String] = []
         var plugins: [String] = ["thirdparty", "addons", "screenshot", "winefix"]
-        /// A world whose server runs an older client than retail and hands out that client itself:
-        /// the client comes from their archive instead of from retail files (`ClientArchive`).
-        var archive: ClientArchive? = nil
+        /// Where the client comes from: retail's files on this Mac (the default), a world's own archive
+        /// of an older client (`ClientArchive`), or a world's own client list (Olympus XI).
+        var client: ClientSource = .retail
+        /// The world's own DATs, served ahead of the client's by XIPivot (`Overlay`).
+        var overlay: Overlay? = nil
+        /// Loader arguments their own profile passes after `--server` (also `Server.loaderOptions`).
+        var loaderOptions: [String] = []
         var loader: Loader { RetailWorld.loaders[loaderSeries]! }
+    }
+
+    /// A world's DAT overlay: files of theirs that XIPivot reads in place of the client's, kept in
+    /// `Ashita/polplugins/DATs/<name>/`. The client's own files are never changed.
+    struct Overlay {
+        enum Source {
+            /// Olympus XI: GitHub releases `patch-<n>`, the newest one's `manifest.json` lists the whole
+            /// set; each file is the release asset `<sha256>.dat`.
+            case githubPatches(releases: String)
+            /// Legendary Relaunch: `<base>/manifest.json` lists the whole set; each file is `<base>/files/<path>`.
+            case fileList(base: String)
+        }
+        var name: String
+        var source: Source
+        /// Paths their own launcher never puts in the overlay.
+        var skipped: Set<String> = []
+    }
+
+    struct OverlayFile: Equatable { var path: String; var size: Int64; var sha256: String; var url: String }
+
+    /// Olympus XI's patch manifest (`@olympus/shared/src/patch/patch.ts`): their path rule (numbered DATs
+    /// and the ROMn tables only), the asset named for its hash, no duplicate paths, their size limits.
+    static func parsePatchManifest(_ d: Data, releases: String) -> (version: String, files: [OverlayFile])? {
+        guard d.count <= 1 << 20, let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+              let patch = (o["patch"] as? NSNumber)?.intValue, patch > 0, let fs = o["files"] as? [Any], fs.count <= 20_000 else { return nil }
+        var out: [OverlayFile] = [], seen = Set<String>(), total: Int64 = 0
+        for raw in fs {
+            guard let f = raw as? [String: Any], let p = f["path"] as? String, let n = (f["size"] as? NSNumber)?.int64Value,
+                  let h = (f["sha256"] as? String)?.lowercased(), h.count == 64, f["asset"] as? String == h + ".dat",
+                  p.range(of: #"^(ROM[2-9]?/\d{1,4}/\d{1,5}\.DAT|ROM([2-9])/[VF]TABLE\2\.DAT)$"#, options: .regularExpression) != nil,
+                  n >= 0, n <= 256 << 20, seen.insert(p.lowercased()).inserted else { return nil }
+            total += n
+            out.append(OverlayFile(path: p, size: n, sha256: h, url: "\(releases)/download/patch-\(patch)/\(h).dat"))
+        }
+        return total <= 2 << 30 ? ("patch-\(patch)", out) : nil
+    }
+
+    /// Legendary Relaunch's update manifest (`UpdateService`): `{version, files: [{path, sha256, size}]}`.
+    static func parseFileListManifest(_ d: Data, base: String) -> (version: String, files: [OverlayFile])? {
+        guard let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+              let v = o["version"] as? String, !v.isEmpty, let fs = o["files"] as? [Any] else { return nil }
+        var out: [OverlayFile] = [], seen = Set<String>()
+        for raw in fs {
+            guard let f = raw as? [String: Any], let p0 = f["path"] as? String, let n = (f["size"] as? NSNumber)?.int64Value,
+                  let h = (f["sha256"] as? String)?.lowercased(), h.count == 64 else { return nil }
+            let p = p0.replacingOccurrences(of: "\\", with: "/")
+            guard AscensionSync.safeRelative(p), p.uppercased().hasPrefix("ROM"), seen.insert(p.lowercased()).inserted else { return nil }
+            let enc = p.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? p
+            out.append(OverlayFile(path: p, size: n, sha256: h, url: "\(base)/files/\(enc)"))
+        }
+        return (v, out)
+    }
+
+    /// pivot.ini with `first` at the top of the overlays and every other listed overlay after it, the
+    /// rest of the file kept.
+    static func pivotINI(_ existing: String?, first: String) -> String {
+        var kept: [String] = [], listed: [String] = [], inOverlays = false
+        for raw in TextFile.lines(of: existing ?? "") {
+            let t = raw.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("[") { inOverlays = t.lowercased() == "[overlays]"; if inOverlays { continue } }
+            if inOverlays {
+                if let eq = t.firstIndex(of: "=") {
+                    let v = t[t.index(after: eq)...].trimmingCharacters(in: .whitespaces)
+                    if !v.isEmpty, v.caseInsensitiveCompare(first) != .orderedSame { listed.append(v) }
+                }
+                continue
+            }
+            kept.append(raw)
+        }
+        while kept.last?.trimmingCharacters(in: .whitespaces).isEmpty == true { kept.removeLast() }
+        if !kept.contains(where: { $0.trimmingCharacters(in: .whitespaces).lowercased() == "[settings]" }) {
+            kept = ["[settings]", "debug_log = false"] + kept
+        }
+        let overlays = ([first] + listed).enumerated().map { "\($0.offset) = \($0.element)" }
+        return (kept + ["", "[overlays]"] + overlays + [""]).joined(separator: "\r\n")
+    }
+
+    enum ClientSource {
+        /// Retail 30260904_1 from identical files on this Mac (`RetailClient`), against the pinned list.
+        case retail
+        case archive(ClientArchive)
+        /// Olympus XI: the client named by their newest patch's `client.tag`, a GitHub release holding
+        /// `client-manifest.json` (every FINAL FANTASY XI and PlayOnlineViewer file with its SHA-256)
+        /// and `pack-NN.bin` (the files changed since Square Enix's 2019 installer, each a zlib stream).
+        case olympus(releases: String)
     }
 
     /// The client a world publishes as one archive of a whole `FINAL FANTASY XI` folder, named on a
     /// wiki page: its MediaWiki API (`action=parse&prop=wikitext`).
-    struct ClientArchive { var page: String }
+    ///
+    /// The page is only a pointer. Anyone with an account can edit a wiki, so an archive is installed
+    /// only when its version, file and SHA-256 are pinned here (`pins`); a version the page names that
+    /// is not pinned is reported, and the client already in place is kept.
+    struct ClientArchive {
+        var page: String
+        var pins: [String: ArchivePin]
+    }
+    struct ArchivePin: Equatable { var fileID: String; var sha256: String; var size: Int64 }
+
+    /// The list of retail 30260904_1 (DriftwoodXI's `/api/manifest`) is pinned by this digest of its
+    /// entries (`entriesDigest`): the JSON may be written again, the files of a build do not change.
+    /// When they move to another build, a cached copy of this one is used instead.
+    static let retailListDigest = "464d8608d81cb1b85caa1dbb19ce5d18c98bf882b0586b724e2f75f7584c9849"
+
+    /// SHA-256 over "path\0size\0sha256\n" per file, paths lower-cased, in order.
+    static func entriesDigest(_ files: [DriftwoodChannel.ClientFile]) -> String {
+        let rows = files.map { ($0.path.lowercased(), $0.size, $0.sha256.lowercased()) }.sorted { $0.0 < $1.0 }
+        var text = ""
+        for r in rows { text += "\(r.0)\u{0}\(r.1)\u{0}\(r.2)\n" }
+        return AscensionChannel.sha256(Data(text.utf8))
+    }
+
+    struct OlympusClientFile { var file: DriftwoodChannel.ClientFile; var subfolder: String; var pack: String?; var offset: Int64; var csize: Int64 }
+
+    /// Olympus XI's `client-manifest.json`: `{version, files: [{path "SquareEnix/<sub>/…", size, sha256,
+    /// delta?: {pack, offset, csize}}]}` (their launcher's client manager).
+    static func parseOlympusClient(_ d: Data) -> (version: String, files: [OlympusClientFile])? {
+        guard let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any], let v = o["version"] as? String,
+              v.range(of: #"^3\d{7}_\d+$"#, options: .regularExpression) != nil, let fs = o["files"] as? [Any] else { return nil }
+        var out: [OlympusClientFile] = []
+        for raw in fs {
+            guard let f = raw as? [String: Any], let p = f["path"] as? String, let n = (f["size"] as? NSNumber)?.int64Value,
+                  let h = (f["sha256"] as? String)?.lowercased(), h.count == 64 else { return nil }
+            let parts = p.split(separator: "/", maxSplits: 2).map(String.init)
+            guard parts.count == 3, parts[0] == "SquareEnix", ["FINAL FANTASY XI", "PlayOnlineViewer"].contains(parts[1]),
+                  AscensionSync.safeRelative(parts[2]) else { return nil }
+            var pack: String?, offset: Int64 = 0, csize: Int64 = 0
+            if let dl = f["delta"] as? [String: Any] {
+                guard let pk = dl["pack"] as? String, pk.range(of: #"^pack-\d{2}\.bin$"#, options: .regularExpression) != nil,
+                      let off = (dl["offset"] as? NSNumber)?.int64Value, let cs = (dl["csize"] as? NSNumber)?.int64Value,
+                      off >= 0, cs > 0 else { return nil }
+                pack = pk; offset = off; csize = cs
+            }
+            out.append(.init(file: .init(path: parts[2], size: n, sha256: h), subfolder: parts[1], pack: pack, offset: offset, csize: csize))
+        }
+        return (v, out)
+    }
 
     /// The version and Google Drive file a world's page names as current: the first "FFXI Version
     /// <id>" heading before "Out of Date Versions" that is not struck through, and the first Drive file
@@ -224,20 +394,46 @@ enum RetailWorld {
     /// version LD99 is running on currently" (their wiki, Past FFXI Version Repository, 2026-10-24).
     static let levelDown = Spec(world: "LevelDown 99", host: "LevelDownFFXI.com", profile: "leveldown.ini", script: "leveldown.txt",
                                 loaderSeries: "2.2",
-                                archive: ClientArchive(page: "https://ffxileveldown.fandom.com/api.php?action=parse&page=Past_FFXI_Version_Repository&prop=wikitext&format=json"))
+                                client: .archive(ClientArchive(
+                                    page: "https://ffxileveldown.fandom.com/api.php?action=parse&page=Past_FFXI_Version_Repository&prop=wikitext&format=json",
+                                    // LDFFXI30260203_0.7z, downloaded and checked 2026-10-24 (66,264 entries, client 30260203_0).
+                                    pins: ["30260203_0": ArchivePin(fileID: "1_WXohtOdVd1rUyGcK8eCfyYd2fEXp2HT",
+                                                                    sha256: "5593ec2bf87a690a2cfb1add0aba2014f1d0a178db3a166033d5f3d8cc4a57cf",
+                                                                    size: 5_528_427_346)])))
 
     static let mist = Spec(world: "MistXI", host: "play.mistxi.com", profile: "mistxi.ini", script: "mistxi.txt", loaderSeries: "2.1",
                            // MistXI's launcher deletes these from Ashita's bundle (GitHubAshitaService.cs `unwantedAddons`).
                            removedAddons: ["skeletonkey", "ahgo", "allmaps", "instantah", "instantchat", "paranormal"])
     static let moghouse = Spec(world: "Moghouse XI", host: "ffxi.cc", profile: "moghouse.ini", script: "moghouse.txt", loaderSeries: "2.2")
-    static let all: [Spec] = [mist, moghouse, levelDown]
+    /// Olympus XI (olympus-games.dev, open beta): their launcher 0.7.18 read as data (app.asar). Their
+    /// client is retail 30260904_1 (the newest patch's `client.tag`); their DATs are an XIPivot overlay
+    /// named "Olympus" from github.com/bobertdrake/olympus-xi-patch; their profile passes
+    /// `--profileport 51220`.
+    static let olympus = Spec(world: "Olympus XI", host: "172.96.141.132", profile: "olympus.ini", script: "olympus.txt",
+                              loaderSeries: "2.2",
+                              // Their launcher deletes and refuses these on every apply (index.js:2471-2520).
+                              removedAddons: ["gateway", "skeletonkey", "nomad", "ahgo", "peekaboo", "truesight", "mapdot", "watchdog",
+                                              "nokb", "casper", "paranormal", "repeater", "onevent", "allmaps", "cartographer",
+                                              "minimapmon", "olympusbots"],
+                              removedPlugins: ["minimap"],
+                              client: .olympus(releases: "https://github.com/bobertdrake/olympus-xi-patch/releases"),
+                              overlay: Overlay(name: "Olympus", source: .githubPatches(releases: "https://github.com/bobertdrake/olympus-xi-patch/releases")),
+                              loaderOptions: ["--profileport", "51220"])
+    /// Legendary Relaunch (ffxi-legendary.com, invite-only): their launcher 1.0.29 read with ILSpy. Fully
+    /// patched retail, xiloader v2.1.2, and their DATs as the XIPivot overlay "legendary" from their
+    /// portal; `ROM/0/6.DAT` is never put in it (`ItemDatGuard.IsPalUiRel`).
+    static let legendary = Spec(world: "Legendary Relaunch", host: "15.204.112.102", profile: "legendary.ini", script: "legendary.txt",
+                                loaderSeries: "2.1",
+                                overlay: Overlay(name: "legendary", source: .fileList(base: "https://portal.ffxi-legendary.com/client-updates"),
+                                                 skipped: ["ROM/0/6.DAT"]))
+    static let all: [Spec] = [mist, moghouse, levelDown, olympus, legendary]
     static func spec(_ world: String) -> Spec? { all.first { $0.world == world } }
 
     static func profile(fromExample example: String, spec: Spec) -> String {
         var t = example
         for s in [BootProfile.Setting(section: "ashita.launcher", key: "name", value: spec.world),
                   BootProfile.Setting(section: "ashita.boot", key: "file", value: ".\\\\bootloader\\\\xiloader.exe"),
-                  BootProfile.Setting(section: "ashita.boot", key: "command", value: "--server \(spec.host)"),
+                  BootProfile.Setting(section: "ashita.boot", key: "command", value: (["--server", spec.host] + spec.loaderOptions).joined(separator: " ")),
                   BootProfile.Setting(section: "ashita.boot", key: "script", value: spec.script)] {
             t = BootProfile.setting(s, in: t)
         }
@@ -279,6 +475,15 @@ enum RetailWorld {
         /// nil: the spec's own page; and where a Drive file id is fetched from.
         var archivePage: String?
         var archiveDownload: (String) -> String = RetailWorld.driveDownload
+        /// nil: the spec's own pins.
+        var archivePins: [String: ArchivePin]?
+        var retailDigest = RetailWorld.retailListDigest
+        /// nil: the spec's own Olympus releases page.
+        var olympusReleases: String?
+        /// nil: the spec's own overlay source (its releases page or base URL).
+        var overlaySource: Overlay.Source?
+        var pivotZip = VanadreamsChannel.pivotURL
+        var pivotSHA = VanadreamsChannel.pivotSHA
     }
 }
 
@@ -340,36 +545,75 @@ final class RetailWorldSync: @unchecked Sendable {
     private func steps(install: Bool, donors: [URL]) throws -> Outcome {
         try fm.createDirectory(at: stateDir, withIntermediateDirectories: true)
         let ashitaMissing = !fm.fileExists(atPath: ashita.appendingPathComponent("Ashita-cli.exe").path)
-        // What the client is made from: retail's file list, or the world's own archive.
-        var list: (data: Data, changed: Bool)?
-        var archive: (version: String, fileID: String)?
-        if let a = spec.archive {
-            archive = (try? get(src.archivePage ?? a.page).data).flatMap { $0 }.flatMap(RetailWorld.wikitext).flatMap(RetailWorld.currentArchive)
-        } else {
-            list = try? fetchCached(src.retailList, cache: stateDir.appendingPathComponent("retail-list.json"))
-        }
-        if list == nil && archive == nil {
-            try checkStop()
-            if installedBefore { return .offline("\(spec.world)'s client list didn't load; playing with the files from the last update.") }
-            if !client.present || ashitaMissing {
-                throw Failure(description: spec.archive == nil
-                    ? "The list of retail FFXI's files (xi.driftwoodgaming.com/api/manifest) didn't load. Try again in a few minutes."
-                    : "\(spec.world)'s page naming their client version didn't load. Try again in a few minutes.")
-            }
-        }
-        writeState(["finished": false])
         // 1. The client, when its source changed since it was last put together, on Setup/Repair, or
-        // when it is not there.
-        if let archive, install || !client.present || readState()["clientArchive"] as? String != archive.version {
-            try installArchive(archive)
-            writeState(["clientArchive": archive.version])
-        }
-        if let list {
-            let listSHA = AscensionChannel.sha256(list.data)
-            if install || !client.present || readState()["clientList"] as? String != listSHA {
-                guard let files = DriftwoodChannel.parseClientManifest(list.data) else { throw Failure(description: "The retail file list could not be read.") }
-                try client.assemble(files, donors: donors, build: DriftwoodChannel.clientBuild)
-                writeState(["clientList": listSHA])
+        // when it is not there. Each source's list is read first; with none answering, a client that
+        // finished its last update plays.
+        let lastFinished = installedBefore
+        switch spec.client {
+        case .retail:
+            let (files, moved) = retailFiles()
+            if files == nil {
+                try checkStop()
+                if moved {
+                    // Their list now names another build: never followed (see `retailListDigest`).
+                    if !(client.present && lastFinished) {
+                        throw Failure(description: "The published list of retail FFXI's files (xi.driftwoodgaming.com) now names another build than "
+                                      + "\(DriftwoodChannel.clientBuild), and no copy of the \(DriftwoodChannel.clientBuild) list is on this Mac. Update FFXI on Mac.")
+                    }
+                    log("!! The published retail file list moved off \(DriftwoodChannel.clientBuild); keeping \(spec.world)'s client as it is.")
+                } else {
+                    if lastFinished { return .offline("The retail file list didn't load; playing with the files from the last update.") }
+                    if !client.present || ashitaMissing {
+                        throw Failure(description: "The list of retail FFXI's files (xi.driftwoodgaming.com/api/manifest) didn't load. Try again in a few minutes.")
+                    }
+                }
+            }
+            writeState(["finished": false])
+            if let files {
+                let digest = src.retailDigest
+                if install || !client.present || readState()["clientList"] as? String != digest {
+                    writeState(["clientList": ""])
+                    try client.assemble(files, donors: donors, build: DriftwoodChannel.clientBuild)
+                    writeState(["clientList": digest])
+                }
+            }
+        case .archive(let a):
+            let named = (try? get(src.archivePage ?? a.page).data).flatMap { $0 }.flatMap(RetailWorld.wikitext).flatMap(RetailWorld.currentArchive)
+            if named == nil {
+                try checkStop()
+                if lastFinished { return .offline("\(spec.world)'s page naming their client version didn't load; playing with the files from the last update.") }
+                if !client.present || ashitaMissing { throw Failure(description: "\(spec.world)'s page naming their client version didn't load. Try again in a few minutes.") }
+            }
+            writeState(["finished": false])
+            if let named {
+                let pins = src.archivePins ?? a.pins
+                if let pin = pins[named.version], pin.fileID == named.fileID {
+                    if install || !client.present || readState()["clientArchive"] as? String != named.version {
+                        try installArchive(version: named.version, pin: pin)
+                        writeState(["clientArchive": named.version])
+                    }
+                } else if client.present, readState()["clientArchive"] != nil {
+                    log("!! \(spec.world)'s page names client \(named.version), which this build of FFXI on Mac has not checked; keeping client \(readState()["clientArchive"] as? String ?? "?"). Update FFXI on Mac.")
+                } else {
+                    throw Failure(description: "\(spec.world)'s page names client \(named.version) (file \(named.fileID)), which this build of FFXI on Mac "
+                                  + "has not checked, so it is not installed. Update FFXI on Mac.")
+                }
+            }
+        case .olympus(let releases0):
+            let releases = src.olympusReleases ?? releases0
+            let tag = (try? get(releases + "/latest/download/manifest.json").data).flatMap { $0 }
+                .flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
+                .flatMap { $0["client"] as? [String: Any] }.flatMap { $0["tag"] as? String }
+                .flatMap { $0.range(of: #"^client-3\d{7}_\d+$"#, options: .regularExpression) != nil ? $0 : nil }
+            if tag == nil {
+                try checkStop()
+                if lastFinished { return .offline("\(spec.world)'s patch list didn't load; playing with the files from the last update.") }
+                if !client.present || ashitaMissing { throw Failure(description: "\(spec.world)'s patch list (GitHub) didn't load. Try again in a few minutes.") }
+            }
+            writeState(["finished": false])
+            if let tag, install || !client.present || readState()["clientList"] as? String != tag {
+                try assembleOlympus(releases: releases, tag: tag, donors: donors)
+                writeState(["clientList": tag])
             }
         }
         try client.ensureViewer(donors: donors)
@@ -382,6 +626,10 @@ final class RetailWorldSync: @unchecked Sendable {
         for a in spec.removedAddons {
             let d = ashita.appendingPathComponent("addons/\(a)")
             if fm.fileExists(atPath: d.path) { try? fm.removeItem(at: d); log("i  \(spec.world): \(a) removed (their launcher removes it)") }
+        }
+        for pl in spec.removedPlugins {
+            let f = ashita.appendingPathComponent("plugins/\(pl).dll")
+            if fm.fileExists(atPath: f.path) { try? fm.removeItem(at: f); log("i  \(spec.world): plugin \(pl) removed (their launcher removes it)") }
         }
         try checkStop()
         // 3. The loader the server takes.
@@ -406,15 +654,197 @@ final class RetailWorldSync: @unchecked Sendable {
             try RetailWorld.script(spec).write(to: script, atomically: true, encoding: .utf8)
         }
         try checkStop()
+        // 5. Their DATs, as an XIPivot overlay.
+        if let ov = spec.overlay, let r = try syncOverlay(ov, install: install, profile: ini) { return r }
+        try checkStop()
         writeState(["finished": true, "updated": ISO8601DateFormatter().string(from: Date())])
         return .ok(changed: changed + client.changed)
+    }
+
+    /// The overlay brought to their newest list: XIPivot in place, every listed file there with its
+    /// hash (downloaded when not), files no longer listed removed, the overlay first in pivot.ini and
+    /// `pivot = 1` in the profile. Returns an outcome only when their list cannot be read.
+    private func syncOverlay(_ ov: RetailWorld.Overlay, install: Bool, profile ini: URL) throws -> Outcome? {
+        try ensurePivot()
+        let dir = ashita.appendingPathComponent("polplugins/DATs/\(ov.name)")
+        let source = src.overlaySource ?? ov.source
+        var parsed: (version: String, files: [RetailWorld.OverlayFile])?
+        switch source {
+        case .githubPatches(let releases):
+            parsed = (try? get(releases + "/latest/download/manifest.json").data).flatMap { $0 }.flatMap { RetailWorld.parsePatchManifest($0, releases: releases) }
+        case .fileList(let base):
+            parsed = (try? get(base + "/manifest.json").data).flatMap { $0 }.flatMap { RetailWorld.parseFileListManifest($0, base: base) }
+        }
+        guard let parsed else {
+            try checkStop()
+            if readState()["overlay"] != nil, fm.fileExists(atPath: dir.path) {
+                return .offline("\(spec.world)'s DAT list didn't load; playing with the DATs from the last update.")
+            }
+            throw Failure(description: "\(spec.world)'s DAT list didn't load. Try again in a few minutes.")
+        }
+        let files = parsed.files.filter { f in !ov.skipped.contains { $0.caseInsensitiveCompare(f.path) == .orderedSame } }
+        if install || readState()["overlay"] as? String != parsed.version || !fm.fileExists(atPath: dir.path) {
+            log("==> \(spec.world): their DATs \(parsed.version) (\(files.count) files)")
+            var fetched = 0
+            for (n, f) in files.enumerated() {
+                try checkStop()
+                try autoreleasepool {
+                    progress("Updating \(spec.world)'s DATs", Double(n) / Double(max(files.count, 1)))
+                    let dest = dir.appendingPathComponent(f.path)
+                    let key = "Ashita/polplugins/DATs/\(ov.name)/\(f.path)"
+                    if hashes.verified(key, at: dest, sha: f.sha256) { return }
+                    var last: Error?
+                    for attempt in 1...3 {
+                        do { try download(f.url, to: dest, sha: f.sha256); last = nil; break }
+                        catch { last = error; if stop.raised { break }; Thread.sleep(forTimeInterval: Double(attempt)) }
+                    }
+                    if let last { throw last }
+                    hashes.record(key, at: dest, sha: f.sha256)
+                    fetched += 1
+                }
+            }
+            // Files their list no longer has (their launcher swaps in a fresh folder, so they go).
+            let keep = Set(files.map { $0.path.lowercased() })
+            var removed = 0
+            if let walk = fm.enumerator(atPath: dir.path) {
+                for case let rel as String in walk where AscensionSync.isRegularFile(dir.appendingPathComponent(rel)) && !keep.contains(rel.lowercased()) {
+                    try? fm.removeItem(at: dir.appendingPathComponent(rel)); removed += 1
+                }
+            }
+            if fetched + removed > 0 { log("==> \(spec.world): \(fetched) of their DATs downloaded, \(removed) no longer used removed") }
+            changed += fetched + removed
+            writeState(["overlay": parsed.version])
+        }
+        // XIPivot on, their overlay first.
+        let pivotFile = ashita.appendingPathComponent("config/pivot/pivot.ini")
+        let old = try? String(contentsOf: pivotFile, encoding: .utf8)
+        let new = RetailWorld.pivotINI(old, first: ov.name)
+        if new != old {
+            try fm.createDirectory(at: pivotFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try new.write(to: pivotFile, atomically: true, encoding: .utf8)
+        }
+        if let text = try? String(contentsOf: ini, encoding: .utf8),
+           BootProfile.value("pivot", section: "ashita.polplugins", in: text) != "1" {
+            try BootProfile.setting(.init(section: "ashita.polplugins", key: "pivot", value: "1"), in: text).write(to: ini, atomically: true, encoding: .utf8)
+        }
+        return nil
+    }
+
+    /// XIPivot 4.3.001 (HealsCodes' release, the pin VanadreamsSync uses) into Ashita, its files only
+    /// where missing.
+    private func ensurePivot() throws {
+        guard !fm.fileExists(atPath: ashita.appendingPathComponent("polplugins/pivot.dll").path) else { return }
+        log("==> \(spec.world): XIPivot 4.3.001")
+        let tmp = stateDir.appendingPathComponent("tmp/pivot-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: tmp) }
+        try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let zip = tmp.appendingPathComponent("pivot.zip")
+        try download(src.pivotZip, to: zip, sha: src.pivotSHA)
+        let out = tmp.appendingPathComponent("x")
+        try fm.createDirectory(at: out, withIntermediateDirectories: true)
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        p.arguments = ["-x", "-k", zip.path, out.path]
+        try p.run(); p.waitUntilExit()
+        guard p.terminationStatus == 0 else { throw Failure(description: "XIPivot could not be unpacked (ditto \(p.terminationStatus)).") }
+        guard let walk = fm.enumerator(atPath: out.path) else { return }
+        for case let rel as String in walk {
+            let from = out.appendingPathComponent(rel), to = ashita.appendingPathComponent(rel)
+            guard AscensionSync.isRegularFile(from), !fm.fileExists(atPath: to.path) else { continue }
+            try fm.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.moveItem(at: from, to: to)
+        }
+        guard fm.fileExists(atPath: ashita.appendingPathComponent("polplugins/pivot.dll").path) else {
+            throw Failure(description: "XIPivot's archive held no polplugins/pivot.dll.")
+        }
+        changed += 1
     }
 
     /// Their whole client, from the archive their page names: downloaded straight into this folder
     /// (resumed if stopped), unpacked with bsdtar (7-Zip included) without its `USER/` (another
     /// player's settings travel in it), then moved over `FINAL FANTASY XI`. Kept until a new version
     /// replaces it, so Repair unpacks it again without downloading.
-    private func installArchive(_ a: (version: String, fileID: String)) throws {
+    /// The pinned retail list: a copy of it already here, or one another world's folder holds, or the
+    /// served one while it is still that list. A build's files do not change, so once a copy is here no
+    /// request is made. `moved`: the list was served, and it is not the pinned one.
+    private func retailFiles() -> (files: [DriftwoodChannel.ClientFile]?, moved: Bool) {
+        let own = stateDir.appendingPathComponent("retail-list.json")
+        func pinned(_ d: Data?) -> [DriftwoodChannel.ClientFile]? {
+            d.flatMap(DriftwoodChannel.parseClientManifest).flatMap { RetailWorld.entriesDigest($0) == src.retailDigest ? $0 : nil }
+        }
+        if let fs = pinned(try? Data(contentsOf: own)) { return (fs, false) }
+        let siblings = ((try? fm.contentsOfDirectory(at: root.deletingLastPathComponent(), includingPropertiesForKeys: nil)) ?? [])
+            .flatMap { [$0.appendingPathComponent(".ffxi-on-mac/retail-list.json"), $0.appendingPathComponent(".ffxi-on-mac/client-manifest.json")] }
+        for c in siblings where c.path != own.path {
+            if let d = try? Data(contentsOf: c), let fs = pinned(d) { try? d.write(to: own, options: .atomic); return (fs, false) }
+        }
+        guard let served = (try? get(src.retailList).data).flatMap({ $0 }) else { return (nil, false) }
+        if let fs = pinned(served) { try? served.write(to: own, options: .atomic); return (fs, false) }
+        return (nil, DriftwoodChannel.parseClientManifest(served) != nil)
+    }
+
+    /// Olympus XI's client: their client list (cached by tag), every file kept, copied from a donor, or
+    /// taken from their delta pack, FINAL FANTASY XI and PlayOnlineViewer each all or nothing.
+    private func assembleOlympus(releases: String, tag: String, donors: [URL]) throws {
+        let copy = stateDir.appendingPathComponent("client-\(tag).json")
+        var data = try? Data(contentsOf: copy)
+        if data.flatMap(RetailWorld.parseOlympusClient) == nil {
+            log("==> \(spec.world): their client list \(tag)")
+            data = try get(releases + "/download/\(tag)/client-manifest.json").data
+            try data?.write(to: copy, options: .atomic)
+        }
+        guard let data, let list = RetailWorld.parseOlympusClient(data) else { throw Failure(description: "\(spec.world)'s client list could not be read.") }
+        writeState(["clientList": ""])
+        for sub in ["FINAL FANTASY XI", "PlayOnlineViewer"] {
+            let group = list.files.filter { $0.subfolder == sub }
+            var deltas: [String: RetailWorld.OlympusClientFile] = [:]
+            for e in group where e.pack != nil { deltas[e.file.path.lowercased()] = e }
+            try client.assemble(group.map(\.file), donors: donors, build: list.version, subfolder: sub, mayDiffer: [],
+                                canFetch: { deltas[$0.path.lowercased()] != nil }) { f, dest in
+                guard let e = deltas[f.path.lowercased()] else {
+                    throw Failure(description: "\(sub)/\(f.path) is not on this Mac and not among \(self.spec.world)'s changed files.")
+                }
+                try self.fetchDelta(releases: releases, tag: tag, e, to: dest)
+            }
+        }
+    }
+
+    /// One file out of their delta pack: its zlib stream by Range, inflated, size and SHA-256 checked.
+    private func fetchDelta(releases: String, tag: String, _ e: RetailWorld.OlympusClientFile, to dest: URL) throws {
+        guard let pack = e.pack, let u = URL(string: releases + "/download/\(tag)/\(pack)") else { throw Failure(description: "bad delta") }
+        var req = URLRequest(url: u, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 60)
+        req.setValue("bytes=\(e.offset)-\(e.offset + e.csize - 1)", forHTTPHeaderField: "Range")
+        let tmp = stateDir.appendingPathComponent("tmp/delta-\(UUID().uuidString)")
+        let part = dest.deletingLastPathComponent().appendingPathComponent("." + dest.lastPathComponent + ".ffxi-part")
+        defer { try? fm.removeItem(at: tmp); try? fm.removeItem(at: part) }
+        try fm.createDirectory(at: tmp.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let sem = DispatchSemaphore(value: 0)
+        var failure: Error?
+        let task = session.downloadTask(with: req) { t, r, err in
+            defer { sem.signal() }
+            if let err { failure = err; return }
+            guard let h = r as? HTTPURLResponse, h.statusCode == 206, let t else {
+                failure = Failure(description: "HTTP \((r as? HTTPURLResponse)?.statusCode ?? 0) for a part of \(pack)"); return
+            }
+            do { try FileManager.default.moveItem(at: t, to: tmp) } catch { failure = error }
+        }
+        task.resume()
+        while sem.wait(timeout: .now() + 0.5) == .timedOut { if stop.raised { task.cancel() } }
+        if let failure { throw failure }
+        guard ((try? fm.attributesOfItem(atPath: tmp.path))?[.size] as? NSNumber)?.int64Value == e.csize else {
+            throw Failure(description: "\(pack) answered a different part than asked for \(e.file.path).")
+        }
+        try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let n = try Inflate.file(tmp, to: part, raw: false, limit: e.file.size)
+        guard n == e.file.size, AscensionChannel.sha256(of: part) == e.file.sha256 else {
+            throw Failure(description: "\(e.file.path) came down damaged from \(pack).")
+        }
+        try? fm.removeItem(at: dest)
+        try fm.moveItem(at: part, to: dest)
+    }
+
+    private func installArchive(version: String, pin: RetailWorld.ArchivePin) throws {
+        let a = (version: version, fileID: pin.fileID)
         let tmp = stateDir.appendingPathComponent("tmp")
         try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
         let file = tmp.appendingPathComponent("client-\(a.version).archive")
@@ -440,6 +870,14 @@ final class RetailWorldSync: @unchecked Sendable {
                 }
             }
             fm.createFile(atPath: whole.path, contents: nil)
+        }
+        // Their archive as pinned, byte for byte, or nothing: checked before every unpack, a kept one too.
+        log("==> \(spec.world): checking their client archive \(a.version)")
+        let size = ((try? fm.attributesOfItem(atPath: file.path))?[.size] as? NSNumber)?.int64Value
+        guard size == pin.size, AscensionChannel.sha256(of: file) == pin.sha256 else {
+            try? fm.removeItem(at: file); try? fm.removeItem(at: whole)
+            throw Failure(description: "\(spec.world)'s client archive \(a.version) is not the one this build of FFXI on Mac checked "
+                          + "(its size or SHA-256 differs). Nothing was installed.")
         }
         try checkStop()
         log("==> \(spec.world): unpacking their client \(a.version)")
@@ -534,21 +972,6 @@ final class RetailWorldSync: @unchecked Sendable {
         while sem.wait(timeout: .now() + 0.5) == .timedOut { if stop.raised { task.cancel() } }
         let (d, lm) = try out.get()
         return (d, lm)
-    }
-
-    /// A copy kept beside the client, asked for again with If-Modified-Since.
-    private func fetchCached(_ s: String, cache: URL) throws -> (data: Data, changed: Bool) {
-        let have = try? Data(contentsOf: cache)
-        let since = have == nil ? nil : AscensionSync.httpDate((try? fm.attributesOfItem(atPath: cache.path))?[.modificationDate] as? Date)
-        let (d, lm) = try get(s, ifModifiedSince: since)
-        if let d {
-            if (try? d.write(to: cache, options: .atomic)) != nil, let lm, let date = AscensionSync.parseHTTPDate(lm) {
-                try? fm.setAttributes([.modificationDate: date], ofItemAtPath: cache.path)
-            }
-            return (d, d != have)
-        }
-        guard let have else { throw Failure(description: "\(s): not modified, and no copy here") }
-        return (have, false)
     }
 
     private func download(_ s: String, to dest: URL, sha: String?) throws {
