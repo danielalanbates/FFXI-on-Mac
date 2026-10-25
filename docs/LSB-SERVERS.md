@@ -15,7 +15,7 @@ Downloads it made (864 MB, never executed) are in `~/Downloads/lsb-survey/`.
 ## Already in the launcher
 
 HorizonXI, CatsEyeXI, Gaia XI, Supernova, OmicronXI, the local world, **AscensionXI** (b71),
-**Vanadreams** (b72), **DriftwoodXI** (b73) and **PegasusXI** (b74).
+**Vanadreams** (b72), **DriftwoodXI** (b73), **PegasusXI** (b74), **MistXI** and **Moghouse XI** (b75).
 Cut for their codebase: Eden, FFEra, ValhallaXI (DarkStar lineage). Stopped: Tabula Rasa XI.
 
 ## LandSandBoat worlds not yet in the launcher
@@ -27,8 +27,8 @@ Cut for their codebase: Eden, FFEra, ValhallaXI (DarkStar lineage). Stopped: Tab
 | **Vanadreams** (fairywitch.ca) | `vanadreams.online` (2.2.x) | 21 online, 82 players this week (their status API) | Public chunked client: `vanadreams.org/download/client/30260904_1/manifest.json`, 72 zips (8.8 GB → 17 GB), each with sha256. Launcher source public (github.com/VanaDreams/vanadreams-ashita) | "As many accounts and characters as you want, boxing welcome, mules welcome, your addons welcome." Account made in the loader on first login | **Added in b72** ([`VANADREAMS.md`](VANADREAMS.md)) |
 | **PegasusXI** (pegasusxi.com) | `play.pegasusxi.com` (2.1.x) | not published | Public full client zip, 13.9 GB (`cdn.pegasusxi.com/download/PegasusXI_1.2.4.zip`, ranges), Ashita + xiloader + `config/boot/PegasusXI.ini` inside | No bots, no hacks; multibox not stated (so one client) | **Added in b74** ([`PEGASUS.md`](PEGASUS.md)): their release zip read by Range, member by member |
 | **DriftwoodXI** (xi.driftwoodgaming.com) | `xi.driftwoodgaming.com` (2.1.x) | 44 online (`/api/players`) | Bring your own current retail client; their Ashita bundle is public (`DriftwoodXI-Content/ashita.json` → a 44 MB zip, Ashita 4.3.2.1, `driftwood.ini`, `driftwood.txt`). They publish a Linux launcher and a Wine guide | Allowlist of 158 addons at `/addons`; no multibox. Website signup | **Added in b73** ([`DRIFTWOOD.md`](DRIFTWOOD.md)): retail client from identical files already on this Mac + their bundle and addons |
-| **MistXI** (mistxi.com) | `play.mistxi.com` (2.1.x); legacy 99 world `legacy.mistxi.com` (2.0.x) | not readable | Retail client + `mistxi.com/FFXI-UpdatePatch.zip` (5 MB) + Ashita + LSB xiloader | Dual box allowed (2 per IP). Addon allowlist on their site. Website signup | **Next** — the Supernova/Omicron retail route |
-| **Moghouse XI** (moghouse.cc) | `ffxi.cc` (2.2.x) | low | Retail client + xiloader `--server ffxi.cc` | Fun server (GM level 1 for all); dual box yes (listing) | Next — retail route |
+| **MistXI** (mistxi.com) | `play.mistxi.com` (2.1.x); legacy 99 world `legacy.mistxi.com` (2.0.x) | not readable | Retail client + `mistxi.com/FFXI-UpdatePatch.zip` (5 MB) + Ashita + LSB xiloader | Dual box allowed (2 per IP). Addon allowlist on their site. Website signup | **Added in b75** ([`RETAIL-WORLDS.md`](RETAIL-WORLDS.md)): retail client from this Mac + Ashita + xiloader 2.1.2 |
+| **Moghouse XI** (moghouse.cc) | `ffxi.cc` (2.2.x) | low | Retail client + xiloader `--server ffxi.cc` | Fun server (GM level 1 for all); dual box yes (listing) | **Added in b75** ([`RETAIL-WORLDS.md`](RETAIL-WORLDS.md)): retail client from this Mac + Ashita + xiloader 2.2.0 |
 | **Scythe** (scythe-bbq.pages.dev) | `212.28.177.210` (2.1.x) | none found | Retail client, which their launcher pins (and may downgrade) to `30260429_1` from a signed public channel (`/launcher/channel/current.json`: 65,062 files, 14.9 GB) | Two accounts per player, dual box allowed | Later — a channel like Ascension's; read their launcher first |
 | **LevelDown 99** | `LevelDownFFXI.com` (2.2.x) | none found | Retail + patch files from a Google Drive folder + LSB xiloader | 2 active + 1 mule (listing) | Later — Drive folder download |
 | **Olympus XI** (olympus-games.dev) | `172.96.141.132` (2.2.x) | 1 online (open beta) | Their Electron launcher installs or reuses retail, then patch sets from public GitHub releases; custom login cert | No multibox/addon rules published | Later — beta, one player |
@@ -67,7 +67,7 @@ such.
 
 1. **Vanadreams** — chunk manifest client (native, like AscensionSync but per chunk), stock xiloader.
 2. **PegasusXI** (done, b74) — their release zip, read by Range member by member.
-3. **DriftwoodXI** (done, b73), **MistXI**, **Moghouse XI** — a retail client first. All three are on the same
+3. **DriftwoodXI** (b73), **MistXI** and **Moghouse XI** (b75) — done: a retail client first. All three are on the same
    retail patch as AscensionXI and Vanadreams (`30260904_1`) or close to it: copy the identical
    retail files the way AscensionXI's install does instead of running Square Enix's installer.
 4. **Scythe**, **LevelDown 99**, **Olympus XI**, **Legendary Relaunch**.

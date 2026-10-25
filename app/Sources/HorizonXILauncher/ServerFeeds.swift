@@ -70,6 +70,8 @@ final class ServerFeeds: ObservableObject {
         ("DriftwoodXI", "https://xi.driftwoodgaming.com/api/players", "playersOnline"),
         // {"status":"online","server":"play.pegasusxi.com","playerCount":0,"levelCap":99} -- their header bar.
         ("PegasusXI", "https://pegasusxi.com/api/status", "playerCount"),
+        // {"ok":true,"status":"online","onlinePlayers":0,"totalCharacters":34,"clientVersion":"30260805_0",…}
+        ("MistXI", "https://api.mistxi.com/status.php", "onlinePlayers"),
     ]
 
     /// Fetch every published online counter. Cheap (three tiny GETs), silent on failure, and a

@@ -256,6 +256,7 @@ enum AddonPolicies {
         case VanadreamsChannel.worldName: return .unrestricted(reason: "Vanadreams welcomes your own addons (fairywitch.ca).")
         case DriftwoodChannel.worldName: return DriftwoodChannel.addonPolicy
         case PegasusChannel.worldName: return PegasusChannel.addonPolicy
+        case RetailWorld.mist.world: return RetailWorld.mistPolicy
         // Eden publishes its rules only in its Discord's rules channel; Supernova, ValhallaXI,
         // OmicronXI, Gaia XI and Tabula Rasa XI publish none anywhere this project could find
         // (checked 2026-08-19). They stay .unknown — the addon screen shows everything and says

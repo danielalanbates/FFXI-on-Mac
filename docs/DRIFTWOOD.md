@@ -62,6 +62,8 @@ At **Setup** and (only what changed) **before every Play**:
 | VC++ 2022 runtime via winetricks | not run | this Wine's `msvcp140.dll` has `_Throw_Cpp_error` (checked), the missing piece their page names |
 | the DAT text overlay | **not ported** | cosmetic; their parser exists only inside their launcher |
 
+The client step is `RetailClient` (b75), shared with the plain retail worlds ([`RETAIL-WORLDS.md`](RETAIL-WORLDS.md)).
+
 Layout: `<folder>/Ashita/` (Ashita, loader, addons, profile) and `<folder>/Game/FINAL FANTASY XI`
 + `Game/PlayOnlineViewer` (the registry is pointed at `Game/` the way it is for every world).
 State in `<folder>/.ffxi-on-mac/` (`driftwood.json`, `hashes.json`, the cached client list).
