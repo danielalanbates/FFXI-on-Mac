@@ -53,6 +53,8 @@ enum Headless {
             || a.contains("--selftest-driftwood")
             || a.contains("--driftwood-sync")
             || a.contains("--driftwood-treehash")
+            || a.contains("--selftest-pegasus")
+            || a.contains("--pegasus-sync")
             || a.contains("--send-ashita")
             || a.contains("--carryover-report")
             || a.contains("--carryover-apply")
@@ -151,6 +153,8 @@ enum Headless {
         if args.contains("--login-version") { runLoginVersion(args) }
         if args.contains("--selftest-driftwood") { runDriftwoodSelfTest() }
         if args.contains("--driftwood-sync") || args.contains("--driftwood-treehash") { runDriftwoodSync(args) }
+        if args.contains("--selftest-pegasus") { runPegasusSelfTest() }
+        if args.contains("--pegasus-sync") { runPegasusSync(args) }
         if args.contains("--selftest-carryover") {
             runCarryOverSelfTest()
         }

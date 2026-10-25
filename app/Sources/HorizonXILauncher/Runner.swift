@@ -697,6 +697,13 @@ final class Runner: ObservableObject {
         }, done: done)
     }
 
+    /// PegasusXI's client out of their release zip (PegasusSync).
+    func syncPegasus(root: URL, install: Bool, done: @escaping (AscensionSync.Outcome) -> Void) {
+        runWorldJob(world: PegasusChannel.worldName, root: root, install: install, work: { stop, log, progress in
+            PegasusSync(root: root, stop: stop, log: log, progress: { _, f in progress(f) }).run(install: install)
+        }, done: done)
+    }
+
     /// DriftwoodXI's client (retail files from `donors`), Ashita and addons (DriftwoodSync).
     func syncDriftwood(root: URL, install: Bool, donors: [URL], done: @escaping (AscensionSync.Outcome) -> Void) {
         runWorldJob(world: DriftwoodChannel.worldName, root: root, install: install, work: { stop, log, progress in
