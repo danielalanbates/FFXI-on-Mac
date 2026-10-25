@@ -280,7 +280,12 @@ final class VanadreamsSync: @unchecked Sendable {
         try ensurePivot()
         try checkStop()
         // 4. The client. Setup and Repair also check each zip's files (toFetch).
-        let todo = toFetch(manifest.chunks, done: VanadreamsChannel.done(in: root), checkFiles: install)
+        let owedBefore = Set((readState()["pending"] as? [String]) ?? [])
+        let todo = toFetch(manifest.chunks, done: VanadreamsChannel.done(in: root), pending: owedBefore, checkFiles: install)
+        // Every zip queued is owed until its record line is written: a stop between two zips that
+        // share a file leaves the later one to the next update, not a stale copy in a finished one.
+        var owed = todo.map(\.key)
+        writeState(["pending": owed])
         // Zips wait in tmp/client-<version> until unpacked; a folder left from another version goes.
         for old in (try? fm.contentsOfDirectory(at: stateDir.appendingPathComponent("tmp"), includingPropertiesForKeys: nil)) ?? []
         where old.lastPathComponent.hasPrefix("client-") && old.lastPathComponent != "client-\(manifest.version)" {
@@ -300,6 +305,8 @@ final class VanadreamsSync: @unchecked Sendable {
             try installChunk(c, version: manifest.version, into: dest) { f in
                 self.progress("Downloading Vanadreams", (Double(fetched) + f * Double(c.size)) / Double(total))
             }
+            owed.removeAll { $0 == c.key }
+            writeState(["pending": owed])
             fetched += c.size
             changed += 1
         }
@@ -441,10 +448,12 @@ final class VanadreamsSync: @unchecked Sendable {
 
     /// One line onto the end of their record (made when missing), with FileHandle's throwing calls: a
     /// full or unplugged drive is an error here, where the old `write(_:)` raised and crashed the launcher.
+    /// A record that is there but will not open is an error too, never replaced by this one line.
     static func appendLine(_ line: String, to record: URL) throws {
-        guard let h = try? FileHandle(forWritingTo: record) else {
+        guard FileManager.default.fileExists(atPath: record.path) else {
             try line.write(to: record, atomically: true, encoding: .utf8); return
         }
+        let h = try FileHandle(forWritingTo: record)
         defer { try? h.close() }
         try h.seekToEnd()
         try h.write(contentsOf: Data(line.utf8))
@@ -484,15 +493,19 @@ final class VanadreamsSync: @unchecked Sendable {
         return out
     }
 
-    /// The zips to fetch. A Play-time update: those not in their record. Setup and Repair: also those
-    /// whose listed files are not all there at their size, and those with no list (fetched once more).
-    /// A file two zips hold is the later zip's (it is unpacked last), so only that zip is checked
-    /// against it; and a zip fetched again puts its own copy back, so a later zip sharing a file with
-    /// it is fetched again too.
-    private func toFetch(_ chunks: [VanadreamsChannel.Chunk], done: Set<String>, checkFiles: Bool) -> [VanadreamsChannel.Chunk] {
-        guard checkFiles else { return chunks.filter { !done.contains($0.key) } }
+    /// The zips to fetch. A Play-time update: those not in their record and those a stopped run still
+    /// owes (`pending`). Setup and Repair: also those whose listed files are not all there at their
+    /// size, and those with no list (fetched once more). A file two zips hold is the later zip's (it is
+    /// unpacked last), so only that zip is checked against it; and a zip fetched again puts its own copy
+    /// back, so a later zip sharing a file with it is fetched again too, by an update as well. A zip
+    /// whose files are not known (no list, or not in the record, so its list is another zip's of that
+    /// name) may hold any file in its folder: every later zip that may hold files there comes again.
+    private func toFetch(_ chunks: [VanadreamsChannel.Chunk], done: Set<String>, pending: Set<String>, checkFiles: Bool) -> [VanadreamsChannel.Chunk] {
+        // Nothing new or owed: an update reads no lists.
+        guard checkFiles || chunks.contains(where: { !done.contains($0.key) || pending.contains($0.key) }) else { return [] }
         // Each listed file's place on disk, keyed lower-cased (the Mac's disk ignores case), with its size.
         typealias Listed = (key: String, path: String, size: Int64)
+        let folders = chunks.map { c in VanadreamsChannel.destFolder(c, root: root).map { $0.path.lowercased() + "/" } }
         let lists: [[Listed]?] = chunks.map { c -> [Listed]? in
             guard let dest = VanadreamsChannel.destFolder(c, root: root), let l = readList(c) else { return nil }
             return l.map { f in
@@ -502,24 +515,32 @@ final class VanadreamsSync: @unchecked Sendable {
         }
         var owner: [String: Int] = [:]
         for (i, l) in lists.enumerated() { for f in l ?? [] { owner[f.key] = i } }
-        var putBack = Set<String>(), out: [VanadreamsChannel.Chunk] = []
+        // What the zips queued so far put back: the files listed, and the folders of those not known.
+        var putBack = Set<String>(), unknown: [String] = [], out: [VanadreamsChannel.Chunk] = []
         for (i, c) in chunks.enumerated() {
-            var again = !done.contains(c.key)
+            var again = !done.contains(c.key) || pending.contains(c.key)
             if !again {
                 if let l = lists[i] {
                     again = l.contains { f in
-                        if putBack.contains(f.key) { return true }
-                        guard owner[f.key] == i else { return false }
+                        if putBack.contains(f.key) || unknown.contains(where: { f.key.hasPrefix($0) }) { return true }
+                        guard checkFiles, owner[f.key] == i else { return false }
                         let there: Bool = autoreleasepool { present(f.path, size: f.size) }
                         return !there
                     }
                 } else {
-                    again = true
+                    // An update fetches one with no list only when a zip queued before it may share its files.
+                    again = checkFiles || folders[i].map { d in
+                        unknown.contains { d.hasPrefix($0) || $0.hasPrefix(d) } || putBack.contains { $0.hasPrefix(d) }
+                    } == true
                 }
             }
             if again {
                 out.append(c)
-                for f in lists[i] ?? [] { putBack.insert(f.key) }
+                if done.contains(c.key), let l = lists[i] {
+                    for f in l { putBack.insert(f.key) }
+                } else if let d = folders[i] {
+                    unknown.append(d)
+                }
             }
         }
         return out

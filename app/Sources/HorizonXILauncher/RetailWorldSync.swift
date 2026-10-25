@@ -32,6 +32,12 @@ final class RetailClient {
 
     var present: Bool { fm.fileExists(atPath: game.appendingPathComponent("FINAL FANTASY XI/FFXiMain.dll").path) }
 
+    /// Whether `u` may be replaced by a file: it is not there, or it is a file. A list naming a folder
+    /// (`USER`, or `X/.`) must never have it deleted to make room.
+    static func replaceable(_ u: URL) -> Bool {
+        !FileManager.default.fileExists(atPath: u.path) || AscensionSync.isRegularFile(u)
+    }
+
     /// Every file of `files` in place under `subfolder` ("FINAL FANTASY XI", or "PlayOnlineViewer"): kept
     /// when it already hashes right, copied from a donor that has it byte for byte, else `fetch`ed (a
     /// world that serves its own files) when there is one. `mayDiffer`: files a donor's copy of which
@@ -121,7 +127,7 @@ final class RetailClient {
         let order = lastDonor.map { l in [l] + donors.filter { $0 != l } } ?? donors
         for d in order {
             let c = d.appendingPathComponent(subfolder).appendingPathComponent(f.path)
-            guard AscensionSync.isRegularFile(c) else { continue }
+            guard AscensionSync.isRegularFile(c), Self.replaceable(dest) else { continue }
             if exact, ((try? fm.attributesOfItem(atPath: c.path))?[.size] as? NSNumber)?.int64Value != f.size { continue }
             do {
                 try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -351,13 +357,16 @@ enum RetailWorld {
             guard let f = raw as? [String: Any], let p = f["path"] as? String, let n = (f["size"] as? NSNumber)?.int64Value,
                   let h = (f["sha256"] as? String)?.lowercased(), h.count == 64 else { return nil }
             let parts = p.split(separator: "/", maxSplits: 2).map(String.init)
+            // Never the player's own folders (FINAL FANTASY XI/USER: settings and macros), never `.`.
             guard parts.count == 3, parts[0] == "SquareEnix", ["FINAL FANTASY XI", "PlayOnlineViewer"].contains(parts[1]),
-                  AscensionSync.safeRelative(parts[2]) else { return nil }
+                  AscensionSync.safeRelative(parts[2]), !parts[2].split(separator: "/").contains("."),
+                  !(parts[1] == "FINAL FANTASY XI" && parts[2].split(separator: "/").first?.uppercased() == "USER"),
+                  n >= 0, n <= 2 << 30 else { return nil }
             var pack: String?, offset: Int64 = 0, csize: Int64 = 0
             if let dl = f["delta"] as? [String: Any] {
                 guard let pk = dl["pack"] as? String, pk.range(of: #"^pack-\d{2}\.bin$"#, options: .regularExpression) != nil,
                       let off = (dl["offset"] as? NSNumber)?.int64Value, let cs = (dl["csize"] as? NSNumber)?.int64Value,
-                      off >= 0, cs > 0 else { return nil }
+                      off >= 0, cs > 0, cs <= 2 << 30, off <= Int64.max - cs else { return nil }
                 pack = pk; offset = off; csize = cs
             }
             out.append(.init(file: .init(path: parts[2], size: n, sha256: h), subfolder: parts[1], pack: pack, offset: offset, csize: csize))
@@ -835,6 +844,7 @@ final class RetailWorldSync: @unchecked Sendable {
             throw Failure(description: "\(pack) answered a different part than asked for \(e.file.path).")
         }
         try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard RetailClient.replaceable(dest) else { throw Failure(description: "\(e.file.path) is a folder here; their list names it as a file. Nothing replaced.") }
         let n = try Inflate.file(tmp, to: part, raw: false, limit: e.file.size)
         guard n == e.file.size, AscensionChannel.sha256(of: part) == e.file.sha256 else {
             throw Failure(description: "\(e.file.path) came down damaged from \(pack).")
@@ -911,7 +921,7 @@ final class RetailWorldSync: @unchecked Sendable {
         for case let rel as String in walk {
             try autoreleasepool {
                 let from = top.appendingPathComponent(rel), to = ffxi.appendingPathComponent(rel)
-                guard AscensionSync.isRegularFile(from) else { return }
+                guard AscensionSync.isRegularFile(from), RetailClient.replaceable(to) else { return }
                 try fm.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try? fm.removeItem(at: to)
                 try fm.moveItem(at: from, to: to)
@@ -944,7 +954,7 @@ final class RetailWorldSync: @unchecked Sendable {
         guard let walk = fm.enumerator(atPath: top.path) else { return }
         for case let rel as String in walk {
             let from = top.appendingPathComponent(rel), to = ashita.appendingPathComponent(rel)
-            guard AscensionSync.isRegularFile(from) else { continue }
+            guard AscensionSync.isRegularFile(from), RetailClient.replaceable(to) else { continue }
             try fm.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? fm.removeItem(at: to)
             try fm.moveItem(at: from, to: to)
@@ -996,6 +1006,7 @@ final class RetailWorldSync: @unchecked Sendable {
             try? fm.removeItem(at: part)
             throw Failure(description: "\(u.lastPathComponent) came down damaged (it does not hash to the pinned release).")
         }
+        guard RetailClient.replaceable(dest) else { try? fm.removeItem(at: part); throw Failure(description: "\(dest.lastPathComponent) is a folder here; not replaced.") }
         try? fm.removeItem(at: dest)
         try fm.moveItem(at: part, to: dest)
     }

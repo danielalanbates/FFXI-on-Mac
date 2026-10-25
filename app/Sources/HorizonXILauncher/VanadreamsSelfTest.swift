@@ -47,6 +47,17 @@ extension Headless {
         var backLim = savedLim; setrlimit(RLIMIT_FSIZE, &backLim); signal(SIGXFSZ, sigWas)
         check("record: a line is appended; a drive that takes no more throws instead of crashing the launcher",
               appended && refused && (try? String(contentsOf: rec0, encoding: .utf8)) == "30260904_1 a.zip 00\r\n30260904_1 b.zip 11\r\n")
+        // Only a record that is not there is made: one there that will not open (here read-only) is an
+        // error, not replaced by the one line.
+        let rec1 = tmp.appendingPathComponent("record-locked.txt"), rec2 = tmp.appendingPathComponent("record-new.txt")
+        try? Data("30260904_1 a.zip 00\r\n".utf8).write(to: rec1)
+        try? fm.setAttributes([.posixPermissions: 0o444], ofItemAtPath: rec1.path)
+        let lockedRefused = (try? VanadreamsSync.appendLine("30260904_1 b.zip 11\r\n", to: rec1)) == nil
+        try? fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: rec1.path)
+        let made = (try? VanadreamsSync.appendLine("30260904_1 a.zip 00\r\n", to: rec2)) != nil
+        check("record: one that will not open is an error and left whole, not replaced by one line; a missing one is made",
+              lockedRefused && (try? String(contentsOf: rec1, encoding: .utf8)) == "30260904_1 a.zip 00\r\n"
+                && made && (try? String(contentsOf: rec2, encoding: .utf8)) == "30260904_1 a.zip 00\r\n")
         check("profile from Ashita's example: their loader, server, script, XIPivot",
               { let t = VanadreamsChannel.profile(fromExample: "[ashita.boot]\nfile        = .\\\\bootloader\\\\pol.exe\ncommand     = --server homepointxi.com\nscript      = default.txt\n[ashita.polplugins]\nsandbox = 0\n")
                 return BootProfile.value("command", section: "ashita.boot", in: t) == "--server vanadreams.online"
@@ -111,9 +122,12 @@ extension Headless {
                                             loader: site + "/xiloader.exe", loaderSHA: AscensionChannel.sha256(loader),
                                             pivot: site + "/pivot.zip", pivotSHA: AscensionChannel.sha256(pivot))
         let root = tmp.appendingPathComponent("Vanadreams")
-        func sync(_ s: VanadreamsChannel.Sources = src, install: Bool = false, stop: StopFlag = StopFlag()) -> AscensionSync.Outcome {
+        func sync(_ s: VanadreamsChannel.Sources = src, install: Bool = false, stop: StopFlag = StopFlag(),
+                  stopAfter zipName: String? = nil) -> AscensionSync.Outcome {
             ch.clearLog()
-            return VanadreamsSync(root: root, sources: s, stop: stop, log: { _ in }).run(install: install)
+            // With `zipName`, Stop is pressed as that zip is unpacked: the run stops before the next one.
+            return VanadreamsSync(root: root, sources: s, stop: stop,
+                                  log: { if let zipName, $0.contains(": \(zipName) unpacked ") { stop.raise() } }).run(install: install)
         }
         func file(_ rel: String) -> Data? { try? Data(contentsOf: root.appendingPathComponent(rel)) }
         func text(_ rel: String) -> String { file(rel).flatMap { String(data: $0, encoding: .utf8) } ?? "" }
@@ -143,10 +157,9 @@ extension Headless {
               && text("scripts/vanadreams.txt").contains("# --- yours ---"))
         check("install: pivot.ini lists the title pack", text("config/pivot/pivot.ini").contains("0 = vanadreams-title"))
         check("install: their record, one line per zip", text(".vanadreams-client.txt").components(separatedBy: "\r\n").filter { !$0.isEmpty }.count == 4)
-        check("install: each zip's files and sizes listed as it is unpacked; the client being fetched written down first",
+        check("install: each zip's files and sizes listed as it is unpacked",
               text(".ffxi-on-mac/vanadreams-files/base.zip.txt").contains("300\tROM/1/1.DAT")
-                && text(".ffxi-on-mac/vanadreams-files/looks-effects.zip.txt").contains("7\td3d9.dll")
-                && state()["target"] as? String == "30260904_1")
+                && text(".ffxi-on-mac/vanadreams-files/looks-effects.zip.txt").contains("7\td3d9.dll"))
 
         let second = sync()
         check("update: nothing new -> no zip, Ashita or loader downloaded",
@@ -197,6 +210,33 @@ extension Headless {
         check("repair: a file a later zip replaces is checked against it; the earlier zip fetched again brings the later one again after it",
               patchedClean.isEmpty && fetched() == ["/client/30260904_1/base.zip 200", "/client/30260904_1/patch-01.zip 200"]
                 && file("FINAL FANTASY XI/FFXiMain.dll") == Data("main v2".utf8) && file("FINAL FANTASY XI/ROM/1/1.DAT") == Data(repeating: 1, count: 300))
+        // Stopped between those two: the later one is still owed, and the next Play puts it back before
+        // calling the update finished.
+        try? fm.removeItem(at: root.appendingPathComponent("FINAL FANTASY XI/ROM/1/1.DAT"))
+        let cut = sync(install: true, stopAfter: "base.zip")
+        let cutMain = file("FINAL FANTASY XI/FFXiMain.dll"), owed = state()["pending"] as? [String]
+        let carried = sync()
+        check("repair: stopped between two zips sharing a file, the later one is owed; the next Play puts it back before finishing",
+              cut == .stopped && cutMain == Data("main".utf8) && owed == ["patch-01.zip \(AscensionChannel.sha256(patch))"]
+                && carried == .ok(changed: 1) && fetched() == ["/client/30260904_1/patch-01.zip 200"]
+                && file("FINAL FANTASY XI/FFXiMain.dll") == Data("main v2".utf8)
+                && (state()["pending"] as? [String]) == [] && state()["finished"] as? Bool == true)
+        // A zip with no list (unpacked by an older build) fetched once more may hold any file in its
+        // folder: the later zips there come again after it.
+        try? fm.removeItem(at: root.appendingPathComponent(".ffxi-on-mac/vanadreams-files/base.zip.txt"))
+        _ = sync(install: true)
+        check("repair: a zip with no list fetched once more brings the later zips in its folder again after it, no others",
+              fetched() == ["/client/30260904_1/base.zip 200", "/client/30260904_1/patch-01.zip 200"]
+                && file("FINAL FANTASY XI/FFXiMain.dll") == Data("main v2".utf8))
+        // They change a zip (same name, new contents): its files are not known until it is unpacked, so a
+        // Play-time update fetches the later zips in its folder again after it too.
+        let base2 = zip(["FFXiMain.dll": Data("main b".utf8), "ROM/1/1.DAT": Data(repeating: 1, count: 300)])
+        ch.put("/client/30260904_1/base.zip", base2, t0)
+        chunks[0] = entry("base.zip", base2, nil); publish()
+        let rezipped = sync()
+        check("update: a zip changed ahead of others in its folder brings them again after it, no others",
+              rezipped == .ok(changed: 2) && fetched() == ["/client/30260904_1/base.zip 200", "/client/30260904_1/patch-01.zip 200"]
+                && file("FINAL FANTASY XI/FFXiMain.dll") == Data("main v2".utf8))
         // Zips come down with FileDownload, straight into the folder they wait in: one stopped part-way
         // carries on; a folder left from another client version goes.
         let looks2 = zip(["ROM/2/1.DAT": Data(repeating: 2, count: 4000)])
@@ -232,6 +272,23 @@ extension Headless {
         check("new client version: zips it carries unchanged are not fetched again; it is the client and the target",
               bumped == .ok(changed: 0) && fetched().isEmpty
                 && state()["client"] as? String == "30261001_1" && state()["target"] as? String == "30261001_1")
+        // An update to a newer client stopped part-way: that client is written down first, so with their
+        // status API down the next update carries on with it, not with the last one finished.
+        let looks4 = zip(["ROM/3/1.DAT": Data("l4".utf8)]), looks5 = zip(["ROM/3/2.DAT": Data("l5".utf8)])
+        for (n, d) in [("looks-04.zip", looks4), ("looks-05.zip", looks5)] {
+            ch.put("/client/30261002_1/\(n)", d, t0)
+            chunks.append(entry(n, d, "{ashita}/polplugins/DATs/vanadreams-looks"))
+        }
+        ch.put("/status", Data(#"{"state":"online","client_ver":"30261002_1"}"#.utf8), t0); publish("30261002_1")
+        let halfway = sync(stopAfter: "looks-04.zip")
+        let halfState = state()
+        var noStatus = src; noStatus.status = "http://127.0.0.1:9/status"
+        let carriedOn = sync(noStatus)
+        check("update stopped part-way: the client being fetched is written down first; with their status API down the next update carries it on",
+              halfway == .stopped && halfState["target"] as? String == "30261002_1" && halfState["finished"] as? Bool == false
+                && halfState["client"] as? String == "30261001_1"
+                && carriedOn == .ok(changed: 1) && ch.log.contains("/client/30261002_1/manifest.json 200")
+                && fetched() == ["/client/30261002_1/looks-05.zip 200"] && state()["client"] as? String == "30261002_1")
         ch.put("/status", Data(#"{"state":"online","client_ver":"30260904_1"}"#.utf8), t0)
         // Their status API down: which client a folder asks for (here a list that is not there, so the
         // failure names it).
