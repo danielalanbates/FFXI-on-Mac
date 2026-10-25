@@ -213,6 +213,7 @@ extension Headless {
             print("  \(ok ? "ok  " : "FAIL") \(name)")
         }
         print(failures == 0 ? "all \(checks.count) checks passed" : "\(failures) of \(checks.count) FAILED")
+        try? fm.removeItem(at: tmp)   // exit() runs no defer
         exit(failures == 0 ? 0 : 1)
     }
 

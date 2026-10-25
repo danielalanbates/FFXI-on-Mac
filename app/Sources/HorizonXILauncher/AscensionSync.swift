@@ -232,7 +232,7 @@ final class AscensionSync: @unchecked Sendable {
                     let base = mirrors[(w + attempt) % mirrors.count]
                     guard let u = job.channelRelative ? url(job.source, base: base) : url(job.source) else { break }
                     do {
-                        try save(u, to: job.dest, sha: job.sha)
+                        try autoreleasepool { try save(u, to: job.dest, sha: job.sha) }
                         hashes.record(job.rel, at: job.dest, sha: job.sha)
                         ok = true; break
                     } catch {
@@ -428,11 +428,14 @@ final class AscensionSync: @unchecked Sendable {
             guard let e = files[rel] else { continue }
             guard Self.safeRelative(rel) else { throw Failure(description: "AscensionXI's manifest names an unsafe path: \(rel)") }
             let dest = root.appendingPathComponent(rel)
-            if hashes.verified(rel, at: dest, sha: e.sha256) { kept += 1; continue }
-            if rel.hasPrefix("Game/"), copyFromDonor(String(rel.dropFirst(5)), to: dest, key: rel, entry: e, donors: donors) {
-                copied += 1; changed += 1
-                continue
+            // A pool per file: stat results and copies are autoreleased, and a job thread drains none.
+            let got: Int = autoreleasepool {
+                if hashes.verified(rel, at: dest, sha: e.sha256) { return 0 }
+                if rel.hasPrefix("Game/"), copyFromDonor(String(rel.dropFirst(5)), to: dest, key: rel, entry: e, donors: donors) { return 1 }
+                return 2
             }
+            if got == 0 { kept += 1; continue }
+            if got == 1 { copied += 1; changed += 1; continue }
             jobs.append(Job(rel: rel, source: "base/files/" + rel, dest: dest, sha: e.sha256, size: e.size, channelRelative: true))
         }
         if copied > 0 || !jobs.isEmpty {
@@ -975,9 +978,12 @@ final class HashCache: @unchecked Sendable {
     private let lock = NSLock()
     private var dirty = false
     let url: URL
+    /// What "hash" means for this cache: SHA-256 hex by default (PegasusSync keeps CRC-32s).
+    private let hasher: (URL) -> String?
 
-    init(url: URL) {
+    init(url: URL, hasher: @escaping (URL) -> String? = { AscensionChannel.sha256(of: $0) }) {
         self.url = url
+        self.hasher = hasher
         if let d = try? Data(contentsOf: url), let m = try? JSONDecoder().decode([String: [String]].self, from: d) { map = m }
     }
 
@@ -994,9 +1000,14 @@ final class HashCache: @unchecked Sendable {
         lock.lock()
         if trustStamps, let e = map[key], e.count == 3, e[0] == s[0], e[1] == s[1] { lock.unlock(); return e[2] == sha }
         lock.unlock()
-        guard let h = AscensionChannel.sha256(of: file) else { return false }
+        guard let h = hasher(file) else { return false }
         lock.lock(); map[key] = s + [h]; dirty = true; lock.unlock()
         return h == sha
+    }
+
+    /// A file removed, so its entry goes too.
+    func forget(_ key: String) {
+        lock.lock(); if map.removeValue(forKey: key) != nil { dirty = true }; lock.unlock()
     }
 
     /// A file just written after its hash was checked.

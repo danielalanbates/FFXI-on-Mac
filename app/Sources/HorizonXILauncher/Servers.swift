@@ -149,13 +149,14 @@ struct Server: Codable, Identifiable, Hashable {
     ///   archive directly skips a GUI that cannot be driven unattended under wine.
     /// - `ascensionChannel`: AscensionXI's own update channel, read natively (AscensionChannel).
     /// - `driftwoodContent`: DriftwoodXI's public content repo, with retail files from this Mac (DriftwoodSync).
+    /// - `pegasusPack`: PegasusXI's release zip, read by Range member by member (PegasusSync).
     enum InstallKind: String, Codable {
         case website, installerExe, catseyeLauncher, horizonTorrent, retail, clientZip, ascensionChannel, vanadreamsPackage,
-             driftwoodContent, none
+             driftwoodContent, pegasusPack, none
 
         /// Worlds whose own launcher updates the client before every Play; this one does the same
-        /// (AscensionSync, VanadreamsSync, DriftwoodSync).
-        var updatesBeforePlay: Bool { self == .ascensionChannel || self == .vanadreamsPackage || self == .driftwoodContent }
+        /// (AscensionSync, VanadreamsSync, DriftwoodSync, PegasusSync).
+        var updatesBeforePlay: Bool { [.ascensionChannel, .vanadreamsPackage, .driftwoodContent, .pegasusPack].contains(self) }
 
         /// A kind this build does not know (a newer build wrote it) reads as `website`: one
         /// unknown value must not make the whole servers.json unreadable, which resets every
@@ -393,6 +394,26 @@ struct Server: Codable, Identifiable, Hashable {
                accountHow: "Register on xi.driftwoodgaming.com, then log in here with that account.",
                discordURL: "https://discord.gg/DriftwoodGaming",
                // Their home page, 2026-10-24: "Sixteen character slots, one account, one game window."
+               maxClients: 1),
+        // Added 2026-10-24 (b74). LSB: port 54231 answers LandSandBoat's own JSON ("'2.1.x'") and
+        // their client ships stock LandSandBoat xiloader 2.1.1.0. From pegasusxi.com, their launcher
+        // (1.1.8, app.asar read as data) and their CDN; see docs/PEGASUS.md.
+        Server(name: PegasusChannel.worldName, host: PegasusChannel.host,
+               bootProfile: PegasusChannel.bootProfile, verified: false,
+               note: "Retail-like level 99 world, playable through Chains of Promathia; later expansions in development.",
+               // pegasusxi.com/server-info.html, 2026-10-24: "Level cap 99", "Playable through Chains of
+               // Promathia". Discord 50 members that day: ordering only.
+               era: "99 cap · through Chains of Promathia", population: 50, codebase: .landSandBoat,
+               installURL: "https://pegasusxi.com/files/", installKind: .pegasusPack,
+               installNote: "PegasusXI's own client (Ashita, LandSandBoat's loader, the game and their HD textures: "
+                     + "about 14 GB of downloads, 28 GB installed), read straight out of their release zip, file by file and checked.",
+               // register.html 301-redirects here; 18+, password 8-32 characters ("The game client
+               // (xiloader) cannot use longer passwords").
+               accountURL: "https://pegasusxi.com/new_accounts/index.html",
+               accountHow: "Register on pegasusxi.com (18 or older; password 8–32 characters), then log in here "
+                     + "with that account. Characters are made in game.",
+               discordURL: "https://discord.gg/M3NFvpm75E",
+               // No multibox rule on their rules, FAQ, server info or addons pages (2026-10-24): one client.
                maxClients: 1),
         Server(name: "Eden", host: "play.edenxi.com", bootProfile: "eden.ini", verified: false,
                note: "Login host from Eden's own new-player wiki. Untested by this project.",

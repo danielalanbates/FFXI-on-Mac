@@ -406,6 +406,7 @@ extension Headless {
         }
         if failures > 0 { print("--- last run's log:"); for l in lines { print("    " + l) } }
         print(failures == 0 ? "all \(checks.count) checks passed" : "\(failures) of \(checks.count) FAILED")
+        try? fm.removeItem(at: tmp)   // exit() runs no defer
         exit(failures == 0 ? 0 : 1)
     }
 
@@ -505,11 +506,26 @@ final class TestChannel: @unchecked Sendable {
         let path = parts.count > 1 ? String(parts[1]) : "/"
         let ims = lines.dropFirst().first { $0.lowercased().hasPrefix("if-modified-since:") }
             .map { String($0.dropFirst("if-modified-since:".count)).trimmingCharacters(in: .whitespaces) }
+        let range = lines.dropFirst().first { $0.lowercased().hasPrefix("range:") }
+            .map { String($0.dropFirst("range:".count)).trimmingCharacters(in: .whitespaces) }
         lock.lock(); let hit = files[path]; lock.unlock()
         var status = "404 Not Found", body = Data(), extra = ""
         if let (data, date) = hit {
             if let ims, let since = AscensionSync.parseHTTPDate(ims), date <= since {
                 status = "304 Not Modified"
+            } else if let range, range.hasPrefix("bytes=") {
+                // "bytes=a-b" or "bytes=-n", as PegasusSync asks; the end is clamped to the file.
+                let spec = range.dropFirst("bytes=".count).split(separator: "-", omittingEmptySubsequences: false).map(String.init)
+                let n = data.count
+                var lo = 0, hi = n - 1
+                if spec.count == 2, spec[0].isEmpty, let k = Int(spec[1]) { lo = max(0, n - k) }
+                else if spec.count == 2, let a = Int(spec[0]) { lo = a; hi = min(n - 1, Int(spec[1]) ?? (n - 1)) }
+                if lo <= hi, lo < n {
+                    status = "206 Partial Content"; body = data[lo...hi]
+                    extra = "Content-Range: bytes \(lo)-\(hi)/\(n)\r\n"
+                } else {
+                    status = "416 Range Not Satisfiable"
+                }
             } else {
                 status = "200 OK"; body = data
                 extra = "Last-Modified: \(AscensionSync.httpDate(date) ?? "")\r\n"

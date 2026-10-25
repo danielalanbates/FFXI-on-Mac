@@ -311,12 +311,20 @@ final class DriftwoodSync: @unchecked Sendable {
             guard AscensionSync.safeRelative(f.path) else { throw Failure(description: "DriftwoodXI's client list names an unsafe path: \(f.path)") }
             let key = "Game/FINAL FANTASY XI/" + f.path
             let dest = ffxi.appendingPathComponent(f.path)
-            if hashes.verified(key, at: dest, sha: f.sha256) { kept += 1; continue }
-            if copy(f, from: donors, to: dest, key: key, exact: true) { copied += 1; changed += 1; continue }
-            if DriftwoodChannel.mayDiffer.contains(f.path.lowercased()) {
-                if fm.fileExists(atPath: dest.path) || copy(f, from: donors, to: dest, key: key, exact: false) { kept += 1; continue }
+            // A pool per file: stat results and copies are autoreleased, and this thread drains none.
+            enum Got { case kept, copied, missing }
+            let got: Got = autoreleasepool {
+                if hashes.verified(key, at: dest, sha: f.sha256) { return .kept }
+                if copy(f, from: donors, to: dest, key: key, exact: true) { return .copied }
+                if DriftwoodChannel.mayDiffer.contains(f.path.lowercased()),
+                   fm.fileExists(atPath: dest.path) || copy(f, from: donors, to: dest, key: key, exact: false) { return .kept }
+                return .missing
             }
-            missing.append(f.path)
+            switch got {
+            case .kept: kept += 1
+            case .copied: copied += 1; changed += 1
+            case .missing: missing.append(f.path)
+            }
         }
         hashes.save()
         log("==> DriftwoodXI: \(kept) client files already right, \(copied) copied from other clients on this Mac, \(missing.count) missing")
