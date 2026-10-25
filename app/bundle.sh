@@ -283,7 +283,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
        their manifest gives before it is used (AscensionChannel.swift). That one domain only. -->
   <key>NSAppTransportSecurity</key>
   <dict>
-    <!-- 127.0.0.1 only: --selftest-ascension serves a fake channel on loopback. -->
+    <!-- The Ascension self-test serves a fake channel only on 127.0.0.1. -->
     <key>NSAllowsLocalNetworking</key><true/>
     <key>NSExceptionDomains</key>
     <dict>
