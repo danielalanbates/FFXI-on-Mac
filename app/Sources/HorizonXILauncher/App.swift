@@ -1783,7 +1783,7 @@ struct ContentView: View {
             runner.installClientZip(from: u, into: s.dataPath, name: s.name)
         case .retail:
             runner.installRetail(for: s, in: i)
-        case .ascensionChannel, .vanadreamsPackage, .driftwoodContent, .pegasusPack:
+        case .ascensionChannel, .vanadreamsPackage, .driftwoodContent, .pegasusPack, .retailWorld:
             worldJob(for: s, install: i, full: true, runner: runner) { _ in recheck() }
         case .website:
             if let u = URL(string: s.installURL) { NSWorkspace.shared.open(u) }
@@ -2417,6 +2417,11 @@ struct ContentView: View {
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         if w.installKind == .vanadreamsPackage { r.syncVanadreams(root: root, install: full, done: done); return }
         if w.installKind == .pegasusPack { r.syncPegasus(root: root, install: full, done: done); return }
+        if w.installKind == .retailWorld, let spec = RetailWorld.spec(w.name) {
+            r.syncRetailWorld(spec, root: root, install: full,
+                              donors: AscensionChannel.donorClients(store.servers.filter { $0.name != w.name }, base: i), done: done)
+            return
+        }
         if w.installKind == .driftwoodContent {
             // Every file of their list is checked against the cache on each run, so donors are offered always.
             r.syncDriftwood(root: root, install: full, donors: AscensionChannel.donorClients(store.servers.filter { $0.name != w.name }, base: i),

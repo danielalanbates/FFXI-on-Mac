@@ -167,8 +167,8 @@ extension Headless {
               LoginAccount.problem(user: "", password: "x") != nil && LoginAccount.problem(user: String(repeating: "a", count: 17), password: "x") != nil
                 && LoginAccount.problem(user: "a b", password: "x") != nil && LoginAccount.problem(user: "ab", password: "has space") != nil
                 && LoginAccount.problem(user: "Murn01", password: "ok-pass_1") == nil)
-        check("account: Vanadreams and Supernova offer Create account; HorizonXI and AscensionXI do not",
-              Server.all.filter(\.createsAccountAtLogin).map(\.name).sorted() == ["Supernova", "Vanadreams"])
+        check("account: Vanadreams, Supernova and Moghouse XI offer Create account; HorizonXI and AscensionXI do not",
+              Server.all.filter(\.createsAccountAtLogin).map(\.name).sorted() == ["Moghouse XI", "Supernova", "Vanadreams"])
 
         // The launcher around it.
         let v = Server.all.first { $0.name == VanadreamsChannel.worldName }

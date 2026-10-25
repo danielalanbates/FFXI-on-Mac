@@ -697,6 +697,13 @@ final class Runner: ObservableObject {
         }, done: done)
     }
 
+    /// A plain retail world: client from `donors`, Ashita, the loader its server takes (RetailWorldSync).
+    func syncRetailWorld(_ spec: RetailWorld.Spec, root: URL, install: Bool, donors: [URL], done: @escaping (AscensionSync.Outcome) -> Void) {
+        runWorldJob(world: spec.world, root: root, install: install, work: { stop, log, progress in
+            RetailWorldSync(spec: spec, root: root, stop: stop, log: log, progress: { _, f in progress(f) }).run(install: install, donors: donors)
+        }, done: done)
+    }
+
     /// PegasusXI's client out of their release zip (PegasusSync).
     func syncPegasus(root: URL, install: Bool, done: @escaping (AscensionSync.Outcome) -> Void) {
         runWorldJob(world: PegasusChannel.worldName, root: root, install: install, work: { stop, log, progress in

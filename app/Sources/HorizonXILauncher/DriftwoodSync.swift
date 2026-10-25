@@ -39,8 +39,6 @@ enum DriftwoodChannel {
     static let clientBuild = "30260904_1"
     static let content = "https://raw.githubusercontent.com/DriftwoodGaming/DriftwoodXI-Content/main/"
     static let neverInstalled: Set<String> = ["dwgmpanel"]
-    /// The one client file allowed to differ from their list (see the type's notes).
-    static let mayDiffer: Set<String> = ["patch2.cfg"]
     /// Plugins their scripts load besides `addons` (their Linux guide's step 4).
     static let plugins = ["thirdparty", "addons", "screenshot", "winefix"]
 
@@ -184,6 +182,7 @@ final class DriftwoodSync: @unchecked Sendable {
     private var game: URL { root.appendingPathComponent("Game") }
     private var stateDir: URL { root.appendingPathComponent(".ffxi-on-mac") }
     private var stateURL: URL { stateDir.appendingPathComponent("driftwood.json") }
+    private lazy var client = RetailClient(game: game, world: DriftwoodChannel.worldName, hashes: hashes, stop: stop, log: log, progress: progress)
 
     init(root: URL, sources: DriftwoodChannel.Sources = .init(), stop: StopFlag = StopFlag(),
          log: @escaping (String) -> Void, progress: @escaping (String, Double) -> Void = { _, _ in }) {
@@ -203,6 +202,7 @@ final class DriftwoodSync: @unchecked Sendable {
         var outcome: Outcome
         do { outcome = try steps(install: install, donors: donors) }
         catch let f as Failure { outcome = .failed(f.description) }
+        catch let f as RetailClient.Failure { outcome = .failed(f.description) }
         catch { outcome = .failed("DriftwoodXI update failed: \(error.localizedDescription)") }
         return stop.raised ? .stopped : outcome
     }
@@ -234,18 +234,18 @@ final class DriftwoodSync: @unchecked Sendable {
         writeState(["finished": false])
         // 1. The retail client, when their list is not the one it was last put together from, on
         // Setup/Repair, or when it is not there.
-        let clientMissing = !fm.fileExists(atPath: game.appendingPathComponent("FINAL FANTASY XI/FFXiMain.dll").path)
+        let clientMissing = !client.present
         if let m = gotManifest {
             let listSHA = AscensionChannel.sha256(m.data)
             if install || clientMissing || readState()["clientList"] as? String != listSHA {
                 guard let files = DriftwoodChannel.parseClientManifest(m.data) else { throw Failure(description: "DriftwoodXI's client list could not be read.") }
-                try assembleClient(files, donors: donors)
+                try client.assemble(files, donors: donors, build: DriftwoodChannel.clientBuild)
                 writeState(["clientList": listSHA])
             }
         } else if clientMissing {
             throw Failure(description: "DriftwoodXI's client list didn't load, and there is no client here yet.")
         }
-        try ensureViewer(donors: donors)
+        try client.ensureViewer(donors: donors)
         try checkStop()
         // 2. Ashita and its core.
         if install || !fm.fileExists(atPath: ashita.appendingPathComponent("Ashita-cli.exe").path) {
@@ -297,86 +297,7 @@ final class DriftwoodSync: @unchecked Sendable {
         try checkStop()
         writeState(["finished": true, "bundle": bundle.version, "core": bundle.core?.version ?? "",
                     "updated": ISO8601DateFormatter().string(from: Date())])
-        return .ok(changed: changed)
-    }
-
-    // MARK: - The client
-
-    private func assembleClient(_ files: [DriftwoodChannel.ClientFile], donors: [URL]) throws {
-        log("==> DriftwoodXI: checking the client against their list of \(files.count) files (build \(DriftwoodChannel.clientBuild))")
-        let ffxi = game.appendingPathComponent("FINAL FANTASY XI")
-        var kept = 0, copied = 0, missing: [String] = []
-        for (n, f) in files.enumerated() {
-            if n % 500 == 0 { try checkStop(); progress("Checking DriftwoodXI's client", Double(n) / Double(files.count)) }
-            guard AscensionSync.safeRelative(f.path) else { throw Failure(description: "DriftwoodXI's client list names an unsafe path: \(f.path)") }
-            let key = "Game/FINAL FANTASY XI/" + f.path
-            let dest = ffxi.appendingPathComponent(f.path)
-            // A pool per file: stat results and copies are autoreleased, and this thread drains none.
-            enum Got { case kept, copied, missing }
-            let got: Got = autoreleasepool {
-                if hashes.verified(key, at: dest, sha: f.sha256) { return .kept }
-                if copy(f, from: donors, to: dest, key: key, exact: true) { return .copied }
-                if DriftwoodChannel.mayDiffer.contains(f.path.lowercased()),
-                   fm.fileExists(atPath: dest.path) || copy(f, from: donors, to: dest, key: key, exact: false) { return .kept }
-                return .missing
-            }
-            switch got {
-            case .kept: kept += 1
-            case .copied: copied += 1; changed += 1
-            case .missing: missing.append(f.path)
-            }
-        }
-        hashes.save()
-        log("==> DriftwoodXI: \(kept) client files already right, \(copied) copied from other clients on this Mac, \(missing.count) missing")
-        if !missing.isEmpty {
-            throw Failure(description: "\(missing.count) of DriftwoodXI's client files are not on this Mac (first: \(missing[0])). They come from "
-                          + "retail FFXI on build \(DriftwoodChannel.clientBuild): install AscensionXI or Vanadreams first, which carry that build.")
-        }
-    }
-
-    /// The donor the last copied file came from: tried first, since a client is mostly one build.
-    private var lastDonor: URL?
-
-    /// A donor's copy of `f` into `dest`, hashed after copying. `exact: false` takes any same-path file.
-    private func copy(_ f: DriftwoodChannel.ClientFile, from donors: [URL], to dest: URL, key: String, exact: Bool) -> Bool {
-        let part = dest.deletingLastPathComponent().appendingPathComponent("." + dest.lastPathComponent + ".ffxi-part")
-        let order = lastDonor.map { l in [l] + donors.filter { $0 != l } } ?? donors
-        for d in order {
-            let c = d.appendingPathComponent("FINAL FANTASY XI").appendingPathComponent(f.path)
-            guard AscensionSync.isRegularFile(c) else { continue }
-            if exact, ((try? fm.attributesOfItem(atPath: c.path))?[.size] as? NSNumber)?.int64Value != f.size { continue }
-            do {
-                try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try? fm.removeItem(at: part)
-                try fm.copyItem(at: c, to: part)
-                if exact, AscensionChannel.sha256(of: part) != f.sha256 { try? fm.removeItem(at: part); continue }
-                try? fm.removeItem(at: dest)
-                try fm.moveItem(at: part, to: dest)
-                if exact { hashes.record(key, at: dest, sha: f.sha256); lastDonor = d }
-                return true
-            } catch { try? fm.removeItem(at: part) }
-        }
-        return false
-    }
-
-    /// PlayOnline Viewer beside the game (their launcher takes it as FINAL FANTASY XI's sibling). Not in
-    /// their list; copied whole when missing, from a donor on the same build: the one the client's
-    /// files came from, else one whose FFXiMain.dll is this client's.
-    private func ensureViewer(donors: [URL]) throws {
-        let viewer = game.appendingPathComponent("PlayOnlineViewer")
-        guard !fm.fileExists(atPath: viewer.appendingPathComponent("viewer/com/polcore.dll").path) else { return }
-        let main = AscensionChannel.sha256(of: game.appendingPathComponent("FINAL FANTASY XI/FFXiMain.dll"))
-        let sameBuild = donors.filter { main != nil && AscensionChannel.sha256(of: $0.appendingPathComponent("FINAL FANTASY XI/FFXiMain.dll")) == main }
-        let order = (lastDonor.map { [$0] } ?? []) + sameBuild + donors
-        guard let from = order.map({ $0.appendingPathComponent("PlayOnlineViewer") })
-                .first(where: { fm.fileExists(atPath: $0.appendingPathComponent("viewer/com/polcore.dll").path) }) else {
-            throw Failure(description: "No PlayOnline Viewer on this Mac to copy for DriftwoodXI. Install AscensionXI or Vanadreams first.")
-        }
-        log("==> DriftwoodXI: PlayOnline Viewer from \(from.deletingLastPathComponent().path)")
-        try? fm.removeItem(at: viewer)
-        try fm.createDirectory(at: game, withIntermediateDirectories: true)
-        try fm.copyItem(at: from, to: viewer)
-        changed += 1
+        return .ok(changed: changed + client.changed)
     }
 
     // MARK: - Ashita

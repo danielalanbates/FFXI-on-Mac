@@ -150,13 +150,14 @@ struct Server: Codable, Identifiable, Hashable {
     /// - `ascensionChannel`: AscensionXI's own update channel, read natively (AscensionChannel).
     /// - `driftwoodContent`: DriftwoodXI's public content repo, with retail files from this Mac (DriftwoodSync).
     /// - `pegasusPack`: PegasusXI's release zip, read by Range member by member (PegasusSync).
+    /// - `retailWorld`: retail FFXI from this Mac + Ashita + LandSandBoat's xiloader (RetailWorldSync).
     enum InstallKind: String, Codable {
         case website, installerExe, catseyeLauncher, horizonTorrent, retail, clientZip, ascensionChannel, vanadreamsPackage,
-             driftwoodContent, pegasusPack, none
+             driftwoodContent, pegasusPack, retailWorld, none
 
         /// Worlds whose own launcher updates the client before every Play; this one does the same
-        /// (AscensionSync, VanadreamsSync, DriftwoodSync, PegasusSync).
-        var updatesBeforePlay: Bool { [.ascensionChannel, .vanadreamsPackage, .driftwoodContent, .pegasusPack].contains(self) }
+        /// (AscensionSync, VanadreamsSync, DriftwoodSync, PegasusSync, RetailWorldSync).
+        var updatesBeforePlay: Bool { [.ascensionChannel, .vanadreamsPackage, .driftwoodContent, .pegasusPack, .retailWorld].contains(self) }
 
         /// A kind this build does not know (a newer build wrote it) reads as `website`: one
         /// unknown value must not make the whole servers.json unreadable, which resets every
@@ -415,6 +416,41 @@ struct Server: Codable, Identifiable, Hashable {
                discordURL: "https://discord.gg/M3NFvpm75E",
                // No multibox rule on their rules, FAQ, server info or addons pages (2026-10-24): one client.
                maxClients: 1),
+        // Added 2026-10-24 (b75). LSB: port 54231 answers LandSandBoat's own JSON ("'2.1.x'"), and LSB's
+        // login checks major.minor exactly, so xiloader 2.1.2 (RetailWorld.loaders), never the latest.
+        // From mistxi.com (server-info, getting-started, create-account), api.mistxi.com/status.php
+        // and their launcher (github.com/mistxi/mistxi_launcher); see docs/RETAIL-WORLDS.md.
+        Server(name: RetailWorld.mist.world, host: RetailWorld.mist.host, bootProfile: RetailWorld.mist.profile, verified: false,
+               note: "Era-focused 75 cap through Wings of the Goddess, 3x EXP and 1.5x movement speed.",
+               // mistxi.com/server-info, 2026-10-24: "Level cap: 75 (Main)", "Content: Supported up to Wings
+               // of the Goddess". Discord 52 members that day: ordering only.
+               era: "Wings of the Goddess · 75 cap", population: 52, codebase: .landSandBoat,
+               // api.mistxi.com/status.php, 2026-10-24: "clientVersion":"30260805_0" (JSON; ServerFeeds reads
+               // only Lua CLIENT_VER, so this snapshot is the check). The client here is newer (30260904_1).
+               requiredClient: "30260805_0",
+               installURL: "https://mistxi.com/getting-started/", installKind: .retailWorld,
+               installNote: "Retail FFXI from the identical files of another world's client on this Mac, then Ashita and "
+                     + "LandSandBoat's xiloader 2.1, as their getting-started guide sets them up.",
+               accountURL: "https://mistxi.com/create-account/",
+               accountHow: "Sign up on mistxi.com (Discord verification, or ask for manual approval), choose your game "
+                     + "login there, then log in here with it.",
+               discordURL: "https://discord.gg/kQp9Vetk3d",
+               // mistxi.com/server-info, 2026-10-24: "Dual boxing: Allowed ( maximum 2 per IP )".
+               maxClients: 2),
+        // Added 2026-10-24 (b75). LSB: port 54231 answers "This server requires version 2.2.x". From
+        // moghouse.cc (getting-setup, the Ashita guide); see docs/RETAIL-WORLDS.md.
+        Server(name: RetailWorld.moghouse.world, host: RetailWorld.moghouse.host, bootProfile: RetailWorld.moghouse.profile,
+               verified: false,
+               note: "A fun server: every player is GM level 1. Level 99, Rise of the Zilart through Adoulin.",
+               era: "99 cap · fun server", population: 0, codebase: .landSandBoat,
+               installURL: "https://moghouse.cc/getting-setup/", installKind: .retailWorld,
+               installNote: "Retail FFXI from the identical files of another world's client on this Mac, then Ashita and "
+                     + "LandSandBoat's xiloader 2.2, as their setup guide does it.",
+               accountHow: "No signup page: the account is made at their login server. Type the account name and "
+                     + "password you want above, then Create account.",
+               discordURL: "https://discord.gg/3ZfEJrp56X",
+               // No multibox rule on moghouse.cc (2026-10-24): one client.
+               maxClients: 1, createsAccountAtLogin: true),
         Server(name: "Eden", host: "play.edenxi.com", bootProfile: "eden.ini", verified: false,
                note: "Login host from Eden's own new-player wiki. Untested by this project.",
                era: "Classic · 75 cap", population: 1925, codebase: .darkStarLineage,

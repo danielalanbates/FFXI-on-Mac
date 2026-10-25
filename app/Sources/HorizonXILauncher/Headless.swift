@@ -55,6 +55,8 @@ enum Headless {
             || a.contains("--driftwood-treehash")
             || a.contains("--selftest-pegasus")
             || a.contains("--pegasus-sync")
+            || a.contains("--selftest-retail-world")
+            || a.contains("--retail-world-sync")
             || a.contains("--send-ashita")
             || a.contains("--carryover-report")
             || a.contains("--carryover-apply")
@@ -155,6 +157,8 @@ enum Headless {
         if args.contains("--driftwood-sync") || args.contains("--driftwood-treehash") { runDriftwoodSync(args) }
         if args.contains("--selftest-pegasus") { runPegasusSelfTest() }
         if args.contains("--pegasus-sync") { runPegasusSync(args) }
+        if args.contains("--selftest-retail-world") { runRetailWorldSelfTest() }
+        if args.contains("--retail-world-sync") { runRetailWorldSync(args) }
         if args.contains("--selftest-carryover") {
             runCarryOverSelfTest()
         }
@@ -774,9 +778,10 @@ enum Headless {
         checks.append(("a session of this window that is still injecting counts as a copy",
                        refusal(horizon, [], own: [-1]) != nil))
         // Vanadreams (b72): "As many accounts and characters as you want, boxing welcome" (fairywitch.ca).
-        checks.append(("only the local world, CatsEyeXI and Vanadreams (cited rules) allow several clients",
+        // MistXI (b75): "Dual boxing: Allowed ( maximum 2 per IP )" (mistxi.com/server-info).
+        checks.append(("only the local world, CatsEyeXI, MistXI and Vanadreams (cited rules) allow several clients",
                        Server.all.filter(\.allowsMultipleClients).map(\.name).sorted()
-                           == ["CatsEyeXI", "Local server", "Vanadreams"]))
+                           == ["CatsEyeXI", "Local server", "MistXI", "Vanadreams"]))
         let oneCats = LiveClients.parse("62001 62000 C:\\CatsEye\\xiloader.exe --server server.catseyexi.com\n"
                                         + "62002 62000 /x/x87sidecar-coop --cooperative /x/wine C:\\CatsEye\\xiloader.exe --server server.catseyexi.com\n").clients
         let twoCats = oneCats + LiveClients.parse("63001 63000 C:\\CatsEye\\xiloader.exe --server server.catseyexi.com\n").clients
