@@ -1,4 +1,4 @@
-# Plain retail worlds (MistXI, Moghouse XI)
+# Plain retail worlds (MistXI, Moghouse XI, LevelDown 99)
 
 Added in beta 75 (2026-10-24). One route for LandSandBoat worlds that publish no client and no
 launcher this one needs to follow: their players install retail FFXI, Ashita v4 and LandSandBoat's
@@ -8,6 +8,7 @@ xiloader, and boot with `--server <host>` (each world's own setup guide). `Retai
 | --- | --- | --- | --- | --- | --- | --- |
 | **MistXI** | `play.mistxi.com` | 2.1.x → v2.1.2 | website (mistxi.com/create-account, Discord verification) | 2 ("Dual boxing: Allowed ( maximum 2 per IP )") | their list: 101 addons + 23 plugins ("Only items on this list are permitted") | mistxi.com/server-info, getting-started; api.mistxi.com/status.php; their launcher's source (github.com/mistxi/mistxi_launcher) |
 | **Moghouse XI** | `ffxi.cc` | 2.2.x → v2.2.0 | at the login server (Create account) | 1 (no rule published) | none published | moghouse.cc/getting-setup, the Ashita guide |
+| **LevelDown 99** (b76) | `LevelDownFFXI.com` | 2.2.x → v2.2.0 | at the login server (their guide: "enter 2" in xiloader) | 2 ("Accounts – 2 Active, 1 Mule (only two logged in at a time)") | none published | their wiki: Installation, About Us, Past FFXI Version Repository |
 
 Both answered LandSandBoat's JSON on port 54231 on 2026-10-24 ("'2.1.x'" and "requires version
 2.2.x"). LSB's login checks the loader's major.minor exactly (`src/login/auth_session.cpp`), so a
@@ -38,6 +39,34 @@ since 2026-09-27), which their server refuses.
 Every Play: the list with If-Modified-Since (one 304), the Ashita pin and the loader's hash. Layout:
 `<folder>/Ashita/`, `<folder>/Game/FINAL FANTASY XI`, `<folder>/Game/PlayOnlineViewer`, state in
 `<folder>/.ffxi-on-mac/`.
+
+## LevelDown 99: their own client archive
+
+LevelDown 99's server runs an older client than retail (30260203_0 on 2026-10-24), and they hand that
+client out: "Use these downloads if you have a version of the game that is newer than the version LD99
+is running on currently" (their wiki's Past FFXI Version Repository). That page names the current
+version and a Google Drive file: `LDFFXI30260203_0.7z`, 5.5 GB, a whole `FINAL FANTASY XI` folder
+(66,264 entries, 14.86 GB). So for this world (`RetailWorld.Spec.archive`):
+
+- Every Play reads that page (MediaWiki API, wikitext): the first "FFXI Version <id>" heading before
+  "Out of Date Versions" that is not struck through, and the Drive file after it.
+- A version not yet installed (or Setup/Repair) downloads the archive **straight into the world's
+  folder** (`FileDownload`: never through the internal disk's temporary folder; resumed after Stop),
+  unpacks it with macOS's own `bsdtar` (7-Zip included), and moves it over `FINAL FANTASY XI` after
+  deleting the old `VTABLE.DAT`, as their page says to.
+- Their archive carries **someone's `USER/` folders** (character settings and macros: `USER/186`,
+  `USER/214`, …). They are never unpacked.
+- The archive is kept until a new version replaces it, so Repair unpacks it again without a download.
+
+Their install guide's "patch files" (a Drive folder) are the same 2010 files as MistXI's
+`FFXI-UpdatePatch.zip` below, for PlayOnline's update; not needed here.
+
+## Every client: USER and PlayOnline Viewer
+
+- `FINAL FANTASY XI/USER` is made (empty) when a client has none: no file list carries it.
+- PlayOnline Viewer comes from a donor on the same build when there is one, else the newest viewer
+  (`version.dat`; an un-updated 1.18.00n viewer does not match the loaders' signatures), preferring
+  one that holds no PlayOnline member's mail.
 
 ## Not done here, on purpose
 

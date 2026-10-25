@@ -151,13 +151,16 @@ struct Server: Codable, Identifiable, Hashable {
     /// - `driftwoodContent`: DriftwoodXI's public content repo, with retail files from this Mac (DriftwoodSync).
     /// - `pegasusPack`: PegasusXI's release zip, read by Range member by member (PegasusSync).
     /// - `retailWorld`: retail FFXI from this Mac + Ashita + LandSandBoat's xiloader (RetailWorldSync).
+    /// - `scytheChannel`: Scythe's signed release, files by SHA-256 (ScytheSync).
     enum InstallKind: String, Codable {
         case website, installerExe, catseyeLauncher, horizonTorrent, retail, clientZip, ascensionChannel, vanadreamsPackage,
-             driftwoodContent, pegasusPack, retailWorld, none
+             driftwoodContent, pegasusPack, retailWorld, scytheChannel, none
 
         /// Worlds whose own launcher updates the client before every Play; this one does the same
-        /// (AscensionSync, VanadreamsSync, DriftwoodSync, PegasusSync, RetailWorldSync).
-        var updatesBeforePlay: Bool { [.ascensionChannel, .vanadreamsPackage, .driftwoodContent, .pegasusPack, .retailWorld].contains(self) }
+        /// (AscensionSync, VanadreamsSync, DriftwoodSync, PegasusSync, RetailWorldSync, ScytheSync).
+        var updatesBeforePlay: Bool {
+            [.ascensionChannel, .vanadreamsPackage, .driftwoodContent, .pegasusPack, .retailWorld, .scytheChannel].contains(self)
+        }
 
         /// A kind this build does not know (a newer build wrote it) reads as `website`: one
         /// unknown value must not make the whole servers.json unreadable, which resets every
@@ -451,6 +454,35 @@ struct Server: Codable, Identifiable, Hashable {
                discordURL: "https://discord.gg/3ZfEJrp56X",
                // No multibox rule on moghouse.cc (2026-10-24): one client.
                maxClients: 1, createsAccountAtLogin: true),
+        // Added 2026-10-24 (b76). LSB: port 54231 answers "This server requires version 2.2.x". From
+        // their wiki (ffxileveldown.fandom.com: Installation, About Us, Past FFXI Version Repository); see
+        // docs/RETAIL-WORLDS.md.
+        Server(name: RetailWorld.levelDown.world, host: RetailWorld.levelDown.host, bootProfile: RetailWorld.levelDown.profile,
+               verified: false,
+               note: "Level 99 custom server: every expansion, boosted rates, free 109 artifact armor and a relic at milestones.",
+               era: "99 cap · custom", population: 0, codebase: .landSandBoat,
+               installURL: "https://ffxileveldown.fandom.com/wiki/Installation", installKind: .retailWorld,
+               installNote: "Their own copy of the game on the version their server runs (5.5 GB download, 15 GB installed), "
+                     + "then Ashita and LandSandBoat's xiloader 2.2, as their install guide sets them up.",
+               accountHow: "No signup page: the account is made at their login server. Type the account name and "
+                     + "password you want above, then Create account.",
+               discordURL: "https://discord.gg/uZ5J2KwAPA",
+               // Their wiki's About Us, 2026-10-24: "Accounts – 2 Active, 1 Mule (only two logged in at a time)".
+               maxClients: 2, createsAccountAtLogin: true),
+        // Added 2026-10-24 (b76). LSB ("Powered by LandSandBoat"; port 54231 answers LSB's JSON,
+        // "'2.1.x'"). From their site and their launcher (3.0.39, read with ILSpy); see docs/SCYTHE.md.
+        Server(name: ScytheChannel.worldName, host: ScytheChannel.host, bootProfile: ScytheChannel.bootProfile, verified: false,
+               note: "Level 99 custom: Master Levels to 50, Rhapsodies of Vana'diel, a custom hub zone and a levelling buff.",
+               era: "99 cap · custom", population: 0, codebase: .landSandBoat,
+               installURL: "https://scythe-bbq.pages.dev/getting-started", installKind: .scytheChannel,
+               installNote: "Scythe's signed client release (pinned to retail 30260429_1): files already on this Mac are copied "
+                     + "byte for byte, the rest (about 1 GB) come from Scythe; then their Ashita and loader.",
+               accountHow: "No signup page: the account is made at their login server. Type the account name and "
+                     + "password you want above, then Create account.",
+               discordURL: "https://discord.gg/9KDDH3XQfY",
+               // scythe-bbq.pages.dev/getting-started, 2026-10-24: "You may use up to two accounts per player for
+               // dual-boxing, with both online simultaneously."
+               maxClients: 2, createsAccountAtLogin: true),
         Server(name: "Eden", host: "play.edenxi.com", bootProfile: "eden.ini", verified: false,
                note: "Login host from Eden's own new-player wiki. Untested by this project.",
                era: "Classic · 75 cap", population: 1925, codebase: .darkStarLineage,

@@ -32,10 +32,15 @@ final class RetailClient {
 
     var present: Bool { fm.fileExists(atPath: game.appendingPathComponent("FINAL FANTASY XI/FFXiMain.dll").path) }
 
-    func assemble(_ files: [DriftwoodChannel.ClientFile], donors: [URL], build: String) throws {
-        log("==> \(world): checking the client against the list of \(files.count) files of retail \(build)")
+    /// Every file of `files` in place: kept when it already hashes right, copied from a donor that has
+    /// it byte for byte, else `fetch`ed (a world that serves its own files) when there is one.
+    /// `mayDiffer`: files a donor's copy of which is taken as it is when none matches.
+    func assemble(_ files: [DriftwoodChannel.ClientFile], donors: [URL], build: String,
+                  mayDiffer: Set<String> = RetailClient.mayDiffer,
+                  fetch: ((DriftwoodChannel.ClientFile, URL) throws -> Void)? = nil) throws {
+        log("==> \(world): checking the client against the list of \(files.count) files of \(fetch == nil ? "retail " : "")\(build)")
         let ffxi = game.appendingPathComponent("FINAL FANTASY XI")
-        var kept = 0, copied = 0, missing: [String] = []
+        var kept = 0, copied = 0, fetched = 0, missing: [String] = []
         for (n, f) in files.enumerated() {
             if n % 500 == 0 {
                 if stop.raised { throw Failure(description: "Stopped. Press the button again to carry on; nothing finished is lost.") }
@@ -45,22 +50,33 @@ final class RetailClient {
             let key = keyPrefix + "FINAL FANTASY XI/" + f.path
             let dest = ffxi.appendingPathComponent(f.path)
             // A pool per file: stat results and copies are autoreleased, and this thread drains none.
-            enum Got { case kept, copied, missing }
-            let got: Got = autoreleasepool {
+            enum Got { case kept, copied, fetched, missing }
+            let got: Got = try autoreleasepool {
                 if hashes.verified(key, at: dest, sha: f.sha256) { return .kept }
+                if f.size == 0 {
+                    try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try Data().write(to: dest); hashes.record(key, at: dest, sha: f.sha256); return .copied
+                }
                 if copy(f, from: donors, to: dest, key: key, exact: true) { return .copied }
-                if Self.mayDiffer.contains(f.path.lowercased()),
+                if mayDiffer.contains(f.path.lowercased()),
                    fm.fileExists(atPath: dest.path) || copy(f, from: donors, to: dest, key: key, exact: false) { return .kept }
+                if let fetch {
+                    try fetch(f, dest)
+                    hashes.record(key, at: dest, sha: f.sha256)
+                    return .fetched
+                }
                 return .missing
             }
             switch got {
             case .kept: kept += 1
             case .copied: copied += 1; changed += 1
+            case .fetched: fetched += 1; changed += 1
             case .missing: missing.append(f.path)
             }
         }
         hashes.save()
-        log("==> \(world): \(kept) client files already right, \(copied) copied from other clients on this Mac, \(missing.count) missing")
+        log("==> \(world): \(kept) client files already right, \(copied) copied from other clients on this Mac, "
+            + (fetch == nil ? "\(missing.count) missing" : "\(fetched) downloaded"))
         if !missing.isEmpty {
             throw Failure(description: "\(missing.count) of \(world)'s client files are not on this Mac (first: \(missing[0])). They come from "
                           + "retail FFXI on build \(build): install AscensionXI or Vanadreams first, which carry that build.")
@@ -92,11 +108,33 @@ final class RetailClient {
     /// PlayOnline Viewer beside the game. Not in any list; copied whole when missing, from a donor on
     /// the same build: the one the client's files came from, else one whose FFXiMain.dll is this client's.
     func ensureViewer(donors: [URL]) throws {
+        // FINAL FANTASY XI/USER holds each character's settings and macros. No file list carries it
+        // (it is the player's), and Vanadreams' own installer makes it before the first login.
+        let user = game.appendingPathComponent("FINAL FANTASY XI/USER")
+        if present, !fm.fileExists(atPath: user.path) { try? fm.createDirectory(at: user, withIntermediateDirectories: true) }
         let viewer = game.appendingPathComponent("PlayOnlineViewer")
         guard !fm.fileExists(atPath: viewer.appendingPathComponent("viewer/com/polcore.dll").path) else { return }
         let main = AscensionChannel.sha256(of: game.appendingPathComponent("FINAL FANTASY XI/FFXiMain.dll"))
         let sameBuild = donors.filter { main != nil && AscensionChannel.sha256(of: $0.appendingPathComponent("FINAL FANTASY XI/FFXiMain.dll")) == main }
-        let order = (lastDonor.map { [$0] } ?? []) + sameBuild + donors
+        // Among the rest, a viewer that never held a PlayOnline member's mail and messages first: the
+        // copy is the program, not someone's PlayOnline data (HorizonXI's own viewer has both).
+        func personal(_ d: URL) -> Bool {
+            let pub = d.appendingPathComponent("PlayOnlineViewer/pub")
+            return ((try? fm.contentsOfDirectory(atPath: pub.path)) ?? []).contains { home in
+                ["mail", "EMAIL", "msg"].contains { fm.fileExists(atPath: pub.appendingPathComponent("\(home)/\($0)").path) }
+            }
+        }
+        // And the newest viewer before an older one (version.dat, "1.18.15e"): the loaders find
+        // PlayOnline's code by signature, and an un-updated viewer (1.18.00n) does not match.
+        func version(_ d: URL) -> String {
+            ((try? String(contentsOf: d.appendingPathComponent("PlayOnlineViewer/version.dat"), encoding: .ascii)) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines.union(.controlCharacters))
+        }
+        let ranked = donors.sorted { a, b in
+            let (va, vb) = (version(a), version(b))
+            return va != vb ? va.compare(vb, options: .numeric) == .orderedDescending : (!personal(a) && personal(b))
+        }
+        let order = (lastDonor.map { [$0] } ?? []) + sameBuild + ranked
         guard let from = order.map({ $0.appendingPathComponent("PlayOnlineViewer") })
                 .first(where: { fm.fileExists(atPath: $0.appendingPathComponent("viewer/com/polcore.dll").path) }) else {
             throw Failure(description: "No PlayOnline Viewer on this Mac to copy for \(world). Install AscensionXI or Vanadreams first.")
@@ -147,14 +185,52 @@ enum RetailWorld {
         /// Addons the world's own launcher deletes from Ashita's bundle; never left in place here.
         var removedAddons: [String] = []
         var plugins: [String] = ["thirdparty", "addons", "screenshot", "winefix"]
+        /// A world whose server runs an older client than retail and hands out that client itself:
+        /// the client comes from their archive instead of from retail files (`ClientArchive`).
+        var archive: ClientArchive? = nil
         var loader: Loader { RetailWorld.loaders[loaderSeries]! }
     }
+
+    /// The client a world publishes as one archive of a whole `FINAL FANTASY XI` folder, named on a
+    /// wiki page: its MediaWiki API (`action=parse&prop=wikitext`).
+    struct ClientArchive { var page: String }
+
+    /// The version and Google Drive file a world's page names as current: the first "FFXI Version
+    /// <id>" heading before "Out of Date Versions" that is not struck through, and the first Drive file
+    /// link after it.
+    static func currentArchive(wikitext t: String) -> (version: String, fileID: String)? {
+        let live = t.range(of: "Out of Date Versions", options: .caseInsensitive).map { String(t[..<$0.lowerBound]) } ?? t
+        let lines = live.components(separatedBy: "\n")
+        for (i, line) in lines.enumerated() where !line.contains("<s>") {
+            guard let r = line.range(of: #"FFXI Version \d{8}_\d+"#, options: .regularExpression) else { continue }
+            let version = String(line[r].split(separator: " ").last ?? "")
+            let rest = lines[(i + 1)...].joined(separator: "\n")
+            guard let d = rest.range(of: #"drive\.google\.com/file/d/[A-Za-z0-9_-]+"#, options: .regularExpression),
+                  let id = rest[d].split(separator: "/").last.map(String.init), !id.isEmpty else { return nil }
+            return (version, id)
+        }
+        return nil
+    }
+
+    /// The text of a MediaWiki `action=parse&prop=wikitext&format=json` answer.
+    static func wikitext(_ d: Data) -> String? {
+        ((try? JSONSerialization.jsonObject(with: d)) as? [String: Any])
+            .flatMap { $0["parse"] as? [String: Any] }.flatMap { $0["wikitext"] as? [String: Any] }.flatMap { $0["*"] as? String }
+    }
+
+    static func driveDownload(_ id: String) -> String { "https://drive.usercontent.google.com/download?id=\(id)&export=download&confirm=t" }
+
+    /// LevelDown 99: "Use these downloads if you have a version of the game that is newer than the
+    /// version LD99 is running on currently" (their wiki, Past FFXI Version Repository, 2026-10-24).
+    static let levelDown = Spec(world: "LevelDown 99", host: "LevelDownFFXI.com", profile: "leveldown.ini", script: "leveldown.txt",
+                                loaderSeries: "2.2",
+                                archive: ClientArchive(page: "https://ffxileveldown.fandom.com/api.php?action=parse&page=Past_FFXI_Version_Repository&prop=wikitext&format=json"))
 
     static let mist = Spec(world: "MistXI", host: "play.mistxi.com", profile: "mistxi.ini", script: "mistxi.txt", loaderSeries: "2.1",
                            // MistXI's launcher deletes these from Ashita's bundle (GitHubAshitaService.cs `unwantedAddons`).
                            removedAddons: ["skeletonkey", "ahgo", "allmaps", "instantah", "instantchat", "paranormal"])
     static let moghouse = Spec(world: "Moghouse XI", host: "ffxi.cc", profile: "moghouse.ini", script: "moghouse.txt", loaderSeries: "2.2")
-    static let all: [Spec] = [mist, moghouse]
+    static let all: [Spec] = [mist, moghouse, levelDown]
     static func spec(_ world: String) -> Spec? { all.first { $0.world == world } }
 
     static func profile(fromExample example: String, spec: Spec) -> String {
@@ -200,6 +276,9 @@ enum RetailWorld {
         var ashitaCommit = VanadreamsChannel.ashitaCommit
         /// nil: the spec's own pinned release.
         var loader: Loader?
+        /// nil: the spec's own page; and where a Drive file id is fetched from.
+        var archivePage: String?
+        var archiveDownload: (String) -> String = RetailWorld.driveDownload
     }
 }
 
@@ -260,19 +339,31 @@ final class RetailWorldSync: @unchecked Sendable {
 
     private func steps(install: Bool, donors: [URL]) throws -> Outcome {
         try fm.createDirectory(at: stateDir, withIntermediateDirectories: true)
-        let listCopy = stateDir.appendingPathComponent("retail-list.json")
-        let list = try? fetchCached(src.retailList, cache: listCopy)
         let ashitaMissing = !fm.fileExists(atPath: ashita.appendingPathComponent("Ashita-cli.exe").path)
-        if list == nil {
+        // What the client is made from: retail's file list, or the world's own archive.
+        var list: (data: Data, changed: Bool)?
+        var archive: (version: String, fileID: String)?
+        if let a = spec.archive {
+            archive = (try? get(src.archivePage ?? a.page).data).flatMap { $0 }.flatMap(RetailWorld.wikitext).flatMap(RetailWorld.currentArchive)
+        } else {
+            list = try? fetchCached(src.retailList, cache: stateDir.appendingPathComponent("retail-list.json"))
+        }
+        if list == nil && archive == nil {
             try checkStop()
-            if installedBefore { return .offline("The retail file list didn't load; playing with the files from the last update.") }
+            if installedBefore { return .offline("\(spec.world)'s client list didn't load; playing with the files from the last update.") }
             if !client.present || ashitaMissing {
-                throw Failure(description: "The list of retail FFXI's files (xi.driftwoodgaming.com/api/manifest) didn't load. Try again in a few minutes.")
+                throw Failure(description: spec.archive == nil
+                    ? "The list of retail FFXI's files (xi.driftwoodgaming.com/api/manifest) didn't load. Try again in a few minutes."
+                    : "\(spec.world)'s page naming their client version didn't load. Try again in a few minutes.")
             }
         }
         writeState(["finished": false])
-        // 1. The client, when the list is not the one it was last put together from, on Setup/Repair,
-        // or when it is not there.
+        // 1. The client, when its source changed since it was last put together, on Setup/Repair, or
+        // when it is not there.
+        if let archive, install || !client.present || readState()["clientArchive"] as? String != archive.version {
+            try installArchive(archive)
+            writeState(["clientArchive": archive.version])
+        }
         if let list {
             let listSHA = AscensionChannel.sha256(list.data)
             if install || !client.present || readState()["clientList"] as? String != listSHA {
@@ -317,6 +408,80 @@ final class RetailWorldSync: @unchecked Sendable {
         try checkStop()
         writeState(["finished": true, "updated": ISO8601DateFormatter().string(from: Date())])
         return .ok(changed: changed + client.changed)
+    }
+
+    /// Their whole client, from the archive their page names: downloaded straight into this folder
+    /// (resumed if stopped), unpacked with bsdtar (7-Zip included) without its `USER/` (another
+    /// player's settings travel in it), then moved over `FINAL FANTASY XI`. Kept until a new version
+    /// replaces it, so Repair unpacks it again without downloading.
+    private func installArchive(_ a: (version: String, fileID: String)) throws {
+        let tmp = stateDir.appendingPathComponent("tmp")
+        try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let file = tmp.appendingPathComponent("client-\(a.version).archive")
+        let whole = tmp.appendingPathComponent("client-\(a.version).archive.done")
+        for old in (try? fm.contentsOfDirectory(at: tmp, includingPropertiesForKeys: nil)) ?? []
+        where old.lastPathComponent.hasPrefix("client-") && !old.lastPathComponent.hasPrefix("client-\(a.version).") {
+            try? fm.removeItem(at: old)
+        }
+        if !fm.fileExists(atPath: whole.path) {
+            guard let u = URL(string: src.archiveDownload(a.fileID)) else { throw Failure(description: "bad archive URL") }
+            log("==> \(spec.world): their client \(a.version)")
+            var tries = 0
+            while true {
+                do {
+                    try FileDownload.run(u, to: file, stop: stop) { have, total in
+                        if total > 0 { self.progress("Downloading \(self.spec.world)'s client", Double(have) / Double(total)) }
+                    }
+                    break
+                } catch {
+                    tries += 1
+                    if tries >= 3 || stop.raised { throw error }
+                    Thread.sleep(forTimeInterval: Double(tries * 3))
+                }
+            }
+            fm.createFile(atPath: whole.path, contents: nil)
+        }
+        try checkStop()
+        log("==> \(spec.world): unpacking their client \(a.version)")
+        progress("Unpacking \(spec.world)'s client", 0)
+        let out = tmp.appendingPathComponent("x-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: out) }
+        try fm.createDirectory(at: out, withIntermediateDirectories: true)
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/bsdtar")
+        // -P is never passed: bsdtar keeps every entry under `out`.
+        p.arguments = ["-xf", file.path, "-C", out.path, "--exclude", "USER", "--exclude", "*/USER"]
+        try p.run()
+        while p.isRunning { if stop.raised { p.terminate() }; Thread.sleep(forTimeInterval: 0.5) }
+        try checkStop()
+        guard p.terminationStatus == 0 else {
+            // A damaged archive is not kept: the next try downloads it again.
+            try? fm.removeItem(at: file); try? fm.removeItem(at: whole)
+            throw Failure(description: "\(spec.world)'s client archive could not be unpacked (bsdtar \(p.terminationStatus)). Press the button again to download it again.")
+        }
+        // The folder that is a FINAL FANTASY XI: the archive's top, or its one folder.
+        func isClient(_ u: URL) -> Bool { fm.fileExists(atPath: u.appendingPathComponent("FFXiMain.dll").path) && fm.fileExists(atPath: u.appendingPathComponent("ROM").path) }
+        let tops = (try? fm.contentsOfDirectory(at: out, includingPropertiesForKeys: nil)) ?? []
+        guard let top = isClient(out) ? out : tops.first(where: isClient) else {
+            throw Failure(description: "\(spec.world)'s client archive holds no FINAL FANTASY XI folder.")
+        }
+        let ffxi = client.game.appendingPathComponent("FINAL FANTASY XI")
+        // Their own instructions: the old VTABLE.DAT goes first, then the whole folder is replaced.
+        try? fm.removeItem(at: ffxi.appendingPathComponent("VTABLE.DAT"))
+        guard let walk = fm.enumerator(atPath: top.path) else { return }
+        var n = 0
+        for case let rel as String in walk {
+            try autoreleasepool {
+                let from = top.appendingPathComponent(rel), to = ffxi.appendingPathComponent(rel)
+                guard AscensionSync.isRegularFile(from) else { return }
+                try fm.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? fm.removeItem(at: to)
+                try fm.moveItem(at: from, to: to)
+                n += 1
+            }
+        }
+        log("==> \(spec.world): client \(a.version) in place (\(n) files)")
+        changed += n
     }
 
     private func installAshita() throws {

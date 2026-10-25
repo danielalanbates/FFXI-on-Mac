@@ -15,7 +15,8 @@ Downloads it made (864 MB, never executed) are in `~/Downloads/lsb-survey/`.
 ## Already in the launcher
 
 HorizonXI, CatsEyeXI, Gaia XI, Supernova, OmicronXI, the local world, **AscensionXI** (b71),
-**Vanadreams** (b72), **DriftwoodXI** (b73), **PegasusXI** (b74), **MistXI** and **Moghouse XI** (b75).
+**Vanadreams** (b72), **DriftwoodXI** (b73), **PegasusXI** (b74), **MistXI** and **Moghouse XI** (b75),
+**LevelDown 99** and **Scythe** (b76).
 Cut for their codebase: Eden, FFEra, ValhallaXI (DarkStar lineage). Stopped: Tabula Rasa XI.
 
 ## LandSandBoat worlds not yet in the launcher
@@ -29,8 +30,8 @@ Cut for their codebase: Eden, FFEra, ValhallaXI (DarkStar lineage). Stopped: Tab
 | **DriftwoodXI** (xi.driftwoodgaming.com) | `xi.driftwoodgaming.com` (2.1.x) | 44 online (`/api/players`) | Bring your own current retail client; their Ashita bundle is public (`DriftwoodXI-Content/ashita.json` → a 44 MB zip, Ashita 4.3.2.1, `driftwood.ini`, `driftwood.txt`). They publish a Linux launcher and a Wine guide | Allowlist of 158 addons at `/addons`; no multibox. Website signup | **Added in b73** ([`DRIFTWOOD.md`](DRIFTWOOD.md)): retail client from identical files already on this Mac + their bundle and addons |
 | **MistXI** (mistxi.com) | `play.mistxi.com` (2.1.x); legacy 99 world `legacy.mistxi.com` (2.0.x) | not readable | Retail client + `mistxi.com/FFXI-UpdatePatch.zip` (5 MB) + Ashita + LSB xiloader | Dual box allowed (2 per IP). Addon allowlist on their site. Website signup | **Added in b75** ([`RETAIL-WORLDS.md`](RETAIL-WORLDS.md)): retail client from this Mac + Ashita + xiloader 2.1.2 |
 | **Moghouse XI** (moghouse.cc) | `ffxi.cc` (2.2.x) | low | Retail client + xiloader `--server ffxi.cc` | Fun server (GM level 1 for all); dual box yes (listing) | **Added in b75** ([`RETAIL-WORLDS.md`](RETAIL-WORLDS.md)): retail client from this Mac + Ashita + xiloader 2.2.0 |
-| **Scythe** (scythe-bbq.pages.dev) | `212.28.177.210` (2.1.x) | none found | Retail client, which their launcher pins (and may downgrade) to `30260429_1` from a signed public channel (`/launcher/channel/current.json`: 65,062 files, 14.9 GB) | Two accounts per player, dual box allowed | Later — a channel like Ascension's; read their launcher first |
-| **LevelDown 99** | `LevelDownFFXI.com` (2.2.x) | none found | Retail + patch files from a Google Drive folder + LSB xiloader | 2 active + 1 mule (listing) | Later — Drive folder download |
+| **Scythe** (scythe-bbq.pages.dev) | `212.28.177.210` (2.1.x) | none found | Retail client, which their launcher pins (and may downgrade) to `30260429_1` from a signed public channel (`/launcher/channel/current.json`: 65,062 files, 14.9 GB) | Two accounts per player, dual box allowed | **Added in b76** ([`SCYTHE.md`](SCYTHE.md)): their signed release, ~0.9 GB from them, the rest from this Mac |
+| **LevelDown 99** | `LevelDownFFXI.com` (2.2.x) | none found | Retail + patch files from a Google Drive folder + LSB xiloader | 2 active + 1 mule (listing) | **Added in b76** ([`RETAIL-WORLDS.md`](RETAIL-WORLDS.md)): their own client archive (30260203_0) + Ashita + xiloader 2.2.0 |
 | **Olympus XI** (olympus-games.dev) | `172.96.141.132` (2.2.x) | 1 online (open beta) | Their Electron launcher installs or reuses retail, then patch sets from public GitHub releases; custom login cert | No multibox/addon rules published | Later — beta, one player |
 | **Legendary Relaunch** | `15.204.112.102` (2.1.x, custom ports) | none found | Retail + their launcher | **Invite-only**: "Ask in our Discord and a GM will set you up with a login." Multibox freely | Later — needs a GM-made account anyway |
 | **Eventide XI** (eventide-xi.com) | `66.85.152.250` | ~50 online (Reddit, 2025-12) | Public full client zip, 8.2 GB, ranges, sha256 published | Single-box. Account made in the loader | **Codebase unclear** — answers the binary `0x02` (an old login build, like Gaia XI), and the operator maintains an AirSkyBoat fork. Daniel's rule is LSB only; decide before adding |
@@ -70,6 +71,6 @@ such.
 3. **DriftwoodXI** (b73), **MistXI** and **Moghouse XI** (b75) — done: a retail client first. All three are on the same
    retail patch as AscensionXI and Vanadreams (`30260904_1`) or close to it: copy the identical
    retail files the way AscensionXI's install does instead of running Square Enix's installer.
-4. **Scythe**, **LevelDown 99**, **Olympus XI**, **Legendary Relaunch**.
+4. **Scythe** and **LevelDown 99** (done, b76); **Olympus XI** (open beta, 1 player), **Legendary Relaunch** (invite-only: a GM makes each account).
 5. **Phoenix XI** and **Titan XI** only with each staff's written OK (Daniel asks; this project does
    not contact them). **Eventide XI** after Daniel decides on its codebase.

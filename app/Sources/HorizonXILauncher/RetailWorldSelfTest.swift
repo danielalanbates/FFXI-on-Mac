@@ -19,9 +19,10 @@ extension Headless {
               RetailWorld.loaders["2.1"]?.version == "2.1.2" && RetailWorld.loaders["2.2"]?.version == "2.2.0"
                 && RetailWorld.loaders["2.0"]?.version == "2.0.1"
                 && RetailWorld.loaders.values.allSatisfy { $0.url.hasPrefix("https://github.com/LandSandBoat/xiloader/releases/download/v\($0.version)/") && $0.sha256.count == 64 })
-        check("specs: MistXI on 2.1, Moghouse XI on 2.2",
+        check("specs: MistXI on 2.1, Moghouse XI and LevelDown 99 on 2.2; only LevelDown 99 brings its own client",
               RetailWorld.spec("MistXI")?.loader.version == "2.1.2" && RetailWorld.spec("Moghouse XI")?.loader.version == "2.2.0"
-                && RetailWorld.spec("HorizonXI") == nil)
+                && RetailWorld.spec("LevelDown 99")?.loader.version == "2.2.0" && RetailWorld.spec("LevelDown 99")?.archive != nil
+                && RetailWorld.spec("MistXI")?.archive == nil && RetailWorld.spec("HorizonXI") == nil)
         let prof = RetailWorld.profile(fromExample: "[ashita.launcher]\r\nname        = Example\r\n[ashita.boot]\r\nfile        = .\\\\bootloader\\\\pol.exe\r\ncommand     = --server homepointxi.com\r\nscript      = default.txt\r\n", spec: RetailWorld.mist)
         check("profile: xiloader, --server play.mistxi.com, mistxi.txt, named MistXI",
               BootProfile.loaderName(in: prof) == "xiloader.exe" && BootProfile.value("command", section: "ashita.boot", in: prof) == "--server play.mistxi.com"
@@ -29,6 +30,11 @@ extension Headless {
         let sc = RetailWorld.script(RetailWorld.mist)
         check("script: Ashita's own plugins incl. winefix, the wait, no addons forced on",
               sc.contains("/load addons\r\n") && sc.contains("/load winefix\r\n") && sc.contains("/wait 3") && !sc.contains("/addon load"))
+        let wiki = "Use these downloads ...\n\n=== '''FFXI Version 30260203_0''' ===\n\n* https://drive.google.com/file/d/1_WXohtOdVd1rUyGcK8eCfyYd2fEXp2HT/view?usp=drive_link\n\n== Out of Date Versions ==\n=== '''<s>FFXI Version 30251003_3</s>''' ===\n* <s>https://drive.google.com/file/d/OLD/view</s>\n"
+        check("archive page: the current version and its Drive file, never a struck-out one",
+              RetailWorld.currentArchive(wikitext: wiki).map { $0.version == "30260203_0" && $0.fileID == "1_WXohtOdVd1rUyGcK8eCfyYd2fEXp2HT" } == true
+                && RetailWorld.currentArchive(wikitext: "== Out of Date Versions ==\n=== <s>FFXI Version 30251003_3</s> ===\n* https://drive.google.com/file/d/OLD/view") == nil
+                && RetailWorld.wikitext(Data(#"{"parse":{"title":"x","wikitext":{"*":"hi"}}}"#.utf8)) == "hi")
         let pol = RetailWorld.mistPolicy
         check("addons: MistXI's list allows hxui and winefix, not skeletonkey",
               pol.isRestricting && pol.allows("hxui") && pol.allows("winefix") && !pol.allows("skeletonkey") && !pol.allows("notonthelist"))
@@ -117,6 +123,40 @@ extension Headless {
         check("offline after a finished update: play with what is there", { if case .offline = sync(down) { return true }; return false }())
         let flag = StopFlag(); flag.raise()
         check("stop: .stopped", sync(stop: flag) == .stopped)
+
+        // A world that hands out its own client archive (LevelDown 99's shape): 7-Zip, with a USER/ folder.
+        let arcSrc = tmp.appendingPathComponent("arc-src")
+        for (k, v) in ["FFXiMain.dll": "old main", "ROM/1/1.DAT": "old dat", "VTABLE.DAT": "old vtable", "patch.cfg": "30260203_0",
+                       "USER/186/mcr.dat": "someone else's macros"] { write(Data(v.utf8), arcSrc.appendingPathComponent(k)) }
+        let arcFile = tmp.appendingPathComponent("client.7z")
+        let z = Process(); z.executableURL = URL(fileURLWithPath: "/usr/bin/bsdtar")
+        z.currentDirectoryURL = arcSrc
+        z.arguments = ["-c", "--format", "7zip", "-f", arcFile.path, "FFXiMain.dll", "ROM", "VTABLE.DAT", "patch.cfg", "USER"]
+        try? z.run(); z.waitUntilExit()
+        ch.put("/drive/LDFILE", (try? Data(contentsOf: arcFile)) ?? Data(), t0)
+        ch.put("/wiki.json", try! JSONSerialization.data(withJSONObject: ["parse": ["wikitext": ["*": wiki.replacingOccurrences(of: "1_WXohtOdVd1rUyGcK8eCfyYd2fEXp2HT", with: "LDFILE")]]]), t0)
+        let ldRoot = tmp.appendingPathComponent("LevelDown 99")
+        var ldSrc = sources; ldSrc.archivePage = site + "/wiki.json"; ldSrc.archiveDownload = { site + "/drive/" + $0 }
+        func ld(install: Bool = false, stop: StopFlag = StopFlag()) -> AscensionSync.Outcome {
+            ch.clearLog()
+            return RetailWorldSync(spec: RetailWorld.levelDown, root: ldRoot, sources: ldSrc, stop: stop, log: { _ in }).run(install: install, donors: [donor])
+        }
+        func ldFile(_ rel: String) -> Data? { try? Data(contentsOf: ldRoot.appendingPathComponent(rel)) }
+        let ldFirst = ld(install: true)
+        check("archive world: their client unpacked into Game/FINAL FANTASY XI, with the viewer and xiloader",
+              { if case .ok = ldFirst { return true }; return false }() && ldFile("Game/FINAL FANTASY XI/FFXiMain.dll") == Data("old main".utf8)
+                && ldFile("Game/FINAL FANTASY XI/ROM/1/1.DAT") == Data("old dat".utf8) && ldFile("Game/PlayOnlineViewer/viewer/com/polcore.dll") != nil
+                && ldFile("Ashita/bootloader/xiloader.exe") == loaderBytes)
+        check("archive world: the USER folder inside their archive is never installed (an empty one is made)",
+              !fm.fileExists(atPath: ldRoot.appendingPathComponent("Game/FINAL FANTASY XI/USER/186").path)
+                && fm.fileExists(atPath: ldRoot.appendingPathComponent("Game/FINAL FANTASY XI/USER").path))
+        check("archive world, Play: only their page is asked for", ld() == .ok(changed: 0) && ch.log == ["/wiki.json 200"])
+        try? Data("broken".utf8).write(to: ldRoot.appendingPathComponent("Game/FINAL FANTASY XI/FFXiMain.dll"))
+        check("archive world, Repair: unpacked again from the kept archive, not downloaded again",
+              { if case .ok = ld(install: true) { return true }; return false }() && !ch.log.contains("/drive/LDFILE 200")
+                && ldFile("Game/FINAL FANTASY XI/FFXiMain.dll") == Data("old main".utf8))
+        let ldStop = StopFlag(); ldStop.raise()
+        check("archive world: stop", ld(install: true, stop: ldStop) == .stopped)
 
         // The launcher around it.
         let mist = Server.all.first { $0.name == "MistXI" }, mog = Server.all.first { $0.name == "Moghouse XI" }
