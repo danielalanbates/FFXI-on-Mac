@@ -326,14 +326,15 @@ extension Headless {
 
         // The launcher around it.
         let mist = Server.all.first { $0.name == "MistXI" }, mog = Server.all.first { $0.name == "Moghouse XI" }
-        check("built-in: MistXI (2 clients, their list, website account) and Moghouse XI (Create account, 1 client)",
+        check("built-in: MistXI (2 clients, their list, website account) and Moghouse XI (Create account, no client cap)",
               mist?.installKind == .retailWorld && mog?.installKind == .retailWorld && mist?.codebase == .landSandBoat
                 && mist?.maxClients == 2 && mist.map { AddonPolicies.policy(for: $0).isRestricting } == true && mist?.createsAccountAtLogin == false
-                && mog?.createsAccountAtLogin == true && mog?.maxClients == 1 && mog?.host == "ffxi.cc"
+                && mog?.createsAccountAtLogin == true && mog?.maxClients == Server.noClientCap && mog?.host == "ffxi.cc"
                 && mist?.installKind.updatesBeforePlay == true)
         let oly = Server.all.first { $0.name == "Olympus XI" }, leg = Server.all.first { $0.name == "Legendary Relaunch" }
-        check("built-in: Olympus XI (2.2, --profileport, Create account) and Legendary Relaunch (2.1, invite-only, any number of clients)",
+        check("built-in: Olympus XI (2.2, --profileport, Create account, no client cap) and Legendary Relaunch (2.1, invite-only, any number of clients)",
               oly?.installKind == .retailWorld && oly?.loaderOptions == ["--profileport", "51220"] && oly?.createsAccountAtLogin == true
+                && oly?.maxClients == Server.noClientCap
                 && leg?.installKind == .retailWorld && leg?.createsAccountAtLogin == false && leg?.allowsMultipleClients == true
                 && RetailWorld.spec("Olympus XI")?.loader.version == "2.2.0" && RetailWorld.spec("Legendary Relaunch")?.loader.version == "2.1.2")
         let enc = mist.flatMap { try? JSONEncoder().encode([$0]) }.flatMap { String(data: $0, encoding: .utf8) } ?? ""

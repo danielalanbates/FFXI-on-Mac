@@ -73,7 +73,8 @@ page means not allowed.") is the world's addon policy, so this launcher's own ad
 Less two their launcher refuses to load (`BLOCKED_LOAD_REASONS`): **bigmode** ("throws on load
 against the Ashita build this server ships") and **chatfix** ("eats the first letter of every line
 the server says and misaddresses your tells").
-One client at a time (`maxClients 1`).
+One client at a time (`maxClients 1`): their House rules say "One account per player.", and a staff
+post (2026-07-28) explains "Why multi-boxing is against the rules".
 
 A package new in their list is switched on once (added after the script's last addon line); one the
 player removed stays off.

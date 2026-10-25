@@ -25,9 +25,11 @@ Every client shares one wine prefix (`prefix10`) and one game folder. The launch
    - An `other` program counts for every "is anything live in the prefix" decision: `wineserver -k` at launch and at the last Stop, the renderer step, the sync mode, Repair/Update. Its world is known only if it was given `--server`, so without one it is not a duplicate, not in the Running list, and does not tell a session its loader has arrived. `ps` cannot tell which prefix a Windows program runs in (wine rewrites its command line and `ps -E` shows it no environment; measured), only which wine build runs it, so an installer running under this launcher's wine in the installer prefix counts too. The cost is that a renderer change waits for it.
    - A running client's *session* is its process group. Everything one launch starts (injector, loader, x87 sidecar) keeps the group of the shell `Detach.spawn` ran it from; wine's own services each lead a group of their own. Measured 2026-09-26: loader and sidecar in group 57810, spawned pid 57812. Stop, the exit watcher and window memory act on that group only, whatever the loader is called. When the group could not be read, a session falls back to its host, minus other sessions' groups.
    - That the loader keeps its spawn group is measured, not guaranteed: wine could `setsid()` a detached child. So until a session's group has been seen holding a loader, the session also takes its host's new clients (not there at launch, not in another session's group). Once the group has held the loader, an empty group means the client exited.
-2. **The duplicate rule.** `Server.maxClients` (default 1) caps how many clients of one world may run. `allowsMultipleClients` is `maxClients > 1`.
+2. **The duplicate rule.** `Server.maxClients` caps how many clients of one world may run. `allowsMultipleClients` is `maxClients > 1`.
+   - Daniel, 2026-10-25: as many clients as each server's rules allow ("unlimited simultaneous clients (when not against TOS)").
    - The local world, Daniel's own server, has no cap.
-   - Any other server needs cited evidence from its published rules. CatsEyeXI's account rules allow two active characters per person, so its cap is 2.
+   - Every other built-in world's cap comes from its published rules, read and cited (table below). No cap (`Server.noClientCap`) when the rules were read and say nothing against boxing. The server's number when they set one. 1 when they forbid boxing or allow one account per person: on LandSandBoat a second live client needs a second account. 1 when the rules could not be read.
+   - A world added by hand has had no rules read, so it stays at 1 (`maxClients` defaults to 1).
    - A launch is refused when the world already has `maxClients` clients (counted by process group, so a sidecar is not a second client). Both the Host field and the `--server` the boot profile really carries are checked, and this launcher's own sessions count even while injecting. The message says why and names the running PID.
    - Another launcher process's launch is visible only to the scan, and for its first seconds only as an injector. An injector's command line names its boot profile (`Ashita-cli.exe horizonxi.ini`), and that profile's `--server` is the world it is starting, so injectors count toward the cap too. An injector whose world cannot be read that way, in no group of this launcher's and in no group that already shows a loader, holds off a capped world for those few seconds ("press Play again in a few seconds").
    - The PLAY/RUNNING button uses the same two keys (Host field and boot profile `--server`) for clients outside this window, so it agrees with the refusal.
@@ -53,7 +55,29 @@ Every client shares one wine prefix (`prefix10`) and one game folder. The launch
    - Between launches of this build, one launcher process with one window means the two-launcher scenarios from the reviews (another launcher's injector-phase launch, a second `wineserver -k`, a Stop racing another launcher's launch) do not arise. They still can with a launcher of an older build opened *after* this one: it takes no lock and checks for none, so nothing here stops it. The cross-process guards (the scan, injectors' boot profiles, `LaunchLock`, the lock-then-scan order at the last Stop) are what covers that case, and also a client started by hand and a request that arrives while a launch is under way.
 6. **One sync mode per wineserver.** `WINEMSYNC`/`WINEESYNC` belong to the wineserver, and a client that disagrees with the running one exits at start-up. When a client is live, the launch reads the running wineserver's mode from its environment (`ps -E`, same user) and uses it. A world that must run with msync off (Gaia XI) is refused while the running wineserver has msync on.
 7. **Per-world FPS log.** Default `FFXI_ON_MAC_FPSLOG_PATH` to `fps-<world>.csv`.
-8. **Memory warning.** This Mac has 8 GB. Two clients plus LSB pushed HorizonXI to 0.4 fps on 2026-09-25/26. Before a second client starts, if swap is over 60% used or free memory is under 20%, show a warning. It does not block the launch.
+8. **Clients per world** (rules read 2026-10-24/25; the b80 ones by a research pass and a separate skeptic pass, raw findings in [`research/multibox-rules-2026-10-25.json`](research/multibox-rules-2026-10-25.json)):
+
+   | World | Cap | What their rules say |
+   | --- | --- | --- |
+   | Local server | none | Daniel's own server |
+   | Vanadreams | none | fairywitch.ca: "As many accounts and characters as you want, boxing welcome" |
+   | Legendary Relaunch | none | their FAQ: "no account limits and no cap on how many characters you run at once" |
+   | Moghouse XI | none | moghouse.cc publishes no rules; their ffxiprivateservers.com listing: "Dual-boxing: Yes" |
+   | Olympus XI | none | olympus-games.dev/rules: seven conduct rules, none on boxing or accounts |
+   | Supernova | 6 | Alts & Multiboxing rules: "Playing more than 6 characters at once" is prohibited (boxers also may not take HNMs, Dynamis, Limbus and other content; their rules page lists it) |
+   | CatsEyeXI | 2 | their wiki: "A single person is allowed two active characters maximum." |
+   | Gaia XI | 2 | gaiaxi.com terms: "Maximum 2 Accounts Per Player", "Dual-Boxing Allowed" |
+   | MistXI | 2 | server-info: "Dual boxing: Allowed ( maximum 2 per IP )" |
+   | LevelDown 99 | 2 | their wiki: "2 Active, 1 Mule (only two logged in at a time)" |
+   | Scythe | 2 | getting-started: "up to two accounts per player for dual-boxing" |
+   | OmicronXI | 2 | their wiki's Alt page: "Currently we allow 2 active characters on at a time." (2023; omicronffxi.com was down) |
+   | HorizonXI | 1 | FAQ: "Can we dual box? No, Horizon is a single box server" |
+   | AscensionXI | 1 | /rules: "Multiboxing ... is not permitted." |
+   | DriftwoodXI | 1 | House rules: "One account per player."; staff post: "Why multi-boxing is against the rules" |
+   | PegasusXI | 1 | the live site says nothing, but the operator's repo (aremais/PegasusXI `public/rules.html`) says "single box" server, one account per adventurer. The stricter reading |
+
+   Re-read a world's rules when it changes them; the value lives in `Server.all` with the quote beside it. A cap only limits clients on this Mac. A server's own IP or account limits still apply at its login server.
+9. **Memory warning.** This Mac has 8 GB. Two clients plus LSB pushed HorizonXI to 0.4 fps on 2026-09-25/26. Before a second client starts, if swap is over 60% used or free memory is under 20%, show a warning. It does not block the launch.
 
 ## Tests
 
@@ -68,7 +92,8 @@ Every client shares one wine prefix (`prefix10`) and one game folder. The launch
   - the sync-mode read and decision, and that Repair/Update wait for clients, starting sessions and a held lock;
   - that a loader which left its spawn group is still found by host;
   - the refusal when a world is at its `maxClients`, including CatsEyeXI's cap of two;
-  - that the local world may run twice;
+  - that the local world may run twice, and that a world without a cap takes a twelfth client;
+  - that each built-in world's cap is the one its rules give (the table above);
   - that each of two local sessions sees only its own process group;
   - that the last Stop leaves the wineserver up while anything else holds the prefix;
   - that addon prepare keeps folders while another host is live;

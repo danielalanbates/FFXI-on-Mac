@@ -54,7 +54,9 @@ AshenbubsHD-Basic. Left as they ship it, HD pack included.
 
 Addons: their approved list (`addons.js` `ASHITA_APPROVED`, 88 names): "Unlisted addons should be
 considered prohibited, and using them is punishable." This launcher's own addons are hidden here.
-One client at a time (no multibox rule published).
+One client at a time: the live site's rules say nothing on boxing, but the operator's own repo
+(aremais/PegasusXI `public/rules.html`, read 2026-10-25) calls PegasusXI a "single box" server with
+one account per adventurer (docs/MULTI_WORLD.md, "Clients per world").
 
 ## Verified (2026-10-24)
 

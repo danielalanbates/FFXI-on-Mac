@@ -99,10 +99,13 @@ struct Server: Codable, Identifiable, Hashable {
     /// DYLD_FALLBACK_LIBRARY_PATH, WINE_LARGE_ADDRESS_AWARE, FFXI_FPS_DIVISOR, the MVK knobs)
     /// was ruled out individually.
     var msync: Bool = true
-    /// How many clients of this world may run on this Mac at once. More than one only when the
-    /// server's own published rules allow a player more than one live character; without cited
-    /// evidence it stays 1 and a second Play is refused (see docs/MULTI_WORLD.md). Not the
-    /// user's to edit: refreshed from `builtins` like the other curated fields.
+    /// How many clients of this world may run on this Mac at once. Daniel, 2026-10-25: as many as
+    /// the server's own published rules allow. No cap (`noClientCap`) when its rules were read and
+    /// say nothing against boxing, the server's number when they set one, 1 when they forbid it or
+    /// allow one account per person, and 1 when its rules could not be read. Each built-in cites
+    /// what was read (docs/MULTI_WORLD.md, "Clients per world"). A world added by hand has had no
+    /// rules read and stays at 1. Not the user's to edit: refreshed from `builtins` like the other
+    /// curated fields.
     var maxClients: Int = 1
     var allowsMultipleClients: Bool { maxClients > 1 }
     static let noClientCap = Int.max
@@ -307,6 +310,10 @@ struct Server: Codable, Identifiable, Hashable {
                accountURL: "https://horizonxi.com/register",
                accountHow: "Sign up on horizonxi.com, then log in here with that account.",
                discordURL: "https://discord.gg/horizonxi",
+               // horizonxi.com/faq, 2026-10-25: "Can we dual box? No, Horizon is a single box server
+               // where each IP address can only have one account tied to it." /rules: "Each Adventurer
+               // may only ever have one account".
+               maxClients: 1,
                loader: "horizon-loader.exe", bootTemplate: BootProfile.horizonTemplate,
                newsURL: "https://api.horizonxi.com/api/v1/news",
                newsPageURL: "https://horizonxi.com/news/{slug}"),
@@ -397,7 +404,8 @@ struct Server: Codable, Identifiable, Hashable {
                accountURL: DriftwoodChannel.site + "/register",
                accountHow: "Register on xi.driftwoodgaming.com, then log in here with that account.",
                discordURL: "https://discord.gg/DriftwoodGaming",
-               // Their home page, 2026-10-24: "Sixteen character slots, one account, one game window."
+               // Their home page's House rules, 2026-10-25: "One account per player." Their staff post
+               // (news/one-account-sixteen-characters, 2026-07-28): "Why multi-boxing is against the rules".
                maxClients: 1),
         // Added 2026-10-24 (b74). LSB: port 54231 answers LandSandBoat's own JSON ("'2.1.x'") and
         // their client ships stock LandSandBoat xiloader 2.1.1.0. From pegasusxi.com, their launcher
@@ -417,7 +425,9 @@ struct Server: Codable, Identifiable, Hashable {
                accountHow: "Register on pegasusxi.com (18 or older; password 8–32 characters), then log in here "
                      + "with that account. Characters are made in game.",
                discordURL: "https://discord.gg/M3NFvpm75E",
-               // No multibox rule on their rules, FAQ, server info or addons pages (2026-10-24): one client.
+               // The live site's six rules say nothing on boxing, but the operator's own repo
+               // (github.com/aremais/PegasusXI, public/rules.html, read 2026-10-25) says "PegasusXI is a
+               // “single box” server. Each Adventurer may only ever have one account". The stricter reading.
                maxClients: 1),
         // Added 2026-10-24 (b75). LSB: port 54231 answers LandSandBoat's own JSON ("'2.1.x'"), and LSB's
         // login checks major.minor exactly, so xiloader 2.1.2 (RetailWorld.loaders), never the latest.
@@ -452,8 +462,9 @@ struct Server: Codable, Identifiable, Hashable {
                accountHow: "No signup page: the account is made at their login server. Type the account name and "
                      + "password you want above, then Create account.",
                discordURL: "https://discord.gg/3ZfEJrp56X",
-               // No multibox rule on moghouse.cc (2026-10-24): one client.
-               maxClients: 1, createsAccountAtLogin: true),
+               // moghouse.cc publishes no rules (all 25 pages read 2026-10-25); their ffxiprivateservers.com
+               // listing says "Dual-boxing: Yes" with no number. Nothing against it: no cap.
+               maxClients: Server.noClientCap, createsAccountAtLogin: true),
         // Added 2026-10-24 (b76). LSB: port 54231 answers "This server requires version 2.2.x". From
         // their wiki (ffxileveldown.fandom.com: Installation, About Us, Past FFXI Version Repository); see
         // docs/RETAIL-WORLDS.md.
@@ -495,8 +506,9 @@ struct Server: Codable, Identifiable, Hashable {
                accountHow: "Sign up on olympus-games.dev (that also makes your first character), or type the account name "
                      + "and password you want above and Create account.",
                discordURL: "https://discord.gg/apYsQ4b4GN",
-               // No multibox rule on their site or in their launcher (2026-10-24): one client.
-               maxClients: 1, loaderOptions: RetailWorld.olympus.loaderOptions, createsAccountAtLogin: true),
+               // olympus-games.dev/rules (2026-10-25) has seven conduct rules and none on boxing, accounts
+               // per person or per IP; nor do their FAQ, launcher or patch notes. Nothing against it: no cap.
+               maxClients: Server.noClientCap, loaderOptions: RetailWorld.olympus.loaderOptions, createsAccountAtLogin: true),
         // Added 2026-10-24 (b77). LSB (their FAQ says so; port 54231 answers "'2.1.x'"). From their site and
         // their launcher (1.0.29, read with ILSpy); see docs/RETAIL-WORLDS.md.
         Server(name: RetailWorld.legendary.world, host: RetailWorld.legendary.host, bootProfile: RetailWorld.legendary.profile,
@@ -554,7 +566,10 @@ struct Server: Codable, Identifiable, Hashable {
                // Their client dies about a second after login on the DXVK pathway and boots on
                // wined3d/OpenGL. Slower, but a slow world beats a world that exits. See
                // docs/SERVERS-WORKLOG.md, 2026-08-19.
-               renderer: .openGL, msync: false),
+               renderer: .openGL, msync: false,
+               // gaiaxi.com/res/info/terms.xi, 2026-10-25: "Maximum 2 Accounts Per Player" and
+               // "Dual-Boxing Allowed"; /res/info/server.xi: "Multiboxing 2 Accounts".
+               maxClients: 2),
         Server(name: "ValhallaXI", host: "logon.valhalla.group", bootProfile: "valhallaxi.ini",
                verified: false,
                note: "Login host from Valhalla's own connect page (2026-08). Untested by this project.",
@@ -584,7 +599,10 @@ struct Server: Codable, Identifiable, Hashable {
                accountHow: "No signup page: the account is made at their login server. Type the account name and "
                      + "password you want above, then Create account; link it to Discord from their Get "
                      + "Started guide.",
-               discordURL: "https://discord.gg/QBBdfQh", createsAccountAtLogin: true),
+               discordURL: "https://discord.gg/QBBdfQh",
+               // supernovaffxi.wordpress.com, Server Rules › Alts & Multiboxing, 2026-10-25: while
+               // multiboxing, "Playing more than 6 characters at once" is prohibited.
+               maxClients: 6, createsAccountAtLogin: true),
         Server(name: "OmicronXI", host: "OmicronFFXI.com", bootProfile: "omicronxi.ini",
                verified: false,
                note: "Heavily customized. Login host from Omicron's own wiki. Untested by this "
@@ -596,7 +614,10 @@ struct Server: Codable, Identifiable, Hashable {
                // so the wiki's own connect page is the honest destination.
                accountURL: "https://omicronxi.fandom.com/wiki/Connecting_to_OmicronXI",
                accountHow: "Omicron publishes no signup form — their wiki's connect page and "
-                     + "their Discord are where new accounts are arranged."),
+                     + "their Discord are where new accounts are arranged.",
+               // omicronxi.fandom.com/wiki/Alt, 2026-10-25: "Currently we allow 2 active characters
+               // on at a time." Their Login changes blog: "limited to 2 connections per IP (dualboxing)".
+               maxClients: 2),
         Server(name: "Tabula Rasa XI", host: "", bootProfile: "tabularasa.ini", verified: false,
                note: "No login host published anywhere this project could find — get it from "
                      + "their own launcher.",
