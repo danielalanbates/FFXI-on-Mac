@@ -46,8 +46,13 @@ enum QuestCatalogue {
     /// One reference section per log area. These provide recorded targets, not an invented
     /// walkthrough. Authored routes remain at the front of the guide list.
     static func referenceGuides(_ entries: [CatalogueEntry]) -> [Guide] {
-        let groups = Dictionary(grouping: entries) { "\($0.mission ? "Missions" : "Quests") · \($0.area)" }
-        return groups.keys.sorted().map { title in
+        let groups = Dictionary(grouping: entries) { "\(areaName($0.area, mission: $0.mission)) \($0.mission ? "Missions" : "Quests")" }
+        // Quests before missions, each alphabetical.
+        let titles = groups.keys.sorted { a, b in
+            let am = a.hasSuffix("Missions"), bm = b.hasSuffix("Missions")
+            return am == bm ? a < b : !am
+        }
+        return titles.map { title in
             let steps = (groups[title] ?? []).map { entry in
                 let d = entry.data
                 var note = d["npc"]?.string.map { "Talk to \($0). " } ?? ""
@@ -58,9 +63,37 @@ enum QuestCatalogue {
                                  posX: number(d["x"]), posZ: number(d["z"]), note: note,
                                  fixed: true, tags: [entry.mission ? "M" : "Q": entry.tag])
             }
-            return Guide(name: title, desc: "Quest-log reference targets from the bundled database.",
+            return Guide(name: title, desc: "Every recorded target in this log, from the bundled database. Order is by ID, not a route.",
                          levels: "", steps: steps, isReference: true)
         }
+    }
+
+    /// Title case for guide names written in sentence case ("Support jobs - Mhaura" becomes
+    /// "Support Jobs — Mhaura"). Display only: the addon keys saved progress by the original name.
+    static func displayName(_ name: String) -> String {
+        let small: Set<String> = ["a", "an", "and", "at", "by", "for", "in", "of", "on", "or", "the", "to"]
+        let words = name.replacingOccurrences(of: " - ", with: " — ").split(separator: " ", omittingEmptySubsequences: false)
+        return words.enumerated().map { i, w in
+            let word = String(w)
+            if i > 0 && small.contains(word.lowercased()) { return word.lowercased() }
+            // "d'Oria" keeps its particle lowercase.
+            guard let first = word.first, first.isLowercase, !word.hasPrefix("d'") else { return word }
+            return first.uppercased() + word.dropFirst()
+        }.joined(separator: " ")
+    }
+
+    /// Display names for the database's log areas.
+    static func areaName(_ area: String, mission: Bool) -> String {
+        let names: [String: String] = [
+            "sandoria": "San d'Oria", "bastok": "Bastok", "windurst": "Windurst", "jeuno": "Jeuno",
+            "other": "Other Areas", "outlands": "Outlands", "ahturhgan": "Aht Urhgan",
+            "abyssea": "Abyssea", "adoulin": mission ? "Seekers of Adoulin" : "Adoulin",
+            "coalition": "Coalition", "wotg": mission ? "Wings of the Goddess" : "Crystal War",
+            "zilart": "Rise of the Zilart", "cop": "Chains of Promathia", "toau": "Treasures of Aht Urhgan",
+            "rov": "Rhapsodies of Vana'diel", "tvr": "The Voracious Resurgence",
+            "acp": "A Crystalline Prophecy", "amk": "A Moogle Kupo d'Etat", "asa": "A Shantotto Ascension",
+        ]
+        return names[area] ?? area.capitalized
     }
 
     private static func number(_ value: LuaValue?) -> Double? {

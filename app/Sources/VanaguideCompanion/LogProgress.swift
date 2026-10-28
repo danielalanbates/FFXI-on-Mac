@@ -96,7 +96,7 @@ enum ProgressStore {
 /// Reads a whole Quests/Missions log page. Unlike chat matching, a log page legitimately shows
 /// many titles at once, so every exactly matching line is recorded.
 enum LogSurvey {
-    static let guideName = "Getting started: read your quest and mission logs"
+    static let guideName = "Getting Started"
 
     static let areaTitles: [String: String] = [
         "san d oria": "sandoria", "bastok": "bastok", "windurst": "windurst", "jeuno": "jeuno",
@@ -118,26 +118,26 @@ enum LogSurvey {
         return Guide(name: guideName,
                      desc: "Show the guide your in-game logs once, so it knows what you have done. Nothing is read from the server.",
                      levels: "", steps: [
-            step("Choose your character and start reading",
-                 "Enter your character and world above. Then open Screenshot settings…, press Find game windows, choose the game and press Start reading chat. On these steps the whole game window is read, so the chat area setting does not matter.",
+            step("Choose Your Character and Start Reading",
+                 "Enter your character and world above and press Load. Then open Screen Reading…, press Find Game Window, choose the game and press Start Reading. On these steps the whole game window is read, so the chat area does not matter.",
                  list: "none"),
             step("Open the Main Menu",
                  "Log in and stand somewhere safe. Press the minus key (−) to open the Main Menu (on a gamepad, the menu button). Keep the game window visible next to this one.",
                  list: "none"),
-            step("Quests → your home nation → Current Quests",
+            step("Quests › Home Nation › Current Quests",
                  "In the Main Menu choose Quests, then your home nation (San d'Oria, Bastok or Windurst), then Current Quests. Hold each page still for about 20 seconds; the titles appear below as they are recorded. Page down for more. A new character's list is empty, which is fine.",
                  list: "current"),
-            step("Completed Quests",
+            step("Quests › Home Nation › Completed Quests",
                  "Go back one level and choose Completed Quests. Hold each page for about 20 seconds.",
                  list: "completed"),
-            step("Other quest areas (optional)",
+            step("Other Quest Areas (Optional)",
                  "Repeat Current and Completed for Jeuno, Other Areas, Outlands and any expansion areas you have played. New characters can skip this step.",
                  list: "auto"),
             step("Missions",
                  "Back in the Main Menu choose Missions, then your nation and any expansions. Hold the current mission and the completed list on screen for about 20 seconds each.",
                  list: "auto"),
-            step("All set",
-                 "Your progress is saved for this character. Pick a guide on the left: completed quests are marked, and Jump to next unfinished skips them. Run this again any time to refresh it.",
+            step("All Set",
+                 "Your progress is saved for this character. Pick a guide on the left: completed quests are marked, and Next Unfinished skips them. Run this again any time to refresh it.",
                  list: "none"),
         ])
     }

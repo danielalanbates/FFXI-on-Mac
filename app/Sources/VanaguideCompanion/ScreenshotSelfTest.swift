@@ -105,6 +105,10 @@ extension CompanionSelfTest {
                        saved && loaded.entries.keys.sorted() == record.entries.keys.sorted()))
         checks.append(("character file names cannot escape the folder",
                        !ProgressStore.fileName(character: "../x", world: "a/b").contains("/")))
+        checks.append(("guide names are shown in title case",
+                       QuestCatalogue.displayName("Support jobs - Mhaura") == "Support Jobs — Mhaura"
+                           && QuestCatalogue.displayName("San d'Oria - every quest") == "San d'Oria — Every Quest"
+                           && QuestCatalogue.displayName("Starting out") == "Starting Out"))
         checks.append(("bottom chat crop scales to screenshot pixels",
                        ChatCrop().rect(width: 1600, height: 1000) == CGRect(x: 0, y: 650, width: 1600, height: 350)))
         checks.append(("invalid and nonfinite crop values are refused",
