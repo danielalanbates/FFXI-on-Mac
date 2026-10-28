@@ -64,7 +64,7 @@ cat > "$STAGE/Contents/Info.plist" <<PLIST
 <key>CFBundleShortVersionString</key><string>$VERSION</string>
 <key>CFBundleVersion</key><string>$BUILD</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
-<key>LSMinimumSystemVersion</key><string>13.0</string>
+<key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
 <key>NSScreenCaptureUsageDescription</key><string>Read the selected FFXI window's chat region locally to find the matching guide.</string>

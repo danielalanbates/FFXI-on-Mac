@@ -1036,6 +1036,7 @@ struct ContentView: View {
                 Spacer()
                 Button("Open") { Guide.openCompanion() }
                     .disabled(Guide.companionURL == nil)
+                    .help(Guide.companionSupported ? "" : "Needs macOS 14 or later.")
             }
             .padding(8)
             .background(RoundedRectangle(cornerRadius: 6).fill(Vana.panel.opacity(0.6)))

@@ -49,7 +49,16 @@ final class CompanionState: ObservableObject {
     private var catalogue: [CatalogueEntry] = []
     @Published var zones = WorldMap()
     /// The player's zone, from the last "=== Area: … ===" line screen reading saw.
-    @Published var currentZone: Int?
+    @Published var currentZone: Int? { didSet { if currentZone != oldValue { heardHere = [] } } }
+
+    /// Developer Mode: record quest givers and zones while playing (LearnedData.swift).
+    @Published var devMode = UserDefaults.standard.bool(forKey: "dev.mode") {
+        didSet { UserDefaults.standard.set(devMode, forKey: "dev.mode") }
+    }
+    @Published var learned = LearnedData.load()
+    /// Speakers seen in the current zone this session, newest first.
+    @Published var heardHere: [String] = []
+    @Published var devNote = ""
     private var screenshotTracker = ScreenshotMatchTracker()
 
     /// This character's local progress record (see LogProgress.swift).
@@ -89,6 +98,7 @@ final class CompanionState: ObservableObject {
             stepIndex = min(max((value("--step").flatMap(Int.init) ?? 1) - 1, 0), max(guides[gi].steps.count - 1, 0))
         }
         if let z = value("--zone").flatMap(Int.init) { currentZone = z }
+        if args.contains("--dev-preview") { devMode = true; heardHere = ["Gulemont", "Antreneau", "Thierride"] }
     }
 
     func loadCharacter() {
@@ -104,6 +114,45 @@ final class CompanionState: ObservableObject {
         if let t = step.tags["Q"] ?? step.tags["QA"] { return "Q:\(t)" }
         if let t = step.tags["M"] ?? step.tags["MA"] { return "M:\(t)" }
         return nil
+    }
+
+    /// The step with a giver recorded in Developer Mode filled in where the data has none.
+    func resolved(_ step: GuideStep) -> GuideStep {
+        guard let key = Self.key(for: step), let g = learned.givers[key] else { return step }
+        var s = step
+        if s.tags["NPC"] == nil || s.zone == nil {
+            s.tags["NPC"] = g.npc
+            s.zone = g.zone
+            s.tags["LEARNED"] = "1"
+        }
+        return s
+    }
+
+    func assignGiver(_ npc: String, to step: GuideStep) {
+        guard let key = Self.key(for: step), let zone = currentZone else { return }
+        learned.givers[key] = LearnedGiver(npc: npc, zone: zone, recorded: Date())
+        learned.save()
+        devNote = "Saved: \(npc) in \(zones.name(zone))."
+    }
+
+    func clearGiver(for step: GuideStep) {
+        guard let key = Self.key(for: step) else { return }
+        learned.givers[key] = nil
+        learned.save()
+        devNote = "Cleared."
+    }
+
+    /// Writes guide data to Downloads (the only place this project saves exports).
+    func exportLearned() {
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Downloads/vanaguide-learned-\(f.string(from: Date())).lua")
+        let text = learned.export(entries: catalogue, zoneName: { self.zones.name($0) })
+        do {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            devNote = "Exported \(learned.givers.count) givers to Downloads/\(url.lastPathComponent)."
+        } catch { devNote = "Export failed: \(error.localizedDescription)" }
     }
 
     func status(of step: GuideStep) -> LogRecord? {
@@ -210,6 +259,13 @@ final class CompanionState: ObservableObject {
     /// Two consecutive unique matches select a section. Existing progress stays manual.
     func readScreenshotText(_ text: String) {
         if let z = zones.zone(inChat: text) { currentZone = z }
+        if devMode, let z = currentZone {
+            let heard = learned.hear(text, zone: z)
+            if !heard.isEmpty {
+                learned.save()
+                heardHere = Array((heard.reversed() + heardHere.filter { !heard.contains($0) }).prefix(12))
+            }
+        }
         if isSurveying { readLogPage(text); return }
         let match = ScreenshotGuideMatcher.match(text: text, entries: catalogue, guides: guides)
         guard let confirmed = screenshotTracker.observe(match) else { return }
@@ -310,6 +366,18 @@ struct CompanionView: View {
                 }
                 .pickerStyle(.segmented).labelsHidden().frame(width: 190)
                 Spacer()
+                Button {
+                    state.devMode.toggle()
+                } label: {
+                    Label("Developer", systemImage: state.devMode ? "hammer.fill" : "hammer")
+                        .font(.system(size: 11, weight: .semibold))
+                        .lineLimit(1).fixedSize()
+                        .foregroundStyle(state.devMode ? Theme.night : Theme.text)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Capsule().fill(state.devMode ? Theme.gold : Color.white.opacity(0.12)))
+                }
+                .buttonStyle(.plain)
+                .help("Developer Mode: record quest givers and their zones while you play.")
                 readingStatus
             }
             HStack(spacing: 6) {
@@ -423,12 +491,13 @@ struct CompanionView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if g.steps.indices.contains(state.stepIndex) {
-                    let s = g.steps[state.stepIndex]
+                    let s = state.resolved(g.steps[state.stepIndex])
                     ScrollView {
                         VStack(alignment: .leading, spacing: 6) {
                             SectionLabel(text: "Step \(state.stepIndex + 1) of \(g.steps.count)")
                             stepCard(s)
                             stepStatus(s, in: g)
+                            if state.devMode { devPanel(s) }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -472,6 +541,9 @@ struct CompanionView: View {
             Label("\(isMission ? "Mission" : "Quest"): \(s.title)", systemImage: isMission ? "flag" : "scroll")
                 .font(.callout)
         }
+        if s.tags["LEARNED"] != nil {
+            Text("Location recorded in Developer Mode").font(.caption2).foregroundStyle(Theme.gold)
+        }
         if let lv = s.tags["LV"] {
             Label("Recommended level \(lv)", systemImage: "chart.bar").font(.caption).foregroundStyle(Theme.muted)
         }
@@ -512,6 +584,54 @@ struct CompanionView: View {
             Text("The guide doesn't know where this one starts yet.")
                 .font(.caption).foregroundStyle(Theme.muted)
         }
+    }
+
+    /// Developer Mode panel: where the reader thinks you are, who it has heard, and a one-click
+    /// way to record the quest giver for the step on screen.
+    @ViewBuilder
+    func devPanel(_ s: GuideStep) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            SectionLabel(text: "Developer Mode")
+            if !capture.running {
+                Text("Start Screen Reading to record.").font(.caption).foregroundStyle(Theme.ember)
+            }
+            Text(state.currentZone.map { "Zone: \(state.zones.name($0))" }
+                 ?? "Zone unknown — change zones once so the Area line appears in chat.")
+                .font(.caption).foregroundStyle(Theme.crystal)
+            if let key = CompanionState.key(for: s) {
+                if let g = state.learned.givers[key] {
+                    HStack {
+                        Text("Recorded giver: \(g.npc) in \(state.zones.name(g.zone))").font(.caption)
+                        Button("Clear") { state.clearGiver(for: s) }.controlSize(.mini)
+                    }
+                }
+                if state.heardHere.isEmpty {
+                    Text("Talk to the quest giver; their name appears here.").font(.caption).foregroundStyle(Theme.muted)
+                } else {
+                    Text("Heard here — click the giver of \(s.title):").font(.caption).foregroundStyle(Theme.muted)
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), alignment: .leading)], alignment: .leading, spacing: 4) {
+                        ForEach(state.heardHere, id: \.self) { name in
+                            Button(name) { state.assignGiver(name, to: s) }
+                                .controlSize(.small)
+                                .disabled(state.currentZone == nil)
+                        }
+                    }
+                }
+            } else {
+                Text("This step has no quest or mission to record.").font(.caption).foregroundStyle(Theme.muted)
+            }
+            HStack {
+                Text("\(state.learned.givers.count) givers recorded · \(state.learned.speakers.count) speakers heard")
+                    .font(.caption2).foregroundStyle(Theme.muted)
+                Spacer()
+                Button("Export to Downloads") { state.exportLearned() }
+                    .controlSize(.small).disabled(state.learned.givers.isEmpty)
+            }
+            if !state.devNote.isEmpty { Text(state.devNote).font(.caption2).foregroundStyle(Theme.jade) }
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 6).stroke(Theme.gold.opacity(0.5)))
+        .padding(.top, 6)
     }
 
     @ViewBuilder
