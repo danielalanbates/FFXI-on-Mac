@@ -47,6 +47,9 @@ final class CompanionState: ObservableObject {
     @Published var sourceNote = ""
     @Published var screenshotMatchNote = ""
     private var catalogue: [CatalogueEntry] = []
+    @Published var zones = WorldMap()
+    /// The player's zone, from the last "=== Area: … ===" line screen reading saw.
+    @Published var currentZone: Int?
     private var screenshotTracker = ScreenshotMatchTracker()
 
     /// This character's local progress record (see LogProgress.swift).
@@ -76,6 +79,16 @@ final class CompanionState: ObservableObject {
         loadCharacter()
         // A character with nothing recorded starts on Getting started; others on their guides.
         selected = progress.entries.isEmpty ? 0 : min(1, max(guides.count - 1, 0))
+        // Developer preview: --open-guide "<name>" [--step <n>] [--zone <id>], for screenshots.
+        let args = CommandLine.arguments
+        func value(_ flag: String) -> String? {
+            args.firstIndex(of: flag).flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
+        }
+        if let name = value("--open-guide"), let gi = guides.firstIndex(where: { $0.name == name }) {
+            selected = gi
+            stepIndex = min(max((value("--step").flatMap(Int.init) ?? 1) - 1, 0), max(guides[gi].steps.count - 1, 0))
+        }
+        if let z = value("--zone").flatMap(Int.init) { currentZone = z }
     }
 
     func loadCharacter() {
@@ -168,6 +181,7 @@ final class CompanionState: ObservableObject {
             let loaded = GuideParser.loadAll(from: g)
             let entries = QuestCatalogue.entries(at: root)
             if !loaded.isEmpty || !entries.isEmpty {
+                zones = WorldMap.load(root: root)
                 guides = [LogSurvey.guide] + loaded.map { var g = $0; g.name = QuestCatalogue.displayName(g.name); return g }
                 catalogue = entries
                 guides += QuestCatalogue.referenceGuides(catalogue)
@@ -195,6 +209,7 @@ final class CompanionState: ObservableObject {
 
     /// Two consecutive unique matches select a section. Existing progress stays manual.
     func readScreenshotText(_ text: String) {
+        if let z = zones.zone(inChat: text) { currentZone = z }
         if isSurveying { readLogPage(text); return }
         let match = ScreenshotGuideMatcher.match(text: text, entries: catalogue, guides: guides)
         guard let confirmed = screenshotTracker.observe(match) else { return }
@@ -412,15 +427,7 @@ struct CompanionView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 6) {
                             SectionLabel(text: "Step \(state.stepIndex + 1) of \(g.steps.count)")
-                            Text(s.title).font(.headline)
-                            if let z = s.zone {
-                                let pos = (s.posX != nil && s.posZ != nil)
-                                    ? String(format: " · (%.1f, %.1f)", s.posX!, s.posZ!) : ""
-                                Text("Zone \(z)\(pos)").font(.caption).foregroundStyle(Theme.crystal)
-                            }
-                            if let n = s.note {
-                                Text(n).font(.callout).fixedSize(horizontal: false, vertical: true)
-                            }
+                            stepCard(s)
                             stepStatus(s, in: g)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -446,6 +453,64 @@ struct CompanionView: View {
                 Text("No guides loaded (\(state.sourceNote)).")
                 Button("Reload") { state.reload() }
             }
+        }
+    }
+
+    /// Zygor-style: one plain action, where it happens, how to get there. No numbers.
+    @ViewBuilder
+    func stepCard(_ s: GuideStep) -> some View {
+        let npc = s.tags["NPC"]?.npcDisplay
+        let isQuest = s.tags["Q"] != nil || s.tags["QA"] != nil
+        let isMission = s.tags["M"] != nil || s.tags["MA"] != nil
+        Text(npc.map { "Talk to \($0)" } ?? s.title)
+            .font(.system(size: 17, weight: .semibold))
+        if s.zone != nil {
+            Label("in \(state.zones.name(s.zone))", systemImage: "mappin.and.ellipse")
+                .font(.callout).foregroundStyle(Theme.crystal)
+        }
+        if npc != nil && (isQuest || isMission) {
+            Label("\(isMission ? "Mission" : "Quest"): \(s.title)", systemImage: isMission ? "flag" : "scroll")
+                .font(.callout)
+        }
+        if let lv = s.tags["LV"] {
+            Label("Recommended level \(lv)", systemImage: "chart.bar").font(.caption).foregroundStyle(Theme.muted)
+        }
+        if let n = s.note {
+            Text(n).font(.callout).fixedSize(horizontal: false, vertical: true)
+        }
+        howToGetThere(s, npc: npc)
+    }
+
+    @ViewBuilder
+    func howToGetThere(_ s: GuideStep, npc: String?) -> some View {
+        if let target = s.zone {
+            SectionLabel(text: "How to get there").padding(.top, 4)
+            if let here = state.currentZone {
+                if here == target {
+                    Text(npc.map { "You're in the right place. Look around for \($0), walk up to them, target them and press Enter to talk." }
+                         ?? "You're in the right place.")
+                        .font(.callout).fixedSize(horizontal: false, vertical: true)
+                } else if let hops = state.zones.route(from: here, to: target) {
+                    Text("You're in \(state.zones.name(here)).").font(.caption).foregroundStyle(Theme.muted)
+                    ForEach(Array(state.zones.directions(hops).enumerated()), id: \.offset) { i, line in
+                        Text("\(i + 1). \(line)").font(.callout)
+                    }
+                    if let npc {
+                        Text("\(hops.count + 1). Find \(npc), target them and press Enter to talk.").font(.callout)
+                    }
+                } else {
+                    Text("No known route from \(state.zones.name(here)) yet. Head for \(state.zones.name(target)).")
+                        .font(.callout)
+                }
+            } else {
+                Text("Go to \(state.zones.name(target))\(npc.map { " and find \($0). Target them and press Enter to talk." } ?? ".")")
+                    .font(.callout).fixedSize(horizontal: false, vertical: true)
+                Text("Turn on Screen Reading and the guide will give turn-by-turn directions from where you are.")
+                    .font(.caption).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+            }
+        } else if s.tags["Q"] != nil || s.tags["M"] != nil {
+            Text("The guide doesn't know where this one starts yet.")
+                .font(.caption).foregroundStyle(Theme.muted)
         }
     }
 
