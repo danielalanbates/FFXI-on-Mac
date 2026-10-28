@@ -104,8 +104,13 @@ end);
 --- Read every line of cmd.txt, empty it, then run them.
 --- Emptied BEFORE running: a command that reloads an addon would otherwise leave the file
 --- intact to be read again on the next frame, and run forever.
+-- Renamed aside BEFORE reading, not read-then-truncated: a line appended between the read
+-- and the truncate was silently lost (two harness commands sent a moment apart dropped the
+-- second, 2026-10-28).  The writer appends to a fresh file meanwhile.
 local function pump_one(path)
-    local f = io.open(path, 'r');
+    local taken = path .. '.run';
+    if (not os.rename(path, taken)) then return; end
+    local f = io.open(taken, 'r');
     if (f == nil) then return; end
     local lines = {};
     for line in f:lines() do
@@ -113,9 +118,7 @@ local function pump_one(path)
         if (line ~= '') then lines[#lines + 1] = line; end
     end
     f:close();
-    if (#lines == 0) then return; end
-    local w = io.open(path, 'w');
-    if (w ~= nil) then w:close(); end
+    os.remove(taken);
     for _, line in ipairs(lines) do
         AshitaCore:GetChatManager():QueueCommand(-1, line);
     end
