@@ -147,7 +147,10 @@ Images and text are discarded after matching. No AI service, upload or token spe
 
 ## Developer Mode (b88)
 
-**Developer** (header) records quest givers while you play with Screen Reading on:
+The hammer in **Screen Reading…** (and the checkbox inside it; while reading, the hammer
+beside Stop) turns Developer Mode on. While it is on, the step is outlined in red and the header
+says **Developer Mode activated** next to the completed/current counts (b92).
+It records quest givers while you play with Screen Reading on:
 the zone from the `Area:` line, and every `Name : …` speaker. On a quest step, click a heard
 name to save it as that quest's giver in the current zone; the step card uses it at once
 ("Location recorded in Developer Mode"). Saved in
@@ -156,12 +159,18 @@ name to save it as that quest's giver in the current zone; the step card uses it
 `[id] = { name = …, zone = …, npc = … },` line per quest, labelled by log and area, ready to
 merge into the addon's `data/quests.lua` / `data/missions.lua`. Player /say lines also look
 like speakers; only the name you click is saved as a giver.
+**Suggest to Guide…** (b92) opens a pre-filled GitHub "new file" page in the public VanaGuide
+repository's `suggested-changes/` folder; the player proposes it with their own GitHub account
+(no credentials in the app). There `tools/apply_suggestions.py` (run by the `apply-suggestions`
+Action, which opens a pull request) adds a giver only to entries that have no zone or giver yet.
 
 ## Automatic character and world (b89)
 
 | Field | Source |
 |---|---|
-| World | FFXI on Mac writes `session.json` (world name only) in Server-Safe's Application Support folder on Play and on Open; Server-Safe reads it at launch and every 30 s |
+| Server (b92) | A list: the launcher's own server list (written to `session.json` as `worlds` at launcher start, on server-list edits, Play and Open), plus any server a character was saved under. Before the launcher has shared it, the servers it ships with. Choose the server first; switching server switches to the character last played there |
+| Character list (b92) | Characters saved under the chosen server, most recent first, plus **Add Character…**. A detected or chosen character joins the list |
+| World | FFXI on Mac writes `session.json` (world name) in Server-Safe's Application Support folder on Play and on Open; Server-Safe reads it at launch and every 30 s |
 | Character | The game window's title when it is a character name; otherwise a 2-second burst (up to 30 s) that also reads the bottom-right status box, where the game prints `<Name> <HP>`. A name read twice is used. The burst runs at Start Reading and again on an `Area:` line after 2+ minutes without one (login or character switch), so alts switch profiles automatically |
 
 Text recognition has an 8-second timeout and never stacks requests. On first use macOS compiles

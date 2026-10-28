@@ -737,5 +737,6 @@ final class ServerStore: ObservableObject {
 
     func save() {
         if let d = try? JSONEncoder().encode(servers) { try? d.write(to: Self.url) }
+        Guide.shareSession(worlds: ordered.map(\.name))
     }
 }

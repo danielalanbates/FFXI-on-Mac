@@ -471,6 +471,8 @@ struct ContentView: View {
             }
         }.frame(width: 0, height: 0))
         .onAppear {
+            // Server-Safe's Server list is this launcher's list.
+            Guide.shareSession(worlds: store.ordered.map(\.name))
             // What builds up to b63 stored for the graphics panel, in Ashita's keys (b64).
             for line in GraphicsSettings.migrateStored() { runner.logFileOnly("==> " + line) }
             if store.selected?.local == true { local.refresh() }
@@ -1034,7 +1036,7 @@ struct ContentView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
-                Button("Open") { Guide.openCompanion(world: store.selected?.name ?? "") }
+                Button("Open") { Guide.openCompanion(world: store.selected?.name ?? "", worlds: store.ordered.map(\.name)) }
                     .disabled(Guide.companionURL == nil)
                     .help(Guide.companionSupported ? "" : "Needs macOS 14 or later.")
             }
@@ -2898,7 +2900,7 @@ struct ContentView: View {
         localServerSlowing = false
         updateChecked = false
         Credentials.setUsername(user, forWorld: store.selected?.name ?? "")
-        Guide.shareSession(world: store.selected?.name ?? "")
+        Guide.shareSession(world: store.selected?.name ?? "", worlds: store.ordered.map(\.name))
         Credentials.remember = remember
         if remember { Credentials.savePassword(pass, for: user, world: store.selected?.name ?? "") }
         else { Credentials.savePassword("", for: user, world: store.selected?.name ?? "") }

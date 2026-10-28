@@ -28,6 +28,12 @@ struct CompanionApp: App {
             .contains(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
             exit(0)
         }
+        // Test hook: --snapshot <png> draws the window off-screen after 4 s and quits, so the
+        // layout can be checked without opening, focusing or covering anything.
+        if let i = CommandLine.arguments.firstIndex(of: "--snapshot"), CommandLine.arguments.indices.contains(i + 1) {
+            let path = CommandLine.arguments[i + 1]
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { Snapshot.write(to: path) }
+        }
     }
 
     var body: some Scene {
@@ -94,8 +100,7 @@ final class CompanionState: ObservableObject {
     /// Fill World from the launcher's session file when it names a different one.
     func applyLauncherWorld() {
         guard let w = CharacterDiscovery.launcherWorld(), w != world else { return }
-        world = w
-        loadCharacter()
+        selectWorld(w)
     }
 
     /// Reading just started: use the window title if it is the name, else search the status box.
@@ -122,6 +127,7 @@ final class CompanionState: ObservableObject {
         guard name != character else { restoreZone(); return }
         character = name
         loadCharacter()
+        remember()
         restoreZone()
         stepIndex = 0
         selected = progress.entries.isEmpty ? 0 : min(1, max(guides.count - 1, 0))
@@ -154,7 +160,10 @@ final class CompanionState: ObservableObject {
         // Someone who has used Screen Reading will again: load the recognizer now, not at Start.
         if UserDefaults.standard.bool(forKey: "reading.used") { ScreenGuideCapture.warmUp() }
         reload()
-        if let w = CharacterDiscovery.launcherWorld(), world.isEmpty || w != world { world = w }
+        if let w = CharacterDiscovery.launcherWorld(), w != world {
+            world = w
+            character = Self.lastCharacter(on: w)
+        }
         loadCharacter()
         // A character with nothing recorded starts on Getting started; others on their guides.
         selected = progress.entries.isEmpty ? 0 : min(1, max(guides.count - 1, 0))
@@ -171,10 +180,62 @@ final class CompanionState: ObservableObject {
         if args.contains("--dev-preview") { devMode = true; heardHere = ["Gulemont", "Antreneau", "Thierride"] }
     }
 
+    /// Servers: the launcher's list, plus any world a character was saved under.
+    @Published var worldOptions: [String] = []
+    /// Characters saved under the chosen server, most recently played first.
+    @Published var characterOptions: [String] = []
+
+    func refreshOptions() {
+        let saved = ProgressStore.saved()
+        var worlds = CharacterDiscovery.launcherWorlds()
+        for w in saved.map(\.world) + [world] where !w.isEmpty && !worlds.contains(w) { worlds.append(w) }
+        worldOptions = worlds
+        var names = saved.filter { $0.world == world }.map(\.character).filter { !$0.isEmpty }
+        if !character.isEmpty && !names.contains(character) { names.insert(character, at: 0) }
+        characterOptions = names
+    }
+
+    /// Choosing a server switches to the character last played there.
+    func selectWorld(_ w: String) {
+        guard w != world else { return }
+        world = w
+        character = Self.lastCharacter(on: w)
+        loadCharacter()
+        restoreZone()
+        stepIndex = 0
+        selected = progress.entries.isEmpty ? 0 : min(1, max(guides.count - 1, 0))
+    }
+
+    static func lastCharacter(on world: String) -> String {
+        ProgressStore.saved().first { $0.world == world && !$0.character.isEmpty }?.character ?? ""
+    }
+
+    func selectCharacter(_ name: String) {
+        let n = name.trimmingCharacters(in: .whitespaces)
+        guard !n.isEmpty, n != character else { return }
+        character = n
+        loadCharacter()
+        remember()
+        restoreZone()
+        stepIndex = 0
+        selected = progress.entries.isEmpty ? 0 : min(1, max(guides.count - 1, 0))
+    }
+
+    /// Keeps a chosen or discovered character in this server's list from now on.
+    private func remember() {
+        guard !character.isEmpty, !world.isEmpty,
+              !FileManager.default.fileExists(atPath: ProgressStore.directory
+                  .appendingPathComponent(ProgressStore.fileName(character: character, world: world)).path)
+        else { return }
+        ProgressStore.save(progress)
+        refreshOptions()
+    }
+
     func loadCharacter() {
         UserDefaults.standard.set(character, forKey: "progress.character")
         UserDefaults.standard.set(world, forKey: "progress.world")
         progress = ProgressStore.load(character: character, world: world)
+        refreshOptions()
         surveyNote = progress.entries.isEmpty ? ""
             : "\(progress.completedCount) completed, \(progress.currentCount) current on record."
         recentlyRead = []
@@ -223,6 +284,22 @@ final class CompanionState: ObservableObject {
             try text.write(to: url, atomically: true, encoding: .utf8)
             devNote = "Exported \(learned.givers.count) givers to Downloads/\(url.lastPathComponent)."
         } catch { devNote = "Export failed: \(error.localizedDescription)" }
+    }
+
+    /// Opens a pre-filled "new file" page in the guide's public repository, in
+    /// suggested-changes/. The player reviews it and proposes it with their own GitHub account;
+    /// nothing is sent until they press the button there, and no credentials live in this app.
+    /// The repository's tools/apply_suggestions.py adds givers only where a step has none.
+    func suggestToGuide() {
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        let text = learned.export(entries: catalogue, zoneName: { self.zones.name($0) })
+        var c = URLComponents(string: "https://github.com/danielalanbates/vanaguide/new/master")!
+        c.queryItems = [URLQueryItem(name: "filename", value: "suggested-changes/givers-\(f.string(from: Date())).lua"),
+                        URLQueryItem(name: "value", value: text)]
+        guard let url = c.url else { devNote = "Too much to suggest at once; use Export."; return }
+        NSWorkspace.shared.open(url)
+        devNote = "Opened GitHub: review the file there and press Commit/Propose to send it."
     }
 
     func status(of step: GuideStep) -> LogRecord? {
@@ -448,6 +525,9 @@ struct CompanionView: View {
     @StateObject private var capture = ScreenGuideCapture()
     @State private var tab = 0
     @State private var showReading = false
+    @State private var addingCharacter = false
+    @State private var newCharacter = ""
+    static let addCharacterTag = "\u{1}add"
 
     static let width: CGFloat = 620
     static let height: CGFloat = 460
@@ -525,35 +605,53 @@ struct CompanionView: View {
                 }
                 .pickerStyle(.segmented).labelsHidden().frame(width: 190)
                 Spacer()
-                Button {
-                    state.devMode.toggle()
-                } label: {
-                    Image(systemName: state.devMode ? "hammer.fill" : "hammer")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(state.devMode ? Theme.night : Theme.text)
-                        .frame(width: 26, height: 20)
-                        .background(Capsule().fill(state.devMode ? Theme.gold : Color.white.opacity(0.12)))
-                }
-                .buttonStyle(.plain)
-                .help(state.devMode ? "Developer Mode is on: recording quest givers and zones. Click to turn off."
-                                    : "Developer Mode: record quest givers and their zones while you play.")
                 readingStatus
             }
             HStack(spacing: 6) {
-                TextField("Character", text: $state.character).frame(width: 110)
-                    .onSubmit { state.loadCharacter() }
-                TextField("World", text: $state.world).frame(width: 110)
-                    .onSubmit { state.loadCharacter() }
-                Button("Load") { state.loadCharacter() }
+                Picker("Server", selection: Binding(get: { state.world }, set: { state.selectWorld($0) })) {
+                    if state.world.isEmpty { Text("Choose…").tag("") }
+                    ForEach(state.worldOptions, id: \.self) { Text($0).tag($0) }
+                }
+                .frame(width: 165)
+                if addingCharacter {
+                    TextField("Character name", text: $newCharacter).frame(width: 120)
+                        .onSubmit {
+                            state.selectCharacter(newCharacter.capitalized)
+                            newCharacter = ""
+                            addingCharacter = false
+                        }
+                    Button("Cancel") { newCharacter = ""; addingCharacter = false }
+                } else {
+                    Picker("Character", selection: Binding(get: { state.character }, set: {
+                        if $0 == Self.addCharacterTag { addingCharacter = true } else { state.selectCharacter($0) }
+                    })) {
+                        if state.character.isEmpty { Text("None yet").tag("") }
+                        ForEach(state.characterOptions, id: \.self) { Text($0).tag($0) }
+                        Divider()
+                        Text("Add Character…").tag(Self.addCharacterTag)
+                    }
+                    .frame(width: 150)
+                    .disabled(state.world.isEmpty)
+                }
                 Spacer()
                 if !state.discoveryNote.isEmpty {
                     Text(state.discoveryNote).font(.caption).foregroundStyle(Theme.crystal).lineLimit(1)
                 }
+                if state.devMode {
+                    Text("Developer Mode activated").font(.caption.bold()).foregroundStyle(Theme.alert)
+                        .lineLimit(1).fixedSize()
+                }
                 Text("\(state.progress.completedCount) completed · \(state.progress.currentCount) current")
-                    .font(.caption).foregroundStyle(Theme.muted)
+                    .font(.caption).foregroundStyle(Theme.muted).lineLimit(1).fixedSize()
             }
             .textFieldStyle(.roundedBorder).controlSize(.small)
         }
+    }
+
+    /// Screen Reading carries the Developer Mode hammer: red when it is on.
+    var hammer: some View {
+        Image(systemName: state.devMode ? "hammer.fill" : "hammer")
+            .foregroundStyle(state.devMode ? Theme.alert : Theme.text)
     }
 
     var readingStatus: some View {
@@ -562,9 +660,13 @@ struct CompanionView: View {
                 Circle().fill(ScreenGuideCapture.warm ? Theme.jade : Theme.gold).frame(width: 8, height: 8)
                     .help(!ScreenGuideCapture.warm ? "Preparing text recognition…"
                           : capture.discovering ? "Finding your character…" : capture.note)
+                Button { state.devMode.toggle() } label: { hammer }
+                    .controlSize(.small)
+                    .help(state.devMode ? "Developer Mode is on: recording quest givers and zones. Click to turn off."
+                                        : "Developer Mode: record quest givers and their zones while you play.")
                 Button("Stop") { capture.stop() }.controlSize(.small)
             } else {
-                Button("Screen Reading…") { showReading.toggle() }
+                Button { showReading.toggle() } label: { HStack(spacing: 4) { hammer; Text("Screen Reading…") } }
                     .controlSize(.small)
                     .popover(isPresented: $showReading, arrowEdge: .bottom) { readingSettings }
             }
@@ -594,6 +696,10 @@ struct CompanionView: View {
             if !capture.note.isEmpty {
                 Text(capture.note).font(.caption).foregroundStyle(Theme.muted)
             }
+            Toggle(isOn: $state.devMode) {
+                HStack(spacing: 4) { hammer; Text("Developer Mode: record quest givers and their zones") }
+            }
+            .toggleStyle(.checkbox)
             HStack {
                 Spacer()
                 Button("Start Reading") {
@@ -664,6 +770,11 @@ struct CompanionView: View {
                             if state.devMode { devPanel(s) }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(state.devMode ? 8 : 0)
+                        .background(RoundedRectangle(cornerRadius: 8)
+                            .fill(state.devMode ? Theme.alert.opacity(0.22) : .clear))
+                        .overlay(RoundedRectangle(cornerRadius: 8)
+                            .stroke(state.devMode ? Theme.alert : .clear, lineWidth: 1.5))
                     }
                 }
                 HStack {
@@ -794,6 +905,9 @@ struct CompanionView: View {
                 Spacer()
                 Button("Export to Downloads") { state.exportLearned() }
                     .controlSize(.small).disabled(state.learned.givers.isEmpty)
+                Button("Suggest to Guide…") { state.suggestToGuide() }
+                    .controlSize(.small).disabled(state.learned.givers.isEmpty)
+                    .help("Opens GitHub with these givers as a suggested change to the guide.")
             }
             if !state.devNote.isEmpty { Text(state.devNote).font(.caption2).foregroundStyle(Theme.jade) }
         }
@@ -927,5 +1041,22 @@ struct CompanionView: View {
         let f = ISO8601DateFormatter()
         guard let d = f.date(from: iso) else { return iso }
         return DateFormatter.localizedString(from: d, dateStyle: .medium, timeStyle: .none)
+    }
+}
+
+enum Snapshot {
+    static func write(to path: String) {
+        let size = NSSize(width: CompanionView.width, height: CompanionView.height)
+        let window = NSWindow(contentRect: NSRect(origin: NSPoint(x: -10000, y: -10000), size: size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = NSHostingView(rootView: CompanionView().preferredColorScheme(.dark).tint(Theme.crystal))
+        window.orderFrontRegardless()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            guard let view = window.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { exit(1) }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            exit(0)
+        }
     }
 }

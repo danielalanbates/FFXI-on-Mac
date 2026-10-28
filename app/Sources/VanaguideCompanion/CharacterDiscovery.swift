@@ -49,12 +49,25 @@ enum CharacterDiscovery {
         }
     }
 
+    static var sessionURL: URL {
+        ProgressStore.directory.deletingLastPathComponent().appendingPathComponent("session.json")
+    }
+
+    private static func session(_ url: URL) -> [String: Any] {
+        (try? Data(contentsOf: url)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+    }
+
     /// The world the launcher last played or opened Server-Safe for.
-    static func launcherWorld(at url: URL = ProgressStore.directory.deletingLastPathComponent()
-                                  .appendingPathComponent("session.json")) -> String? {
-        guard let data = try? Data(contentsOf: url),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String],
-              let w = obj["world"], !w.isEmpty else { return nil }
+    static func launcherWorld(at url: URL = sessionURL) -> String? {
+        guard let w = session(url)["world"] as? String, !w.isEmpty else { return nil }
         return w
+    }
+
+    /// The FFXI on Mac launcher's server list, in its order. Before the launcher has shared it,
+    /// the worlds it ships with (Servers.swift `Server.builtins`, ordered; change both together).
+    static func launcherWorlds(at url: URL = sessionURL) -> [String] {
+        if let w = session(url)["worlds"] as? [String], !w.isEmpty { return w }
+        return ["HorizonXI", "CatsEyeXI", "AscensionXI", "Vanadreams", "DriftwoodXI", "PegasusXI", "MistXI",
+                "Moghouse XI", "LevelDown 99", "Scythe", "Olympus XI", "Legendary Relaunch", "Local server"]
     }
 }
