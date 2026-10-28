@@ -101,18 +101,46 @@ final class WikiState: ObservableObject {
     static let jobs = ["All", "WAR", "MNK", "WHM", "BLM", "RDM", "THF", "PLD", "DRK", "BST", "BRD", "RNG", "SAM",
                        "NIN", "DRG", "SMN", "BLU", "COR", "PUP", "DNC", "SCH", "GEO", "RUN"]
 
-    func load(roots: [URL]) {
+    /// The server whose data is shown: a key under data/servers/, or "" for standard LandSandBoat.
+    @Published private(set) var serverKey = ""
+
+    /// data/servers/<key>/ for a world whose own server source was read (CatsEyeXI, PegasusXI);
+    /// other worlds get standard LandSandBoat data. "CatsEyeXI" -> "catseyexi".
+    nonisolated static func serverKey(for world: String) -> String {
+        world.lowercased().filter { $0.isLetter || $0.isNumber }
+    }
+
+    func load(roots: [URL], world: String = "") {
+        let key = Self.serverKey(for: world)
         Task.detached(priority: .userInitiated) {
-            let gear = roots.lazy.compactMap { WikiData.gear($0.appendingPathComponent("data/gear_guide.lua")) }.first
-            let skills = roots.lazy.compactMap { WikiData.skills($0.appendingPathComponent("data/skill_guides.lua")) }.first
+            func pick<T>(_ file: String, _ read: (URL) -> T?) -> (T, Bool)? {
+                if !key.isEmpty {
+                    for root in roots {
+                        if let own = read(root.appendingPathComponent("data/servers/\(key)/\(file)")) { return (own, true) }
+                    }
+                }
+                for root in roots {
+                    if let stock = read(root.appendingPathComponent("data/\(file)")) { return (stock, false) }
+                }
+                return nil
+            }
+            let gear = pick("gear_guide.lua", WikiData.gear)
+            let skills = pick("skill_guides.lua", WikiData.skills)
             await MainActor.run {
-                self.categories = gear?.categories ?? []
-                self.items = gear?.items ?? []
-                self.skills = skills ?? []
-                self.skill = self.skill ?? self.skills.first?.name
+                self.serverKey = (gear?.1 ?? false) || (skills?.1 ?? false) ? key : ""
+                self.categories = gear?.0.categories ?? []
+                self.items = gear?.0.items ?? []
+                self.skills = skills?.0 ?? []
+                if self.skill.map({ s in !self.skills.contains { $0.name == s } }) ?? true { self.skill = self.skills.first?.name }
                 self.note = gear == nil ? "Gear list not installed (Vanaguide/data/gear_guide.lua)." : ""
             }
         }
+    }
+
+    /// Where the Gear and Skills tabs' data comes from, for the player.
+    func sourceLine(world: String) -> String {
+        if !serverKey.isEmpty { return "From \(world)'s own server code." }
+        return world.isEmpty ? "Standard LandSandBoat data." : "Standard LandSandBoat data; \(world) may differ."
     }
 
     var shown: [GearItem] {
@@ -128,7 +156,7 @@ final class WikiState: ObservableObject {
 extension CompanionView {
     var gearPane: some View {
         HStack(spacing: 8) {
-            Card {
+            Card { VStack(alignment: .leading, spacing: 6) {
                 List(wiki.categories, selection: Binding(get: { wiki.category }, set: { wiki.category = $0; wiki.openItem = nil })) { c in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(c.name).font(.callout)
@@ -138,7 +166,10 @@ extension CompanionView {
                 }
                 .scrollContentBackground(.hidden)
                 .listStyle(.sidebar)
-            }
+                Text(wiki.sourceLine(world: state.world))
+                    .font(.caption2).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            } }
             .frame(width: 190)
             Card {
                 if let id = wiki.openItem, let item = wiki.items.first(where: { $0.id == id }) {
@@ -212,7 +243,7 @@ extension CompanionView {
 
     var skillsPane: some View {
         HStack(spacing: 8) {
-            Card {
+            Card { VStack(alignment: .leading, spacing: 6) {
                 List(selection: $wiki.skill) {
                     ForEach(["Crafting", "Combat", "Defense", "Magic"], id: \.self) { group in
                         let list = wiki.skills.filter { $0.group == group }
@@ -225,7 +256,10 @@ extension CompanionView {
                 }
                 .scrollContentBackground(.hidden)
                 .listStyle(.sidebar)
-            }
+                Text(wiki.sourceLine(world: state.world))
+                    .font(.caption2).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            } }
             .frame(width: 190)
             Card {
                 if let s = wiki.skills.first(where: { $0.name == wiki.skill }) {
