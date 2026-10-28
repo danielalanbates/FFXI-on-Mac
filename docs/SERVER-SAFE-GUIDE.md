@@ -116,3 +116,19 @@ is the default PC layout.
 | Guide names | Title case in Server-Safe (display only; the addon keys saved progress by its own names) |
 | Palette | The launcher's: night-blue gradient, crystal accent, gold headings, jade = completed, ember = attention (`Theme.swift`) |
 | Window | Fixed 620 × 460; Screen Reading settings live in a popover |
+
+## Step cards (b87)
+
+Written for someone who has never played FFXI, in the style of Zygor:
+
+| Line | Example | Source |
+|---|---|---|
+| Action | Talk to Gulemont | quest giver in `data/quests.lua` (`_` shown as a space) |
+| Where | in Port San d'Oria | `data/zone_names.lua` — never a zone number |
+| What | Quest: The Dismayed Customer · Recommended level | quest data |
+| How to get there | You're in Southern San d'Oria. 1. Walk to Port San d'Oria 2. Find Gulemont, target them and press Enter to talk. | route over `zonelines.lua` + `travel.lua` (walk 90, transit = its wait; airship pass noted) |
+
+The current zone comes only from the game's own `=== Area: … ===` chat line, seen by Screen
+Reading. Without it, the card says where to go and suggests turning Screen Reading on.
+Coordinates are no longer shown. Not done yet: map-grid hints ("F-7") inside a zone, which
+need per-zone map offsets the data does not have.
