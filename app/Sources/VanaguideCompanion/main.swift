@@ -168,7 +168,7 @@ final class CompanionState: ObservableObject {
             let loaded = GuideParser.loadAll(from: g)
             let entries = QuestCatalogue.entries(at: root)
             if !loaded.isEmpty || !entries.isEmpty {
-                guides = [LogSurvey.guide] + loaded
+                guides = [LogSurvey.guide] + loaded.map { var g = $0; g.name = QuestCatalogue.displayName(g.name); return g }
                 catalogue = entries
                 guides += QuestCatalogue.referenceGuides(catalogue)
                 sourceNote = root.path.contains("/Resources/") ? "bundled guides" : "development checkout"

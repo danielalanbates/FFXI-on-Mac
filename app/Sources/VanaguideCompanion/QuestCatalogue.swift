@@ -47,7 +47,12 @@ enum QuestCatalogue {
     /// walkthrough. Authored routes remain at the front of the guide list.
     static func referenceGuides(_ entries: [CatalogueEntry]) -> [Guide] {
         let groups = Dictionary(grouping: entries) { "\(areaName($0.area, mission: $0.mission)) \($0.mission ? "Missions" : "Quests")" }
-        return groups.keys.sorted().map { title in
+        // Quests before missions, each alphabetical.
+        let titles = groups.keys.sorted { a, b in
+            let am = a.hasSuffix("Missions"), bm = b.hasSuffix("Missions")
+            return am == bm ? a < b : !am
+        }
+        return titles.map { title in
             let steps = (groups[title] ?? []).map { entry in
                 let d = entry.data
                 var note = d["npc"]?.string.map { "Talk to \($0). " } ?? ""
@@ -61,6 +66,20 @@ enum QuestCatalogue {
             return Guide(name: title, desc: "Every recorded target in this log, from the bundled database. Order is by ID, not a route.",
                          levels: "", steps: steps, isReference: true)
         }
+    }
+
+    /// Title case for guide names written in sentence case ("Support jobs - Mhaura" becomes
+    /// "Support Jobs — Mhaura"). Display only: the addon keys saved progress by the original name.
+    static func displayName(_ name: String) -> String {
+        let small: Set<String> = ["a", "an", "and", "at", "by", "for", "in", "of", "on", "or", "the", "to"]
+        let words = name.replacingOccurrences(of: " - ", with: " — ").split(separator: " ", omittingEmptySubsequences: false)
+        return words.enumerated().map { i, w in
+            let word = String(w)
+            if i > 0 && small.contains(word.lowercased()) { return word.lowercased() }
+            // "d'Oria" keeps its particle lowercase.
+            guard let first = word.first, first.isLowercase, !word.hasPrefix("d'") else { return word }
+            return first.uppercased() + word.dropFirst()
+        }.joined(separator: " ")
     }
 
     /// Display names for the database's log areas.
