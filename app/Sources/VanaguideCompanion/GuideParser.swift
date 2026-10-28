@@ -26,6 +26,8 @@ struct Guide {
     var desc: String
     var levels: String
     var steps: [GuideStep]
+    /// Database reference lists group independent targets; their indices are not route progress.
+    var isReference = false
 }
 
 enum GuideParser {

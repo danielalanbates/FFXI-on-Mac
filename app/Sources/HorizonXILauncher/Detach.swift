@@ -16,9 +16,9 @@ import Foundation
 ///    stock x87 speed -- the difference between 28 fps and 11 (docs/X87-WALL.md). Surviving the
 ///    quit is no good if the game is left crawling.
 ///
-/// `posix_spawn` with `POSIX_SPAWN_SETSID` puts the child in a brand-new session: it has no
-/// controlling terminal, is in no process group of ours, and is reparented to launchd when this
-/// app exits. Foundation's `Process` cannot ask for that, which is why this drops to posix_spawn.
+/// AppleScript's `do shell script` starts the background child outside the launcher's session.
+/// Keep this ancestry: direct posix_spawn caused external-drive/launch failures on the tested
+/// install (docs/LAUNCH-DEATH.md). The shell script removes itself after its interpreter opens it.
 enum Detach {
 
     /// Spawn `exe` detached. Returns the child's pid, or nil if the spawn failed.
@@ -29,13 +29,17 @@ enum Detach {
     @discardableResult
     static func spawn(_ exe: URL, args: [String], env: [String: String],
                       cwd: URL?, stdoutPath: String?) -> pid_t? {
-        let scriptURL = URL(fileURLWithPath: "/tmp/hxi-launch-\(UUID().uuidString).sh")
-        var script = "#!/bin/sh\n"
+        // osascript reports the background PID before /bin/sh necessarily opens its script.
+        // The child must remove the script itself; unlinking it on this function's return
+        // races the interpreter and silently loses a successful-looking spawn.
+        let scriptURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hxi-launch-\(UUID().uuidString).sh")
+        var script = "#!/bin/sh\n/bin/rm -f -- \(Bridge.shellQuote(scriptURL.path))\n"
         for (k, v) in env.sorted(by: { $0.key < $1.key }) {
             script += "export \(k)=\(Bridge.shellQuote(v))\n"
         }
         if let cwd {
-            script += "cd \(Bridge.shellQuote(cwd.path))\n"
+            script += "cd \(Bridge.shellQuote(cwd.path)) || exit $?\n"
         }
         let cmd = ([exe.path] + args).map(Bridge.shellQuote).joined(separator: " ")
         if let out = stdoutPath {
@@ -43,13 +47,19 @@ enum Detach {
         } else {
             script += "exec \(cmd) >/dev/null 2>&1\n"
         }
-        guard (try? script.write(to: scriptURL, atomically: true, encoding: .utf8)) != nil else { return nil }
-        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
-        defer { try? FileManager.default.removeItem(at: scriptURL) }
+        // The script may contain launch credentials. Give it owner-only permissions from
+        // creation, rather than first writing a world-readable file and chmodding afterward.
+        guard FileManager.default.createFile(atPath: scriptURL.path, contents: Data(script.utf8),
+                                             attributes: [.posixPermissions: 0o700]) else { return nil }
+        var handedOff = false
+        defer { if !handedOff { try? FileManager.default.removeItem(at: scriptURL) } }
 
         let osa = Process()
         osa.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        let osaScript = "do shell script \"/bin/sh '\(scriptURL.path)' >/dev/null 2>&1 & echo $!\""
+        let shell = "/bin/sh \(Bridge.shellQuote(scriptURL.path)) >/dev/null 2>&1 & echo $!"
+        let escapedShell = shell.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let osaScript = "do shell script \"\(escapedShell)\""
         osa.arguments = ["-e", osaScript]
         let pipe = Pipe()
         osa.standardOutput = pipe
@@ -61,6 +71,7 @@ enum Detach {
               let pid = Int32(outStr), pid > 0 else {
             return nil
         }
+        handedOff = true
         return pid
     }
 

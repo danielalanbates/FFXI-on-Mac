@@ -1,0 +1,107 @@
+// Copyright (c) 2026 Daniel Bates / Bates LLC. All rights reserved.
+
+import Foundation
+
+extension CompanionSelfTest {
+    static func screenshotChecks() -> [(String, Bool)] {
+        let quests = QuestCatalogue.parse("""
+        local Q = {}
+        Q.quests = { sandoria = {
+          [10] = { name = 'A Squire\\'s Test', zone = 230, x = -138.33, z = 65.76, npc = 'Balasiel' },
+          [11] = { name = 'A Squire\\'s Test II', zone = 230 },
+        } }
+        return Q
+        """, mission: false)
+        let missions = QuestCatalogue.parse("""
+        local M = {}
+        M.missions = { zilart = { [30] = { name = 'Dawn' } } }
+        return M
+        """, mission: true)
+        let entries = quests + missions
+        let authored = Guide(name: "Authored trial", desc: "", levels: "", steps: [
+            GuideStep(kind: "A", title: "Speak with Balasiel", tags: ["QA": "sandoria,10"]),
+            GuideStep(kind: "T", title: "Finish the trial", tags: ["Q": "sandoria,10"]),
+        ])
+        let guides = [authored] + QuestCatalogue.referenceGuides(entries)
+        let match: (String) -> ScreenshotGuideMatch? = {
+            ScreenshotGuideMatcher.match(text: $0, entries: entries, guides: guides)
+        }
+        let trial = match("Quest accepted: A Squire’s Test.")
+        var tracker = ScreenshotMatchTracker()
+        let first = tracker.observe(trial)
+        let second = tracker.observe(trial)
+        let third = tracker.observe(trial)
+        _ = tracker.observe(nil)
+        _ = tracker.observe(trial)
+        let repeated = tracker.observe(trial)
+        var interrupted = ScreenshotMatchTracker()
+        _ = interrupted.observe(trial)
+        _ = interrupted.observe(nil)
+        let interruptedFirst = interrupted.observe(trial)
+
+        var checks: [(String, Bool)] = [
+            ("catalogue parses literal quest and mission facts", quests.count == 2 && missions.count == 1),
+            ("OCR title normalizes curly apostrophes and punctuation", trial?.title == "A Squire's Test"),
+            ("OCR opens authored acceptance before a generated reference", trial?.guide == 0 && trial?.step == 0),
+            ("OCR does not guess a quest from NPC dialogue", match("Balasiel: Bring me a root.") == nil),
+            ("OCR rejects several quest titles in one capture",
+             match("A Squire's Test\nMission: Dawn") == nil),
+            ("OCR does not match inside a longer word", match("A Squire's Testing") == nil),
+            ("OCR refuses an overlapping sequel title", match("A Squire's Test II") == nil),
+            ("single-word dialogue needs a mission or quest label", match("Dawn") == nil),
+            ("explicit single-word mission matches its reference", match("Mission: Dawn")?.key == "M:zilart,30"),
+            ("empty OCR does not select a guide", match(" \n ") == nil),
+            ("OCR needs two consecutive matching samples", first == nil && second == trial),
+            ("persistent chat never pulls the guide backward again", third == nil && repeated == nil),
+            ("a blank sample resets the two-sample confirmation", interruptedFirst == nil),
+        ]
+        let duplicate = QuestCatalogue.parse("local Q = { bastok = { [3] = { name = 'A Squire\\'s Test' } } }", mission: false)
+        checks.append(("identical quest titles in different logs are ambiguous",
+                       ScreenshotGuideMatcher.match(text: "A Squire's Test", entries: entries + duplicate,
+                                                    guides: guides) == nil))
+        let references = QuestCatalogue.referenceGuides(entries)
+        if let trial {
+            checks.append(("OCR preserves a manually advanced authored route checkpoint",
+                           ScreenshotGuideMatcher.preservesCheckpoint(currentGuide: trial.guide, currentStep: 1,
+                                                                     match: trial, guides: guides)))
+        }
+        let referenceMatch = ScreenshotGuideMatcher.match(text: "Quest: A Squire's Test", entries: entries,
+                                                         guides: references)
+        checks.append(("OCR selects earlier independent targets in the same reference list",
+                       referenceMatch.map {
+                           !ScreenshotGuideMatcher.preservesCheckpoint(currentGuide: $0.guide, currentStep: $0.step + 1,
+                                                                       match: $0, guides: references)
+                       } == true))
+        let referenceStep = references.flatMap(\.steps).first { $0.tags["Q"] == "sandoria,10" }
+        checks.append(("reference targets preserve recorded coordinates and stay manual",
+                       referenceStep?.zone == 230 && referenceStep?.posX == -138.33
+                           && referenceStep?.posZ == 65.76 && referenceStep?.fixed == true))
+        checks.append(("bottom chat crop scales to screenshot pixels",
+                       ChatCrop().rect(width: 1600, height: 1000) == CGRect(x: 0, y: 650, width: 1600, height: 350)))
+        checks.append(("invalid and nonfinite crop values are refused",
+                       !ChatCrop(left: 90, top: 0, width: 20, height: 30).valid
+                           && !ChatCrop(left: .nan, top: 0, width: 20, height: 30).valid
+                           && !ChatCrop(left: 0, top: 0, width: 0, height: 30).valid))
+        checks.append(("FFXI browser and terminal titles are never capture candidates",
+                       !GameWindowIdentity.matches(title: "FFXI Wiki", owner: "Google Chrome",
+                                                   bundle: "com.google.chrome", executable: "Google Chrome")
+                           && !GameWindowIdentity.matches(title: "FFXI on Mac", owner: "Terminal",
+                                                          bundle: "com.apple.Terminal", executable: "Terminal")))
+        checks.append(("game-window title also needs Wine or game process identity",
+                       GameWindowIdentity.matches(title: "FFXI on Mac", owner: "wine64-preloader",
+                                                  bundle: "", executable: "wine64-preloader")
+                           && GameWindowIdentity.matches(title: "HorizonXI", owner: "unknown",
+                                                         bundle: "", executable: "horizon-loader.exe")
+                           && !GameWindowIdentity.matches(title: "Notepad", owner: "wine64-preloader",
+                                                          bundle: "org.winehq.wine", executable: "wine64-preloader")))
+        // Explicit developer override only: never enumerate or hydrate Drive during this fixture.
+        if let path = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"] {
+            let real = QuestCatalogue.entries(at: URL(fileURLWithPath: path))
+            checks.append(("real quest and mission catalogues load over 500 named entries", real.count > 500))
+            checks.append(("real database produces manual reference sections",
+                           QuestCatalogue.referenceGuides(real).flatMap(\.steps).count == real.count
+                               && QuestCatalogue.referenceGuides(real).flatMap(\.steps).allSatisfy(\.fixed)))
+        }
+        return checks
+    }
+}

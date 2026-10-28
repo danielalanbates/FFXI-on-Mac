@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 /// Vanaguide: Zygor-style quest / mission guide for Vana'diel.
 ///
@@ -11,6 +12,28 @@ import Foundation
 /// CatsEyeXI, FFEra, and any other allowlist world the launcher refuses to install it and
 /// removes any leftover copy, same safety model as `Narration.swift` for VanaVoice.
 enum Guide {
+    /// Separate, user-opened GUI. Keeping a copy inside the launcher also lets a launcher
+    /// update carry the matching guide UI without installing an unapproved game addon.
+    static var companionURL: URL? {
+        let candidates = [
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/VanaGuide Server-Safe.app"),
+            URL(fileURLWithPath: "/Applications/VanaGuide Server-Safe.app"),
+        ]
+        return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    static func openCompanion() {
+        let identifier = "org.batesai.vanaguide-companion"
+        if let existing = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == identifier
+        }) {
+            existing.activate()
+            return
+        }
+        guard let url = companionURL else { return }
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+    }
+
     static let loadLine = "/addon load vanaguide"
     static let marker = "# Vanaguide quest guide"
     /// Folder name matches `vanaguide/tools/install.sh` (`addons/Vanaguide`).

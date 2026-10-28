@@ -1644,6 +1644,9 @@ struct ContentView: View {
                     Toggle("Quest guide (Vanaguide, local LSB only)", isOn: $perf.enableVanaguide)
                         .disabled(!Guide.isAvailable || !Guide.allowed(by: addonPolicy))
                         .help(vanaguideHelp)
+                    Button("Open Vanaguide Server-Safe") { Guide.openCompanion() }
+                        .disabled(Guide.companionURL == nil)
+                        .help("Separate guide window with optional screen reading. Check your server's rules.")
                     Toggle("Large address aware", isOn: $perf.largeAddressAware)
                     Divider()
                     RetroAchievementsSection(ra: ra, gameDir: active?.gameDir,

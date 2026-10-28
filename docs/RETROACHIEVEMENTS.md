@@ -17,13 +17,43 @@ Settings live under Setup & Diagnostics › RETROACHIEVEMENTS.
   - The key is never logged and never written to a file.
   - The key is read only when a fetch runs. An ad-hoc-signed rebuild changes the signature the Keychain ACL trusts, so the first read after a rebuild asks for the login password (see Credentials.swift).
   - `RETROACHIEVEMENTS_API_KEY` in the launcher's own environment is also accepted, for scripted runs. `App.init` takes it into memory and removes it with `unsetenv`, and both game spawn paths strip it again. It never reaches wine, the game or `last-spawn.txt`.
-- **Sets.** The built-in table is 28275 Final Fantasy XI, 28303 Hero of Nations, 28317 Rise of the Zilart, 28359 Chains of Promathia and 28547 Hardcore Hero. You can add extra ids in the "extra set ids" field (UserDefaults `ra.extraSetIDs`).
+- **Sets.** All twelve currently populated HorizonXI sets are included; see the dated table below. You can add future legacy game ids in the "extra set ids" field (UserDefaults `ra.extraSetIDs`). Built-ins and extras are requested once each; invalid or duplicate extra ids are dropped.
 - **Endpoint.** Each set is one request to `API_GetGameInfoAndUserProgress.php?y=&u=&g=`. Requests go one at a time, through an ephemeral URLSession with no URL cache (the URL carries the key).
 - **When it refreshes:**
   - Automatic (window open, a 2-minute timer): at most every 10 minutes, counting failed attempts and the snapshot already on disk.
   - Play: always, but not twice within 60 s.
-  - The "Refresh achievements" button: always.
-- **Failures.** A 401, 429, other HTTP error, being offline, or an undecodable answer fails the whole fetch. The last good snapshot is left byte for byte, and the reason goes to the log pane and the settings section. A set RA does not know (HTTP 404, or `ID` null) is skipped with a note.
+  - The "Refresh achievements" button: immediate unless an HTTP 429 cooldown is active.
+  - After HTTP 429, **all** triggers respect `Retry-After` (seconds or HTTP date), or ten minutes if absent/invalid. The cooldown is held for this launcher session. There is no sleeping retry task or automatic retry loop.
+- **Failures.** A 401, 429, other HTTP error, being offline, an undecodable answer or a mismatched game id fails the whole fetch. The last good snapshot is left byte for byte, and the reason goes to the log pane and the settings section. An unknown extra set (HTTP 404, or `ID` null) is skipped with a note. An unknown built-in fails the refresh, preserving the previous full snapshot instead of replacing it with partial coverage.
+
+## Set coverage and primary sources (checked 2026-10-27)
+
+The official [HorizonXI sets hub](https://retroachievements.org/hub/25633) lists 26 sets: twelve populated sets with **637 achievements**, and fourteen empty sets. Counts are a research checkpoint, not a fixed limit; each refresh imports every achievement returned by the API for every configured set.
+
+| Set | Legacy API game id | Achievements at check |
+| --- | ---: | ---: |
+| [Final Fantasy XI](https://retroachievements.org/game/28275) | 28275 | 109 |
+| [Hero of Nations](https://retroachievements.org/game/28303) | 28303 | 28 |
+| [Rise of the Zilart](https://retroachievements.org/game/28317) | 28317 | 75 |
+| [Chains of Promathia](https://retroachievements.org/game/28359) | 28359 | 94 |
+| [Hardcore Hero](https://retroachievements.org/game/28547) | 28547 | 8 |
+| [Treasures of Aht Urhgan](https://retroachievements.org/game/41186) | 41186 | 41 |
+| [Paragon of Black Mage Excellence](https://retroachievements.org/game/28409) | 28409 | 33 |
+| [Paragon of Monk Excellence](https://retroachievements.org/game/28414) | 28414 | 28 |
+| [Paragon of Red Mage Excellence](https://retroachievements.org/game/28321) | 28321 | 33 |
+| [Paragon of Thief Excellence](https://retroachievements.org/game/28420) | 28420 | 26 |
+| [Paragon of Warrior Excellence](https://retroachievements.org/game/28421) | 28421 | 23 |
+| [Paragon of White Mage Excellence](https://retroachievements.org/game/28422) | 28422 | 39 |
+
+Subset website links may redirect to `/game/28275?set=<id>`. That `set` id is not the legacy game id accepted by these API endpoints. Do not replace the ids above with redirect query values.
+
+- [Official FFXI support announcement](https://retroachievements.org/forums/topic/25391): the integration is a partnership with HorizonXI. No evidence here establishes RA awarding on other LSB servers. Local completion goals on those worlds must be labelled separately from confirmed RA unlocks.
+- [User Game Progress API](https://api-docs.retroachievements.org/v1/get-game-info-and-user-progress.html): `g` is the game id, `u` is the username or stable ULID, `y` is the web API key. A ULID may be entered in the username field to survive account renames. The response supplies per-achievement earned dates and descriptions.
+- [Game list API](https://api-docs.retroachievements.org/v1/get-game-list.html): Standalone uses system id 102; `i=102&f=1` can support future discovery. This beta uses a reviewed built-in table plus extras rather than silently importing other Standalone games.
+- [API usage guidance](https://api-docs.retroachievements.org/): cache static data and avoid excessive requests. The launcher keeps its existing ten-minute progress cadence and fetches sequentially. This is polling, not instant push; newer unlocks become visible after a successful refresh.
+- [Current endpoint source](https://github.com/RetroAchievements/RAWeb/blob/master/public/API/API_GetGameInfoAndUserProgress.php): confirms the legacy `game_id` lookup and returned earned dates. No achievement-awarding endpoint is called.
+
+Importing all descriptions makes them available as a to-do list. It does not create quest routes for each achievement; guide mappings remain a separate authored and locally validated data task. No third-party walkthrough text or achievement catalogue is copied into source by this change; descriptions arrive in the user's private snapshot.
 
 ## Snapshot file (the shared contract)
 
@@ -72,9 +102,9 @@ The Achievements tab shows each set with its earned/total count, a to-do list (d
 - `FFXI-on-Mac --selftest-retroachievements`. It needs no network, because every request goes to a fake transport.
   - It decodes the verbatim documented example and FFXI-shaped fixtures (string numbers, missing dates, PHP `[]`).
   - It checks the snapshot's contract shape, atomic writing and the registry.
-  - It covers failures: a 401 or offline keeps the file, a 500 part-way fails the fetch, and an unknown set is skipped.
-  - It checks cache timing, set ids, redaction and adoption of the environment key.
+  - It covers failures: 401/offline/429, a 500 part-way through, missing built-ins and mismatched response ids preserve the file; unknown extras are skipped.
+  - It checks all twelve set ids, request coverage, duplicate extras, cache timing, Retry-After parsing/cooldown, redaction and adoption of the environment key.
   - It exercises the Keychain wrapper on a per-run service name, which it deletes.
 - `VanaguideCompanion --selftest-parser` adds the Lua reader, `achievements.lua` in nested and flat shapes, snapshot reading, staleness and registry choice, the merge rules, and guide links.
 
-Not verified: a live request with a real key, since no key existed on this Mac on 2026-09-26.
+Not verified by this beta: a live request with a real key, private-server addon approval, or routes for every imported achievement. Tests use fake transports and synthetic progress; they do not contact RA or a hosted FFXI server. Keychain tests use their own disposable service, never the player's stored key.

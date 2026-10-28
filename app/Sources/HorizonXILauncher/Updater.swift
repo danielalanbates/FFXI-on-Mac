@@ -49,11 +49,12 @@ final class Updater: ObservableObject {
     /// Why a Restart did not go through. The UI shows `message`, one short line, and `detail`
     /// (the helper's own reason, from its log) only as a tooltip.
     enum RestartFailure: Equatable {
-        case clientLive, workInFlight, helperDidNotStart, notVerified
+        case clientLive, companionLive, workInFlight, helperDidNotStart, notVerified
         case lastAttempt(String)
         var message: String {
             switch self {
             case .clientLive: return "Close the game, then restart to update"
+            case .companionLive: return "Close VanaGuide, then restart to update"
             case .workInFlight: return "Finish the running job, then restart to update"
             case .helperDidNotStart: return "Update didn't start. Try Restart again"
             case .notVerified: return "Update failed verification; fetching it again"
@@ -152,6 +153,13 @@ final class Updater: ObservableObject {
     private static func ownBlocker() -> RestartFailure? {
         if Runner.anyPlaying { return .clientLive }
         if Runner.workInFlight || LocalServer.workInFlight { return .workInFlight }
+        let applications = NSWorkspace.shared.runningApplications.map {
+            UpdateRules.RunningApplication(bundleIdentifier: $0.bundleIdentifier,
+                                           executablePath: $0.executableURL?.path)
+        }
+        if UpdateRules.embeddedCompanionIsRunning(in: Bundle.main.bundlePath, applications: applications) {
+            return .companionLive
+        }
         return nil
     }
 
@@ -373,6 +381,7 @@ enum UpdateRules {
     /// redirects here, so never create a new repo called HorizonXI-on-Mac.
     static let repo = "danielalanbates/FFXI-on-Mac"
     static let bundleID = "org.batesai.horizonxi-on-mac"
+    static let companionBundleID = "org.batesai.vanaguide-companion"
     static let teamID = "MG4YW8XX2Z"
     /// What an update must satisfy (`codesign -R`), here and in apply-update.sh.
     static let requirement = "anchor apple generic and identifier \"\(bundleID)\" "
@@ -394,9 +403,30 @@ enum UpdateRules {
         let build: Int          // CFBundleVersion; 0 = unknown (legacy asset name)
     }
 
+    struct RunningApplication {
+        let bundleIdentifier: String?
+        let executablePath: String?
+    }
+
+    /// Pure OS-metadata rule. A running embedded GUI owns resources inside the launcher and
+    /// must be closed by its user before an enclosing bundle swap. An independent standalone
+    /// guide does not prevent this launcher from updating. Missing path plus known identity
+    /// stays conservative, since it cannot establish that the copy is independent.
+    static func embeddedCompanionIsRunning(in bundlePath: String, applications: [RunningApplication]) -> Bool {
+        let helpers = URL(fileURLWithPath: bundlePath).standardizedFileURL.path + "/Contents/Helpers/"
+        return applications.contains { app in
+            guard let executablePath = app.executablePath, !executablePath.isEmpty else {
+                return app.bundleIdentifier == companionBundleID
+            }
+            let path = URL(fileURLWithPath: executablePath).standardizedFileURL.path
+            guard path.hasPrefix(helpers) else { return false }
+            return app.bundleIdentifier == companionBundleID || path.hasSuffix("/Contents/MacOS/VanaguideCompanion")
+        }
+    }
+
     /// "v3.10" -> "3.10". Only v<major>.<minor>[.<patch>]: an rc or beta tag is never offered.
     static func version(fromTag tag: String) -> String? {
-        guard tag.range(of: #"^v[0-9]+(\.[0-9]+){1,2}$"#, options: .regularExpression) != nil else { return nil }
+        guard tag.range(of: #"\Av[0-9]+(\.[0-9]+){1,2}\z"#, options: .regularExpression) != nil else { return nil }
         return String(tag.dropFirst())
     }
 
@@ -442,26 +472,42 @@ enum UpdateRules {
             && url.path.lowercased().hasPrefix("/\(repo.lowercased())/releases")
     }
 
-    /// The installable release in a `/releases/latest` response, or nil.
+    /// Only an asset naming this exact release version can represent its build. In particular,
+    /// an old dmg or a beta dmg attached to a stable release must not hide the real update.
+    static func assetBuild(from name: String, version: String) -> Int? {
+        let stem = "FFXI-on-Mac-\(version)"
+        if name.caseInsensitiveCompare(stem + ".dmg") == .orderedSame { return 0 }
+        let pattern = #"\A"# + NSRegularExpression.escapedPattern(for: stem) + #"-b([0-9]+)\.dmg\z"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+              let match = regex.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)),
+              let range = Range(match.range(at: 1), in: name), let build = Int(name[range]), build > 0
+        else { return nil }
+        return build
+    }
+
+    /// The installable published stable release in a `/releases/latest` response, or nil.
     static func release(fromAPI obj: [String: Any]) -> UpdateRelease? {
-        guard obj["draft"] as? Bool != true, obj["prerelease"] as? Bool != true,
+        guard obj["draft"] as? Bool == false, obj["prerelease"] as? Bool == false,
+              let published = obj["published_at"] as? String, !published.isEmpty,
               let tag = obj["tag_name"] as? String, let version = version(fromTag: tag),
-              let assets = obj["assets"] as? [[String: Any]],
-              let dmg = assets.first(where: {
-                  guard let n = ($0["name"] as? String)?.lowercased() else { return false }
-                  return n.hasPrefix("ffxi-on-mac-") && n.hasSuffix(".dmg")
-              }),
-              let name = dmg["name"] as? String,
-              let link = (dmg["browser_download_url"] as? String).flatMap(URL.init(string:)),
-              isTrustedAssetURL(link) else { return nil }
+              let assets = obj["assets"] as? [[String: Any]] else { return nil }
         let page = (obj["html_url"] as? String).flatMap(URL.init(string:)).flatMap {
             isTrustedPageURL($0) ? $0 : nil
         } ?? URL(string: "https://github.com/\(repo)/releases/latest")!
-        let digest = (dmg["digest"] as? String).flatMap {
-            $0.hasPrefix("sha256:") ? String($0.dropFirst(7)).lowercased() : nil
+        let candidates: [UpdateRelease] = assets.compactMap { dmg in
+            guard dmg["state"] as? String == "uploaded",
+                  let name = dmg["name"] as? String, let build = assetBuild(from: name, version: version),
+                  let link = (dmg["browser_download_url"] as? String).flatMap(URL.init(string:)),
+                  isTrustedAssetURL(link), link.path.hasSuffix("/releases/download/\(tag)/\(name)")
+            else { return nil }
+            let digest = (dmg["digest"] as? String).flatMap {
+                $0.hasPrefix("sha256:") ? String($0.dropFirst(7)).lowercased() : nil
+            }
+            if let digest, digest.range(of: #"\A[0-9a-f]{64}\z"#, options: .regularExpression) == nil { return nil }
+            return UpdateRelease(tag: tag, build: Build(version: version, build: build),
+                                 assetName: name, dmgURL: link, pageURL: page, sha256: digest)
         }
-        return UpdateRelease(tag: tag, build: Build(version: version, build: build(fromAssetName: name)),
-                             assetName: name, dmgURL: link, pageURL: page, sha256: digest)
+        return candidates.max { $0.build.build < $1.build.build }
     }
 
     /// codesign exits 1 when the signature is broken or missing and 3 when it does not meet the
@@ -479,6 +525,8 @@ enum UpdateRules {
     static func isStillLatest(_ staged: UpdateRelease, latest: UpdateRelease?) -> Bool {
         guard let latest else { return false }
         return latest.tag == staged.tag && latest.build == staged.build
+            && latest.assetName == staged.assetName && latest.dmgURL == staged.dmgURL
+            && latest.sha256 == staged.sha256
     }
 
     enum CheckStep: Equatable { case upToDate, rejected, stage }
@@ -606,9 +654,16 @@ enum UpdateWork {
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("FFXI-on-Mac", forHTTPHeaderField: "User-Agent")
         let (data, resp) = try await session.data(for: req)
+        return try latestRelease(data: data, statusCode: (resp as? HTTPURLResponse)?.statusCode ?? -1)
+    }
+
+    /// A 404 from the public latest-release endpoint means nothing is published now. Treating
+    /// it as an offline error would let Restart install a release withdrawn since staging.
+    static func latestRelease(data: Data, statusCode: Int) throws -> UpdateRelease? {
+        if statusCode == 404 { return nil }
         // A rate limit or server error is not evidence that this app is current.
-        guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else {
-            throw UpdateFailure.transient("GitHub answered HTTP \((resp as? HTTPURLResponse)?.statusCode ?? -1)")
+        guard statusCode == 200 else {
+            throw UpdateFailure.transient("GitHub answered HTTP \(statusCode)")
         }
         guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw UpdateFailure.transient("GitHub returned an unreadable release")

@@ -3,8 +3,8 @@
 // VanaguideCompanion — the Completionist's Guide as a completely separate GUI app for worlds
 // whose addon allowlist excludes Vanaguide. It never injects into the client, never reads game
 // memory, and never sniffs packets: it walks the same guide files manually, with the player
-// pressing Next/Back/Done (the /vg next equivalent). Screenshot-OCR auto-advance comes later;
-// see ../vanaguide/docs/COMPANION_APP.md.
+// pressing Next/Back/Done (the /vg next equivalent). Optional local screenshot OCR selects a
+// matching quest section, without completing steps or controlling the game.
 //
 // RetroAchievements: progress is read from the snapshot the FFXI-on-Mac launcher writes (see
 // Achievements.swift); the companion itself never goes online.
@@ -21,10 +21,17 @@ struct CompanionApp: App {
         if CommandLine.arguments.contains("--selftest-parser") {
             CompanionSelfTest.run()
         }
+        // A second user-launched copy exits quietly. It must never create another capture
+        // timer, re-open the game or move focus away from an existing play session.
+        if let identifier = Bundle.main.bundleIdentifier,
+           NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
+            .contains(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
+            exit(0)
+        }
     }
 
     var body: some Scene {
-        WindowGroup("Vanaguide Companion") {
+        Window("VanaGuide Server-Safe", id: "guide") {
             CompanionView()
         }
         .windowResizability(.contentSize)
@@ -36,6 +43,9 @@ final class CompanionState: ObservableObject {
     @Published var selected: Int = 0
     @Published var stepIndex: Int = 0
     @Published var sourceNote = ""
+    @Published var screenshotMatchNote = ""
+    private var catalogue: [CatalogueEntry] = []
+    private var screenshotTracker = ScreenshotMatchTracker()
 
     @Published var achievementSets: [AchievementSetView] = []
     @Published var selectedSet: Int?
@@ -74,13 +84,17 @@ final class CompanionState: ObservableObject {
     func reload() {
         let fm = FileManager.default
         guides = []
+        catalogue = []
         sourceNote = "no guide files found"
         for root in Self.vanaguideRoots {
             let g = root.appendingPathComponent("guides")
             guard fm.fileExists(atPath: g.path) else { continue }
             let loaded = GuideParser.loadAll(from: g)
-            if !loaded.isEmpty {
+            let entries = QuestCatalogue.entries(at: root)
+            if !loaded.isEmpty || !entries.isEmpty {
                 guides = loaded
+                catalogue = entries
+                guides += QuestCatalogue.referenceGuides(catalogue)
                 sourceNote = root.path.contains("/Resources/") ? "bundled guides" : "development checkout"
                 break
             }
@@ -96,6 +110,26 @@ final class CompanionState: ObservableObject {
             }
         }
         reloadProgress(force: true)
+    }
+
+    func resetScreenshotMatching() {
+        screenshotTracker = ScreenshotMatchTracker()
+        screenshotMatchNote = ""
+    }
+
+    /// Two consecutive unique matches select a section. Existing progress stays manual.
+    func readScreenshotText(_ text: String) {
+        let match = ScreenshotGuideMatcher.match(text: text, entries: catalogue, guides: guides)
+        guard let confirmed = screenshotTracker.observe(match) else { return }
+        // Keep a player's more advanced manual checkpoint in an already selected route.
+        if ScreenshotGuideMatcher.preservesCheckpoint(currentGuide: selected, currentStep: stepIndex,
+                                                      match: confirmed, guides: guides) {
+            screenshotMatchNote = "Recognized \(confirmed.title)."
+            return
+        }
+        selected = confirmed.guide
+        stepIndex = confirmed.step
+        screenshotMatchNote = "Opened \(confirmed.title)."
     }
 
     /// Re-read the snapshot when it changed on disk. File reads only.
@@ -146,10 +180,14 @@ final class CompanionState: ObservableObject {
 
 struct CompanionView: View {
     @StateObject var state = CompanionState()
+    @StateObject private var capture = ScreenGuideCapture()
     @State private var tab = 0
+    @State private var showScreenshotSettings = false
 
     var body: some View {
         VStack(spacing: 0) {
+            screenshotControls
+            Divider()
             Picker("", selection: $tab) {
                 Text("Guides").tag(0)
                 Text("Achievements").tag(1)
@@ -163,6 +201,68 @@ struct CompanionView: View {
         }
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
             state.reloadProgress()
+        }
+        .onAppear { capture.receivedText = { state.readScreenshotText($0) } }
+        .onDisappear { capture.stop() }
+    }
+
+    var screenshotControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Button(showScreenshotSettings ? "Hide screenshot settings" : "Screenshot settings…") {
+                    showScreenshotSettings.toggle()
+                }
+                if capture.running {
+                    Text("Reading chat · 10s").font(.caption).foregroundStyle(.green)
+                    Button("Stop") { capture.stop() }
+                }
+                Spacer()
+                if !state.screenshotMatchNote.isEmpty {
+                    Text(state.screenshotMatchNote).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if showScreenshotSettings {
+                Text("Local screenshots only. Use this mode where your server permits it.")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Button("Find game windows") { capture.refreshWindows() }.disabled(capture.running || capture.busy)
+                    Picker("Game window", selection: $capture.selectedID) {
+                        Text("Choose…").tag(Optional<CGWindowID>.none)
+                        ForEach(capture.windows) { window in Text(window.label).tag(Optional(window.id)) }
+                    }
+                    .disabled(capture.running)
+                }
+                HStack(spacing: 10) {
+                    Text("Chat area (%)").font(.caption)
+                    cropField("Left", value: $capture.crop.left)
+                    cropField("Top", value: $capture.crop.top)
+                    cropField("Width", value: $capture.crop.width)
+                    cropField("Height", value: $capture.crop.height)
+                }
+                .disabled(capture.running)
+                if !capture.running {
+                    HStack {
+                        Spacer()
+                        Button("Start reading chat") {
+                            state.resetScreenshotMatching()
+                            capture.start()
+                            tab = 0
+                        }
+                        .disabled(capture.selectedID == nil || !capture.crop.valid || capture.busy)
+                    }
+                }
+                if !capture.note.isEmpty { Text(capture.note).font(.caption).foregroundStyle(.secondary) }
+            }
+        }
+        .padding(10)
+    }
+
+    func cropField(_ label: String, value: Binding<Double>) -> some View {
+        HStack(spacing: 4) {
+            Text(label).font(.caption)
+            TextField(label, value: value, format: .number.precision(.fractionLength(0...1)))
+                .frame(width: 48)
+                .textFieldStyle(.roundedBorder)
         }
     }
 
