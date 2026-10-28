@@ -1,7 +1,9 @@
 # Isolated local gameplay test — readiness checked 2026-10-28
 
-This is a preparation plan, **not a record of a completed gameplay test**. The readiness
-inspection was read-only. No database, server, Wine process or client was started.
+The initial readiness inspection was read-only. A private lab was subsequently prepared and
+a bounded login attempt, followed by one corrected launch that kept its parent session
+alive, was made. **No sequential quest, arrow, live OCR or game-dialogue narration test has
+passed.** See the live-test result below before repeating any startup instructions.
 
 ## What is available
 
@@ -16,8 +18,8 @@ inspection was read-only. No database, server, Wine process or client was starte
 | Current processes | No native LSB server, MariaDB or Windows `.exe` client was present during the inspection. Recheck immediately before any future launch. |
 | Space | Approximately 13 GiB internal and 301 GiB external free. The old complete Wine prefix is about 5.3 GiB, so copying it wholesale into Downloads would breach the project's 8 GiB free-space floor. |
 
-There is no demonstrated missing-binary blocker. A **private, bounded test environment still
-needs preparation**. The existing shared game and database must stay unchanged. Missing
+There is no demonstrated missing-binary blocker. A **private, bounded test environment is
+now prepared under Downloads**. The existing shared game and database must stay unchanged. Missing
 addons in the shared install are not permission to install them there for this test.
 
 ## Prepare under Downloads
@@ -34,8 +36,11 @@ print loader arguments or credential-bearing configuration.
    generated state; read-only source scripts, navmeshes and binaries can be symlinked from
    the existing checkout after checking their write behavior. The settings loader reads
    `./settings/` relative to the working directory. All logs and generated output belong
-   in Downloads. Point the copied settings at the private database and bind every listener
-   to loopback, including the map and HTTP listeners. Validate paths before launch.
+   in Downloads. Point copied settings and advertised addresses at the private loopback database/world.
+   Verify actual sockets: this native server build still binds some listeners to wildcard
+   addresses despite those settings. Use synthetic private fixtures, a loopback client and
+   a bounded run; stop the owned server processes afterward. Do not claim settings alone
+   restrict every listener. Validate paths before launch.
 3. Create a private Wine prefix with copied registry files and writable system/profile
    directories. Keep `drive_c/HorizonXI` as the game folder to preserve existing registry
    paths. Omit unrelated launchers, logs, screenshots, caches and backups. Audit copied
@@ -52,7 +57,7 @@ print loader arguments or credential-bearing configuration.
    `--server 127.0.0.1`; use only local test credentials and load only the required test
    addons. Preserve maximum graphics settings. Do not copy hosted boot scripts into the lab.
 6. Measure actual prepared size and free space before proceeding. Aim for a roughly
-   2–3 GiB filtered lab, but this estimate is unverified. Stop preparation before internal
+   2–3 GiB filtered lab (the prepared lab measured about 1.9 GiB). Stop preparation before internal
    free space drops below 8 GiB. Do not reclaim space by deleting other projects or caches.
 
 The fastest safe path reuses installed binaries and static assets. It does not need a new
@@ -62,10 +67,16 @@ server build, runtime migration, full game download or complete 5.3 GiB prefix c
 
 - Recheck that no hosted client, second local client, original database or LSB server runs.
   Check the required loopback ports before starting anything.
-- Start the private database and the four server binaries **once**, recording their own PIDs
+- Start the private database and required server binaries **once**, recording their own PIDs
   and log paths. Avoid `scripts/lsb-server.sh start`: it automatically launches a persistent
   restart watchdog, and writes into the original root unless redirected. Do not create any
   watchdog or relaunch loop for this test.
+- Keep short-lived launchers inside a held managed terminal session. Background children
+  can disappear when the tool's parent shell exits; `nohup`/`disown` alone did not keep
+  the first database attempt alive here. One client launcher followed by a blocking terminal
+  `read` keeps its parent alive without an automatic retry or polling loop. Release that
+  terminal only after verifying the actual game client has exited. The quest lab used
+  connect/world/map, leaving the unneeded search service stopped.
 - The existing map binary contains `--lazy` (development-only zone loading). It can reduce
   the cost of loading all 300 zones for a small local test; its behavior still needs checking
   in the copied environment. It is not evidence about launcher/game performance.
@@ -86,6 +97,47 @@ server build, runtime migration, full game download or complete 5.3 GiB prefix c
 - Finish the client through `/shutdown`, confirm its normal exit, then stop only the test
   server and database processes recorded for this run. Never signal a game client. Leave the
   original shared prefix, boot profiles, addons, branding and database unchanged.
+
+## Live-test result and remaining blocker
+
+The prepared Downloads lab retained about 11.5 GiB internal free space. Its private database
+started as MariaDB 12.3.2 with 127 tables. A loopback application grant and one renamed
+synthetic fixture were created **only in that copied database**. The game used the existing
+patched `wine-coop`, unchanged copied D3D8/D3D9 binaries, the existing MoltenVK, NX compatibility
+and cooperative x87 configuration. The custom pointer file was recovered unchanged from
+local Git's `origin/ashita-signature-repair`, avoiding a stalled iCloud placeholder read.
+No shared game/profile/database files were changed.
+
+The loader authenticated to `127.0.0.1`; the local map server recorded the fixture entering
+zone 230. On the corrected held launch the guard verified exactly one loopback loader in
+the private game folder. Ashita's log showed Addons 4.20 loaded and the custom outgoing-packet
+and key-item signatures resolving successfully. These facts do **not** prove a usable
+in-world client.
+
+Current guide/status commands were consumed from the private command file, but its chat
+capture remained empty. The map later timed out and removed the fixture session. A read-only
+socket/stack inspection found no map UDP socket and idle Cocoa/DXVK activity. A disconnect,
+loading or error screen is a plausible explanation, not a visually confirmed diagnosis.
+The `Unknowxx_x` client-version warning is nonfatal with the copied `VER_LOCK = 0`, so it is
+not by itself a diagnosis. No quest acceptance or game-dialogue narration was demonstrated.
+
+Standard guarded `/shutdown`, followed by the confirmed local GM `!release` and another
+`/shutdown`, did not produce a verified normal client exit. After confirming zero fixture
+database sessions and the exact private loader identity, a private-prefix `tasklist` identified
+its Windows PID. A single `taskkill /PID <id>` request **without `/F` or `/T`** reported that
+it sent a normal close message to that process's top-level windows. Full guard inventory then
+confirmed zero game clients. This cleanup is separate from a successful in-game logout.
+
+The held launcher was released after that exit. Only the recorded private native servers
+were stopped, after checking their executable identity and working directory; the copied
+database completed normal shutdown through its private socket. Private-prefix `wineserver -w`
+returned normally. No client signal, forced task termination or wineserver kill was used.
+The lab remains on disk for diagnosis; its test processes are stopped.
+
+The native UI service was unavailable. No screenshot, focus action, blind key or guessed
+packet was used. Future work should inspect the client's visible state and resolve the
+missing current addon/chat response before attempting any quest run. Keep exact fixture
+identifiers and private evidence in Downloads, outside Git.
 
 ## Evidence required before claiming success
 

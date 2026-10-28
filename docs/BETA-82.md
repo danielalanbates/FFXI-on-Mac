@@ -121,3 +121,57 @@ The native computer-use service returned `Trusted RPC service is not configured:
 No visual, screen-capture, audible speech or live character test is claimed from these
 checks. The private local-LSB preparation path is in [LOCAL-LSB-TEST-PLAN.md](LOCAL-LSB-TEST-PLAN.md).
 No hosted server was used for addon, bot or capture testing. No public binary release was made.
+
+## Installed beta — 2026-10-28
+
+Installed Developer-ID-signed **3.10 build 82** at `/Applications/FFXI-on-Mac.app`, including
+its nested guide. Installed the matching separate `/Applications/VanaGuide Server-Safe.app`.
+Both pass strict deep signature verification; the installed companion's headless fixture
+passes. The launcher's Info.plist records launcher `d5fe977`, VanaGuide `5015f9a` and
+VanaVoice `5d3fffa`. `/Applications/VanaVoice.app` remains the verified 1.5.1 installed in
+the preceding pass. None of these installation scripts opened a GUI or started capture.
+
+The previous playable **3.10 build 80** is retained at
+`~/Downloads/FFXI-on-Mac-build/archive-apps/FFXI-on-Mac-3.10-b80-20261028-072830.app`.
+A live embedded-guide stand-in caused the source installer to refuse replacement before
+building; the installed launcher binary's hash remained unchanged.
+
+Source review: [launcher #59](https://github.com/danielalanbates/FFXI-on-Mac/pull/59),
+[VanaGuide #21](https://github.com/danielalanbates/vanaguide/pull/21), and
+[VanaVoice #10](https://github.com/danielalanbates/vanavoice/pull/10).
+Source publication and local installation do not close the live gameplay release gates.
+
+## Narration smoke check — 2026-10-28
+
+A private, bounded 25-second probe used copied production Config/AddonTail/Narrator sources,
+with only lab-local logging and speech delegate instrumentation. Two synthetic dialogue
+records reached the queue; both were submitted, started and finished, in order, using the
+same Apple Samantha voice at 0.35 volume. No cancellations occurred; the probe exited 0.
+It did not load/save the user's settings, launch VanaVoice's GUI, use OCR or start Piper.
+This verifies the local speech backend's callbacks, not actual NPC dialogue, the installed
+GUI, physical speaker output, quest progression, or cutscene coverage. The private probe and
+its raw evidence stay in Downloads, outside the source repositories.
+
+## Private local-world attempt — 2026-10-28
+
+Prepared a 2.1 GiB Downloads-only lab with a copied database, filtered Wine prefix, private
+writable client files and current addon sources. Static game assets point to the existing
+payload; writable source profiles, addons and the original database were not modified.
+The copied database authenticated successfully and the native connect/world/map services
+started. The client used the existing patched Wine/DXVK/MoltenVK/x87 stack and an explicit
+loopback endpoint. No hosted server was used. See [the detailed attempt record](LOCAL-LSB-TEST-PLAN.md).
+
+The first managed launcher completed before its descendants could be inspected. A corrected
+held-parent launch reached authentication; the server recorded the private fixture loading
+zone 230, then later cleared its session. The guard verified the sole loader and private
+working directory. Commands were consumed but no current guide/chat output appeared, so
+quest acceptance, objectives, visible arrows and real NPC narration were **not verified**.
+The nonfatal unknown-client-version log is not sufficient evidence of the cause; no runtime
+or signature patch was invented from it. Native visual inspection remains unavailable.
+
+For cleanup, guarded `/shutdown` (including one standard local `!release` followed by
+`/shutdown`) did not exit the disconnected client. After both database/map session counts
+were zero, an exact-PID, non-force Wine normal-close request closed its windows. No `/F`,
+process-tree close, game signal or force termination was used. The guard then confirmed zero
+clients. The private native services and database stopped; the private wineserver exited
+naturally. The lab is retained, stopped, with identifying evidence outside Git.
