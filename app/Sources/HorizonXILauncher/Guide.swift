@@ -14,7 +14,13 @@ import AppKit
 enum Guide {
     /// Separate, user-opened GUI. Keeping a copy inside the launcher also lets a launcher
     /// update carry the matching guide UI without installing an unapproved game addon.
+    /// Server-Safe needs macOS 14 (ScreenCaptureKit screenshots); its bundle says so too.
+    static var companionSupported: Bool {
+        ProcessInfo.processInfo.isOperatingSystemAtLeast(OperatingSystemVersion(majorVersion: 14, minorVersion: 0, patchVersion: 0))
+    }
+
     static var companionURL: URL? {
+        guard companionSupported else { return nil }
         let candidates = [
             Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/VanaGuide Server-Safe.app"),
             URL(fileURLWithPath: "/Applications/VanaGuide Server-Safe.app"),

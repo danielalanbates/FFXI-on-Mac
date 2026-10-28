@@ -124,6 +124,17 @@ extension CompanionSelfTest {
                                                 "Airship to Jeuno (Port San d'Oria counter) (needs an Airship Pass)"]))
         checks.append(("already there is an empty route", map.route(from: 232, to: 232) == []))
         checks.append(("NPC names drop underscores", "Fyi_Chalmwoh".npcDisplay == "Fyi Chalmwoh"))
+        checks.append(("speakers are read from NPC lines, not system lines",
+                       LearnedData.speakers(in: "Gulemont : Ahhh!\n=== Area: Port San d'Oria ===\nObtained: Gil\n[1] Labguide : hi\nPortaure : Well, well...")
+                           == ["Gulemont", "Portaure"]))
+        var learned = LearnedData()
+        _ = learned.hear("Gulemont : Ahhh!", zone: 232)
+        _ = learned.hear("Gulemont : Ahhh!", zone: 232)
+        learned.givers["Q:sandoria,10"] = LearnedGiver(npc: "Balasiel", zone: 230, recorded: Date(timeIntervalSince1970: 0))
+        let exported = learned.export(entries: entries, zoneName: { "zone \($0)" }, date: Date(timeIntervalSince1970: 0))
+        checks.append(("heard speakers are counted per zone", learned.speakers["Gulemont"]?["232"] == 2))
+        checks.append(("export writes mergeable guide data",
+                       exported.contains("[10] = { name = 'A Squire\\'s Test', zone = 230, npc = 'Balasiel' },")))
         checks.append(("bottom chat crop scales to screenshot pixels",
                        ChatCrop().rect(width: 1600, height: 1000) == CGRect(x: 0, y: 650, width: 1600, height: 350)))
         checks.append(("invalid and nonfinite crop values are refused",

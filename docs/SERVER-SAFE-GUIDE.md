@@ -58,7 +58,8 @@ progress snapshot feature. No AI service or token spend is required for screensh
 - Dialogue rarely contains the quest's exact title, so speaker matching does most of the work.
   NPCs with no recorded quest, or quests with no recorded giver, do not trigger. Show the relevant quest/mission log title or select the section manually. Low OCR
   confidence, a cropped title, non-English text or small type can prevent matching.
-- Screenshot mode requires macOS 14 or later; the manual companion remains available on macOS 13.
+- Server-Safe requires an Apple Silicon Mac on macOS 14 (Sonoma) or later (b88), so every copy
+  has Screen Reading. The launcher still runs on macOS 13 and greys out Server-Safe there.
   ScreenCaptureKit supplies a window-only image and Vision performs OCR on a utility task. Captures
   do not overlap if OCR takes longer than the 10-second interval.
 
@@ -132,3 +133,26 @@ The current zone comes only from the game's own `=== Area: … ===` chat line, s
 Reading. Without it, the card says where to go and suggests turning Screen Reading on.
 Coordinates are no longer shown. Not done yet: map-grid hints ("F-7") inside a zone, which
 need per-zone map offsets the data does not have.
+
+## How screenshots are read
+
+| Stage | Technology | Where it runs |
+|---|---|---|
+| Capture | ScreenCaptureKit, the chosen game window only, every 10 s | this Mac |
+| Crop | chat area, or the whole window on Getting Started steps | this Mac |
+| Text | Apple Vision `VNRecognizeTextRequest` (accurate, en-US, no language correction, ≥ 0.6 confidence) | on-device |
+| Match | quest/mission titles, quest-giver speakers, `Area:` line, log pages | this Mac |
+
+Images and text are discarded after matching. No AI service, upload or token spend.
+
+## Developer Mode (b88)
+
+**Developer** (header) records quest givers while you play with Screen Reading on:
+the zone from the `Area:` line, and every `Name : …` speaker. On a quest step, click a heard
+name to save it as that quest's giver in the current zone; the step card uses it at once
+("Location recorded in Developer Mode"). Saved in
+`~/Library/Application Support/VanaGuide Server-Safe/learned.json`.
+**Export to Downloads** writes `vanaguide-learned-<time>.lua`: one
+`[id] = { name = …, zone = …, npc = … },` line per quest, labelled by log and area, ready to
+merge into the addon's `data/quests.lua` / `data/missions.lua`. Player /say lines also look
+like speakers; only the name you click is saved as a giver.
