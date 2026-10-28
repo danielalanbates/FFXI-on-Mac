@@ -36,9 +36,13 @@ struct CaptureWindow: Identifiable, Equatable {
 enum GameWindowIdentity {
     /// A browser, terminal or editor can have "FFXI" in its title. Require independent OS app
     /// identity as well. Exact allowlists deliberately prefer no match over arbitrary capture.
-    static func matches(title: String, owner: String, bundle: String, executable: String) -> Bool {
+    /// `gameProcess`: the window's process runs an FFXI loader or client (see `isGameProcess`).
+    /// Private servers title the window with the character's name, so the title alone misses it.
+    static func matches(title: String, owner: String, bundle: String, executable: String,
+                        gameProcess: Bool = false) -> Bool {
         let title = title.lowercased()
-        guard title.contains("ffxi") || title.contains("final fantasy xi") || title.contains("horizonxi") else {
+        guard gameProcess || title.contains("ffxi") || title.contains("final fantasy xi")
+                || title.contains("horizonxi") else {
             return false
         }
         let names: Set<String> = ["wine", "wine64", "wine-preloader", "wine64-preloader",
@@ -49,6 +53,21 @@ enum GameWindowIdentity {
             text.replacingOccurrences(of: "\\", with: "/").split(separator: "/").last.map(String.init)?.lowercased() ?? ""
         }
         return names.contains(basename(owner)) || names.contains(basename(executable)) || bundles.contains(bundle.lowercased())
+    }
+
+    static let loaders = ["horizon-loader.exe", "xiloader.exe", "gxiloader.exe", "catseye-loader.exe",
+                          "pol.exe", "ffximain.exe"]
+
+    /// True when the process's arguments name an FFXI loader or client. The arguments can hold
+    /// a login password, so they are only scanned here: never stored, logged or displayed.
+    static func isGameProcess(_ pid: pid_t) -> Bool {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 0 else { return false }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return false }
+        let text = String(decoding: buffer.prefix(size).map { $0 == 0 ? 32 : $0 }, as: UTF8.self).lowercased()
+        return loaders.contains { text.contains($0) }
     }
 }
 
@@ -65,6 +84,7 @@ final class ScreenGuideCapture: ObservableObject {
     private var timer: Timer?
     private var session = UUID()
     private var target: CaptureWindow?
+    private var ocrFailures = 0
     var receivedText: ((String) -> Void)?
 
     func refreshWindows() {
@@ -100,7 +120,8 @@ final class ScreenGuideCapture: ObservableObject {
         guard bundle != "org.batesai.horizonxi-on-mac" else { return false }
         let executable = NSRunningApplication(processIdentifier: owner.processID)?.executableURL?.lastPathComponent ?? ""
         return GameWindowIdentity.matches(title: window.title ?? "", owner: owner.applicationName,
-                                          bundle: bundle, executable: executable)
+                                          bundle: bundle, executable: executable,
+                                          gameProcess: GameWindowIdentity.isGameProcess(owner.processID))
     }
 
     func start() {
@@ -113,6 +134,7 @@ final class ScreenGuideCapture: ObservableObject {
         }
         self.target = target
         session = UUID()
+        ocrFailures = 0
         running = true
         note = "Reading the selected chat area every 10 seconds."
         // First sample is immediate; subsequent samples never overlap a pending capture/OCR.
@@ -143,7 +165,7 @@ final class ScreenGuideCapture: ObservableObject {
                 guard session == token, running else { return }
                 guard let window = content.windows.first(where: {
                     $0.windowID == target.id && $0.owningApplication?.processID == target.pid
-                        && $0.title == target.title && Self.isGameWindow($0)
+                        && Self.isGameWindow($0)
                 }) else { stop(note: "The selected game window changed or closed. Choose it again."); return }
                 let config = SCStreamConfiguration()
                 config.width = Int(window.frame.width)
@@ -159,7 +181,9 @@ final class ScreenGuideCapture: ObservableObject {
                     stop(note: "Choose a valid chat area.")
                     return
                 }
-                let text = try await Task.detached(priority: .utility) {
+                // Vision occasionally fails one request on the Neural Engine and succeeds on the
+                // next (seen 2026-10-28). Skip that sample; stop only when it keeps failing.
+                let ocr = Task.detached(priority: .utility) { () throws -> String in
                     let request = VNRecognizeTextRequest()
                     request.recognitionLevel = .accurate
                     request.recognitionLanguages = ["en-US"]
@@ -170,7 +194,16 @@ final class ScreenGuideCapture: ObservableObject {
                               candidate.confidence >= 0.6 else { return nil }
                         return candidate.string
                     }.joined(separator: "\n")
-                }.value
+                }
+                let text: String
+                do { text = try await ocr.value } catch {
+                    guard session == token, running else { return }
+                    ocrFailures += 1
+                    if ocrFailures >= 3 { stop(note: "Text recognition keeps failing. Try Start again.") }
+                    else { note = "Skipped one unreadable sample." }
+                    return
+                }
+                ocrFailures = 0
                 guard session == token, running else { return }
                 receivedText?(text)
             } catch {

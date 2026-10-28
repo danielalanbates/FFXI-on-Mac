@@ -91,8 +91,9 @@ enum ScreenshotGuideMatcher {
             .filter { !$0.isEmpty }.joined(separator: " ")
     }
 
-    /// Exact normalized title, with word boundaries; no fuzzy guesses from NPC names or item
-    /// chatter. A single short word such as "Dawn" requires an explicit quest/mission label.
+    /// Exact normalized title, with word boundaries; no fuzzy guesses from item chatter. A single
+    /// short word such as "Dawn" requires an explicit quest/mission label. Without a title, an
+    /// exact quest-giver speaker name is the fallback (see speakerMatch).
     static func match(text: String, entries: [CatalogueEntry], guides: [Guide]) -> ScreenshotGuideMatch? {
         let lines = text.components(separatedBy: .newlines).map(normalized).filter { !$0.isEmpty }
         guard !lines.isEmpty else { return nil }
@@ -114,12 +115,39 @@ enum ScreenshotGuideMatcher {
             if found { hits.append(entry) }
         }
         // The same name in multiple logs, or several names on one screenshot, is ambiguous.
-        guard hits.count == 1, let entry = hits.first else { return nil }
+        if hits.count > 1 { return nil }
+        if let entry = hits.first { return locate(entry, title: entry.name, guides: guides) }
+        return speakerMatch(text: text, entries: entries, guides: guides)
+    }
+
+    /// FFXI rarely prints a quest's title, but every NPC line starts with the speaker:
+    /// "Gulemont : Ahhh, now I've gone and done it!".  When the speaker's whole name is a
+    /// recorded quest giver, open that NPC's quest.  The newest speaker line wins; a giver of
+    /// several quests opens the first and says how many, rather than guessing which one.
+    static func speakerMatch(text: String, entries: [CatalogueEntry], guides: [Guide]) -> ScreenshotGuideMatch? {
+        var givers: [String: [CatalogueEntry]] = [:]
+        for entry in entries {
+            guard let npc = entry.data["npc"]?.string else { continue }
+            let name = normalized(npc)
+            if !name.isEmpty { givers[name, default: []].append(entry) }
+        }
+        for line in text.components(separatedBy: .newlines).reversed() {
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let speaker = normalized(String(line[..<colon]))
+            guard let offered = givers[speaker], let first = offered.first else { continue }
+            let title = offered.count == 1 ? first.name
+                : "\(first.name) (\(String(line[..<colon]).trimmingCharacters(in: .whitespaces)) offers \(offered.count))"
+            return locate(first, title: title, guides: guides)
+        }
+        return nil
+    }
+
+    private static func locate(_ entry: CatalogueEntry, title: String, guides: [Guide]) -> ScreenshotGuideMatch? {
         for (gi, guide) in guides.enumerated() {
             for (si, step) in guide.steps.enumerated() {
                 let tags = entry.mission ? ["M", "MA"] : ["Q", "QA"]
                 if tags.contains(where: { step.tags[$0] == entry.tag }) {
-                    return ScreenshotGuideMatch(key: entry.key, title: entry.name, guide: gi, step: si)
+                    return ScreenshotGuideMatch(key: entry.key, title: title, guide: gi, step: si)
                 }
             }
         }
