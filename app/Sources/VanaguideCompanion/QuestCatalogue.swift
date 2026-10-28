@@ -55,15 +55,14 @@ enum QuestCatalogue {
         return titles.map { title in
             let steps = (groups[title] ?? []).map { entry in
                 let d = entry.data
-                var note = d["npc"]?.string.map { "Talk to \($0). " } ?? ""
-                if let level = d["level"]?.int { note += "Level \(level). " }
-                if d["zone"]?.int == nil { note += "No location recorded. " }
-                note += "Reference target; confirm prerequisites and progress in game."
-                return GuideStep(kind: "C", title: entry.name, zone: d["zone"]?.int,
-                                 posX: number(d["x"]), posZ: number(d["z"]), note: note,
-                                 fixed: true, tags: [entry.mission ? "M" : "Q": entry.tag])
+                var tags = [entry.mission ? "M" : "Q": entry.tag]
+                if let npc = d["npc"]?.string { tags["NPC"] = npc }
+                if let level = d["level"]?.int { tags["LV"] = String(level) }
+                return GuideStep(kind: entry.mission ? "M" : "Q", title: entry.name, zone: d["zone"]?.int,
+                                 posX: number(d["x"]), posZ: number(d["z"]), note: nil,
+                                 fixed: true, tags: tags)
             }
-            return Guide(name: title, desc: "Every recorded target in this log, from the bundled database. Order is by ID, not a route.",
+            return Guide(name: title, desc: "Every quest or mission in this log. Work down the list; Next Unfinished skips ones you have done.",
                          levels: "", steps: steps, isReference: true)
         }
     }

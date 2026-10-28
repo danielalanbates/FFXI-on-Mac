@@ -109,6 +109,21 @@ extension CompanionSelfTest {
                        QuestCatalogue.displayName("Support jobs - Mhaura") == "Support Jobs — Mhaura"
                            && QuestCatalogue.displayName("San d'Oria - every quest") == "San d'Oria — Every Quest"
                            && QuestCatalogue.displayName("Starting out") == "Starting Out"))
+        let map = WorldMap.parse(
+            names: "local Z = {}\nZ.name = { [230] = 'Southern San d\\'Oria', [231] = 'Northern San d\\'Oria', [232] = 'Port San d\\'Oria', [246] = 'Port Jeuno' }\nZ.id = {}",
+            zonelines: "local Z = {}\nZ.walk = { { 230, 231 }, { 231, 232 } }",
+            travel: "local T = {}\nT.transit = { { from = 232, to = 246, via = 'Airship to Jeuno (Port San d\\'Oria counter)', cost = 420, pass = true } }\nreturn T")
+        checks.append(("zones are shown by name, never by number",
+                       map.name(232) == "Port San d'Oria" && map.name(nil) == "an unrecorded place"
+                           && map.name(9999) == "an unnamed zone"))
+        checks.append(("the current zone comes from the game's Area line",
+                       map.zone(inChat: "Labguide : hi\n=== Area: Northern San d'Oria ===") == 231))
+        let hops = map.route(from: 230, to: 246) ?? []
+        checks.append(("routes walk zone to zone, then take transit, in plain words",
+                       map.directions(hops) == ["Walk to Northern San d'Oria", "Walk to Port San d'Oria",
+                                                "Airship to Jeuno (Port San d'Oria counter) (needs an Airship Pass)"]))
+        checks.append(("already there is an empty route", map.route(from: 232, to: 232) == []))
+        checks.append(("NPC names drop underscores", "Fyi_Chalmwoh".npcDisplay == "Fyi Chalmwoh"))
         checks.append(("bottom chat crop scales to screenshot pixels",
                        ChatCrop().rect(width: 1600, height: 1000) == CGRect(x: 0, y: 650, width: 1600, height: 350)))
         checks.append(("invalid and nonfinite crop values are refused",
@@ -141,6 +156,14 @@ extension CompanionSelfTest {
             checks.append(("real database produces manual reference sections",
                            QuestCatalogue.referenceGuides(real).flatMap(\.steps).count == real.count
                                && QuestCatalogue.referenceGuides(real).flatMap(\.steps).allSatisfy(\.fixed)))
+            let world = WorldMap.load(root: URL(fileURLWithPath: path))
+            checks.append(("real zone names and routes load",
+                           world.names.count > 250 && world.name(232) == "Port San d'Oria"
+                               && world.route(from: 230, to: 232) != nil
+                               && (world.route(from: 230, to: 246)?.isEmpty == false)))
+            let located = real.filter { $0.data["zone"]?.int != nil }
+            checks.append(("every located quest names a known zone",
+                           located.allSatisfy { world.names[$0.data["zone"]!.int!] != nil }))
         }
         return checks
     }
