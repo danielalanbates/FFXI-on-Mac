@@ -605,7 +605,14 @@ enum RARefresh {
                 return Outcome(error: .badResponse("could not write \(url.lastPathComponent): \(error.localizedDescription)"),
                                notes: notes)
             }
-            if let registry { RASnapshotStore.register(url, registry: registry) }
+            if let registry {
+                RASnapshotStore.register(url, registry: registry)
+                // VanaGuide Server-Safe cannot read a game folder on a drive that needs Full Disk
+                // Access (x10, 2026-10-28: "No achievements to show"), so it gets its own copy.
+                if let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+                    try? RASnapshotStore.write(snap, to: base.appendingPathComponent("VanaGuide Server-Safe/\(RetroAchievements.snapshotFileName)"))
+                }
+            }
             return Outcome(snapshot: snap, notes: notes)
         } catch let e as RAError {
             return Outcome(error: e)

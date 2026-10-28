@@ -46,6 +46,14 @@ struct CompanionApp: App {
     }
 }
 
+/// Screen Reading (chat OCR, Getting Started, character detection) and Developer Mode are
+/// parked for a later phase (Daniel, 2026-10-28: "first focus on making this a wiki
+/// replacement"). The code stays and its self-tests still run; `--screen-reading` turns the
+/// UI back on for development.
+enum Features {
+    static let screenReading = CommandLine.arguments.contains("--screen-reading")
+}
+
 final class CompanionState: ObservableObject {
     @Published var guides: [Guide] = []
     @Published var selected: Int = 0
@@ -130,7 +138,7 @@ final class CompanionState: ObservableObject {
         remember()
         restoreZone()
         stepIndex = 0
-        selected = progress.entries.isEmpty ? 0 : min(1, max(guides.count - 1, 0))
+        selected = startGuide
     }
     private var screenshotTracker = ScreenshotMatchTracker()
 
@@ -158,7 +166,8 @@ final class CompanionState: ObservableObject {
 
     init() {
         // Someone who has used Screen Reading will again: load the recognizer now, not at Start.
-        if UserDefaults.standard.bool(forKey: "reading.used") { ScreenGuideCapture.warmUp() }
+        if !Features.screenReading { devMode = false }
+        if Features.screenReading, UserDefaults.standard.bool(forKey: "reading.used") { ScreenGuideCapture.warmUp() }
         reload()
         if let w = CharacterDiscovery.launcherWorld(), w != world {
             world = w
@@ -166,7 +175,7 @@ final class CompanionState: ObservableObject {
         }
         loadCharacter()
         // A character with nothing recorded starts on Getting started; others on their guides.
-        selected = progress.entries.isEmpty ? 0 : min(1, max(guides.count - 1, 0))
+        selected = startGuide
         // Developer preview: --open-guide "<name>" [--step <n>] [--zone <id>], for screenshots.
         let args = CommandLine.arguments
         func value(_ flag: String) -> String? {
@@ -203,7 +212,14 @@ final class CompanionState: ObservableObject {
         loadCharacter()
         restoreZone()
         stepIndex = 0
-        selected = progress.entries.isEmpty ? 0 : min(1, max(guides.count - 1, 0))
+        selected = startGuide
+    }
+
+    /// Getting Started (Screen Reading) for a character with nothing on record; otherwise the
+    /// first real guide.
+    var startGuide: Int {
+        guard Features.screenReading else { return 0 }
+        return progress.entries.isEmpty ? 0 : min(1, max(guides.count - 1, 0))
     }
 
     static func lastCharacter(on world: String) -> String {
@@ -218,7 +234,7 @@ final class CompanionState: ObservableObject {
         remember()
         restoreZone()
         stepIndex = 0
-        selected = progress.entries.isEmpty ? 0 : min(1, max(guides.count - 1, 0))
+        selected = startGuide
     }
 
     /// Keeps a chosen or discovered character in this server's list from now on.
@@ -379,7 +395,7 @@ final class CompanionState: ObservableObject {
             let entries = QuestCatalogue.entries(at: root)
             if !loaded.isEmpty || !entries.isEmpty {
                 zones = WorldMap.load(root: root)
-                guides = [LogSurvey.guide] + loaded.map { var g = $0; g.name = QuestCatalogue.displayName(g.name); return g }
+                guides = (Features.screenReading ? [LogSurvey.guide] : []) + loaded.map { var g = $0; g.name = QuestCatalogue.displayName(g.name); return g }
                 catalogue = entries
                 guides += QuestCatalogue.referenceGuides(catalogue)
                 sourceNote = root.path.contains("/Resources/") ? "bundled guides" : "development checkout"
@@ -491,7 +507,8 @@ final class CompanionState: ObservableObject {
                 ? "Progress for \(s.user) is from \(when), more than a day old: earned ones are shown, the rest are unknown until the launcher refreshes."
                 : "Progress for \(s.user) as of \(when)."
         } else {
-            progressNote = "No progress yet. Add your RetroAchievements username and key in FFXI on Mac › Setup & Diagnostics, then Refresh."
+            progressNote = paths.lazy.compactMap(ProgressSnapshot.problem).first
+                ?? "No progress yet. Add your RetroAchievements username and key in FFXI on Mac › Setup & Diagnostics, then Refresh."
         }
         achievementSets = AchievementMerge.merge(data: achievementData, snapshot: snapshot)
         if let sel = selectedSet, !achievementSets.contains(where: { $0.id == sel }) { selectedSet = nil }
@@ -523,7 +540,9 @@ final class CompanionState: ObservableObject {
 struct CompanionView: View {
     @StateObject var state = CompanionState()
     @StateObject private var capture = ScreenGuideCapture()
-    @State private var tab = 0
+    // --tab <n> (test hook) opens on another tab, e.g. 1 = Achievements, for --snapshot.
+    @State private var tab = CommandLine.arguments.firstIndex(of: "--tab")
+        .flatMap { CommandLine.arguments.indices.contains($0 + 1) ? Int(CommandLine.arguments[$0 + 1]) : nil } ?? 0
     @State private var showReading = false
     @State private var addingCharacter = false
     @State private var newCharacter = ""
@@ -605,7 +624,7 @@ struct CompanionView: View {
                 }
                 .pickerStyle(.segmented).labelsHidden().frame(width: 190)
                 Spacer()
-                readingStatus
+                if Features.screenReading { readingStatus }
             }
             HStack(spacing: 6) {
                 Picker("Server", selection: Binding(get: { state.world }, set: { state.selectWorld($0) })) {
