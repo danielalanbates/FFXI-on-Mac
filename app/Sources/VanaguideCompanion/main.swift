@@ -33,6 +33,8 @@ struct CompanionApp: App {
     var body: some Scene {
         Window("VanaGuide Server-Safe", id: "guide") {
             CompanionView()
+                .preferredColorScheme(.dark)
+                .tint(Theme.crystal)
         }
         .windowResizability(.contentSize)
     }
@@ -122,7 +124,7 @@ final class CompanionState: ObservableObject {
         let fallback = LogStatus(rawValue: step.tags["LOG"] ?? "")
         let reading = LogSurvey.read(text: text, entries: catalogue, fallback: fallback)
         guard let status = reading.status else {
-            surveyNote = "Open Current or Completed so the guide knows which list this is."
+            surveyNote = "Open Current Quests or Completed Quests so the guide knows which list this is."
             return
         }
         guard !reading.keys.isEmpty else {
@@ -224,7 +226,7 @@ final class CompanionState: ObservableObject {
                 ? "Progress for \(s.user) is from \(when), more than a day old: earned ones are shown, the rest are unknown until the launcher refreshes."
                 : "Progress for \(s.user) as of \(when)."
         } else {
-            progressNote = "No progress data. Set your RetroAchievements username and key in FFXI on Mac › Setup & Diagnostics, then Refresh."
+            progressNote = "No progress yet. Add your RetroAchievements username and key in FFXI on Mac › Setup & Diagnostics, then Refresh."
         }
         achievementSets = AchievementMerge.merge(data: achievementData, snapshot: snapshot)
         if let sel = selectedSet, !achievementSets.contains(where: { $0.id == sel }) { selectedSet = nil }
@@ -257,25 +259,21 @@ struct CompanionView: View {
     @StateObject var state = CompanionState()
     @StateObject private var capture = ScreenGuideCapture()
     @State private var tab = 0
-    @State private var showScreenshotSettings = false
+    @State private var showReading = false
+
+    static let width: CGFloat = 620
+    static let height: CGFloat = 460
 
     var body: some View {
-        VStack(spacing: 0) {
-            screenshotControls
-            Divider()
-            characterBar
-            Divider()
-            Picker("", selection: $tab) {
-                Text("Guides").tag(0)
-                Text("Achievements").tag(1)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 260)
-            .padding(8)
-            Divider()
-            if tab == 0 { guidesPane } else { achievementsPane }
+        VStack(spacing: 8) {
+            header
+            Group { if tab == 0 { guidesPane } else { achievementsPane } }
+                .frame(maxHeight: .infinity)
         }
+        .padding(10)
+        .frame(width: Self.width, height: Self.height)
+        .foregroundStyle(Theme.text)
+        .background(Theme.backdrop)
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
             state.reloadProgress()
         }
@@ -284,211 +282,252 @@ struct CompanionView: View {
         .onDisappear { capture.stop() }
     }
 
-    var screenshotControls: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Button(showScreenshotSettings ? "Hide screenshot settings" : "Screenshot settings…") {
-                    showScreenshotSettings.toggle()
+    // MARK: Header — tabs, character, screen reading
+
+    var header: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                Text("VanaGuide").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.gold)
+                Text("Server-Safe").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                Picker("", selection: $tab) {
+                    Text("Guides").tag(0)
+                    Text("Achievements").tag(1)
                 }
-                if capture.running {
-                    Text("Reading chat · 10s").font(.caption).foregroundStyle(.green)
-                    Button("Stop") { capture.stop() }
-                }
+                .pickerStyle(.segmented).labelsHidden().frame(width: 190)
                 Spacer()
-                if !state.screenshotMatchNote.isEmpty {
-                    Text(state.screenshotMatchNote).font(.caption).foregroundStyle(.secondary)
-                }
+                readingStatus
             }
-            if showScreenshotSettings {
-                Text("Local screenshots only. Use this mode where your server permits it.")
-                    .font(.caption).foregroundStyle(.secondary)
-                HStack {
-                    Button("Find game windows") { capture.refreshWindows() }.disabled(capture.running || capture.busy)
-                    Picker("Game window", selection: $capture.selectedID) {
-                        Text("Choose…").tag(Optional<CGWindowID>.none)
-                        ForEach(capture.windows) { window in Text(window.label).tag(Optional(window.id)) }
-                    }
-                    .disabled(capture.running)
-                }
-                HStack(spacing: 10) {
-                    Text("Chat area (%)").font(.caption)
-                    cropField("Left", value: $capture.crop.left)
-                    cropField("Top", value: $capture.crop.top)
-                    cropField("Width", value: $capture.crop.width)
-                    cropField("Height", value: $capture.crop.height)
-                }
-                .disabled(capture.running)
-                if !capture.running {
-                    HStack {
-                        Spacer()
-                        Button("Start reading chat") {
-                            state.resetScreenshotMatching()
-                            capture.start()
-                            tab = 0
-                        }
-                        .disabled(capture.selectedID == nil || !capture.crop.valid || capture.busy)
-                    }
-                }
-                if !capture.note.isEmpty { Text(capture.note).font(.caption).foregroundStyle(.secondary) }
+            HStack(spacing: 6) {
+                TextField("Character", text: $state.character).frame(width: 110)
+                    .onSubmit { state.loadCharacter() }
+                TextField("World", text: $state.world).frame(width: 110)
+                    .onSubmit { state.loadCharacter() }
+                Button("Load") { state.loadCharacter() }
+                Spacer()
+                Text("\(state.progress.completedCount) completed · \(state.progress.currentCount) current")
+                    .font(.caption).foregroundStyle(Theme.muted)
             }
+            .textFieldStyle(.roundedBorder).controlSize(.small)
         }
-        .padding(10)
     }
 
-    var characterBar: some View {
-        HStack(spacing: 8) {
-            Text("Character").font(.caption)
-            TextField("Name", text: $state.character).frame(width: 120).textFieldStyle(.roundedBorder)
-                .onSubmit { state.loadCharacter() }
-            Text("World").font(.caption)
-            TextField("Server", text: $state.world).frame(width: 120).textFieldStyle(.roundedBorder)
-                .onSubmit { state.loadCharacter() }
-            Button("Load") { state.loadCharacter() }
-            Spacer()
-            Text("\(state.progress.completedCount) completed · \(state.progress.currentCount) current")
-                .font(.caption).foregroundStyle(.secondary)
+    var readingStatus: some View {
+        HStack(spacing: 6) {
+            if capture.running {
+                Circle().fill(Theme.jade).frame(width: 7, height: 7)
+                Text(state.isSurveying ? "Reading Window" : "Reading Chat").font(.caption)
+                Button("Stop") { capture.stop() }.controlSize(.small)
+            } else {
+                Button("Screen Reading…") { showReading.toggle() }
+                    .controlSize(.small)
+                    .popover(isPresented: $showReading, arrowEdge: .bottom) { readingSettings }
+            }
         }
-        .padding(.horizontal, 10).padding(.vertical, 6)
+    }
+
+    var readingSettings: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Screen Reading").font(.headline).foregroundStyle(Theme.gold)
+            Text("Reads the chosen game window every 10 seconds, on this Mac only. Use it where your server permits screen tools.")
+                .font(.caption).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button("Find Game Window") { capture.refreshWindows() }.disabled(capture.busy)
+                Picker("", selection: $capture.selectedID) {
+                    Text("Choose…").tag(Optional<CGWindowID>.none)
+                    ForEach(capture.windows) { window in Text(window.label).tag(Optional(window.id)) }
+                }
+                .labelsHidden()
+            }
+            SectionLabel(text: "Chat area, % of window")
+            HStack(spacing: 8) {
+                cropField("Left", value: $capture.crop.left)
+                cropField("Top", value: $capture.crop.top)
+                cropField("Width", value: $capture.crop.width)
+                cropField("Height", value: $capture.crop.height)
+            }
+            if !capture.note.isEmpty {
+                Text(capture.note).font(.caption).foregroundStyle(Theme.muted)
+            }
+            HStack {
+                Spacer()
+                Button("Start Reading") {
+                    state.resetScreenshotMatching()
+                    capture.fullWindow = state.isSurveying
+                    capture.start()
+                    tab = 0
+                    showReading = false
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(capture.selectedID == nil || !capture.crop.valid || capture.busy)
+            }
+        }
+        .padding(14)
+        .frame(width: 380)
     }
 
     func cropField(_ label: String, value: Binding<Double>) -> some View {
-        HStack(spacing: 4) {
-            Text(label).font(.caption)
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(.caption2).foregroundStyle(Theme.muted)
             TextField(label, value: value, format: .number.precision(.fractionLength(0...1)))
-                .frame(width: 48)
-                .textFieldStyle(.roundedBorder)
+                .frame(width: 56).textFieldStyle(.roundedBorder)
         }
     }
+
+    // MARK: Guides
 
     var guide: Guide? {
         state.guides.indices.contains(state.selected) ? state.guides[state.selected] : nil
     }
 
     var guidesPane: some View {
-        HStack(spacing: 0) {
-            List(state.guides.indices, id: \.self, selection: Binding(
-                get: { state.selected },
-                set: { state.selected = $0 ?? 0; state.stepIndex = 0 }
-            )) { i in
-                Text(state.guides[i].name).font(.callout)
-            }
-            .frame(width: 230)
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 10) {
-                if let g = guide {
-                    Text(g.name).font(.title3).bold()
-                    Text(g.desc).font(.callout).foregroundStyle(.secondary)
-                    Divider()
-                    if g.steps.indices.contains(state.stepIndex) {
-                        let s = g.steps[state.stepIndex]
-                        Text("Step \(state.stepIndex + 1) of \(g.steps.count)")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Text(s.title).font(.headline)
-                        if let z = s.zone { Text("Zone \(z)").font(.caption) }
-                        if let x = s.posX, let z = s.posZ {
-                            Text(String(format: "Target (%.1f, %.1f)", x, z)).font(.caption)
-                        }
-                        if let n = s.note {
-                            Text(n).font(.callout).fixedSize(horizontal: false, vertical: true)
-                        }
-                        if let r = state.status(of: s) {
-                            Text(r.status == .completed ? "Completed (from your \(r.source))"
-                                                        : "In your current quests (from your \(r.source))")
-                                .font(.caption).foregroundStyle(r.status == .completed ? .green : .blue)
-                        } else if s.fixed && s.tags["LOG"] == nil {
-                            Text("Manual checkpoint — press Done after completing it in game.")
-                                .font(.caption).foregroundStyle(.orange)
-                        }
-                        if g.name == LogSurvey.guideName {
-                            if s.tags["LOG"] != "none" && !capture.running {
-                                Text("Start reading (Screenshot settings…) so this page can be recorded.")
-                                    .font(.caption).foregroundStyle(.orange)
-                            }
-                            if !state.surveyNote.isEmpty {
-                                Text(state.surveyNote).font(.caption).foregroundStyle(.secondary)
-                            }
-                            if !state.recentlyRead.isEmpty {
-                                Text("Just read: " + state.recentlyRead.joined(separator: ", "))
-                                    .font(.caption2).foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                    }
-                    Spacer()
-                    HStack {
-                        Button("Back") { if state.stepIndex > 0 { state.stepIndex -= 1 } }
-                        Button("Done / Next") {
-                            if let g = guide, g.steps.indices.contains(state.stepIndex) {
-                                state.markDone(g.steps[state.stepIndex])
-                            }
-                            if let g = guide, state.stepIndex < g.steps.count - 1 { state.stepIndex += 1 }
-                        }
-                        .keyboardShortcut(.defaultAction)
-                        Button("Jump to next unfinished") { state.nextUnfinished() }
-                        Spacer()
-                        Text(state.sourceNote).font(.caption2).foregroundStyle(.secondary)
-                    }
-                } else {
-                    Text("No guides loaded (\(state.sourceNote)).")
-                    Button("Reload") { state.reload() }
+        HStack(spacing: 8) {
+            Card {
+                List(state.guides.indices, id: \.self, selection: Binding(
+                    get: { state.selected },
+                    set: { state.selected = $0 ?? 0; state.stepIndex = 0 }
+                )) { i in
+                    Text(state.guides[i].name).font(.callout).lineLimit(2)
                 }
+                .scrollContentBackground(.hidden)
+                .listStyle(.sidebar)
             }
-            .padding()
-            .frame(minWidth: 460, minHeight: 380, alignment: .topLeading)
+            .frame(width: 190)
+
+            Card { stepDetail }
         }
     }
+
+    @ViewBuilder
+    var stepDetail: some View {
+        if let g = guide {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(g.name).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.gold)
+                    .lineLimit(2)
+                if !g.desc.isEmpty {
+                    Text(g.desc).font(.caption).foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if g.steps.indices.contains(state.stepIndex) {
+                    let s = g.steps[state.stepIndex]
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 6) {
+                            SectionLabel(text: "Step \(state.stepIndex + 1) of \(g.steps.count)")
+                            Text(s.title).font(.headline)
+                            if let z = s.zone {
+                                let pos = (s.posX != nil && s.posZ != nil)
+                                    ? String(format: " · (%.1f, %.1f)", s.posX!, s.posZ!) : ""
+                                Text("Zone \(z)\(pos)").font(.caption).foregroundStyle(Theme.crystal)
+                            }
+                            if let n = s.note {
+                                Text(n).font(.callout).fixedSize(horizontal: false, vertical: true)
+                            }
+                            stepStatus(s, in: g)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                HStack {
+                    Button("Back") { if state.stepIndex > 0 { state.stepIndex -= 1 } }
+                    Button("Done") {
+                        if g.steps.indices.contains(state.stepIndex) { state.markDone(g.steps[state.stepIndex]) }
+                        if state.stepIndex < g.steps.count - 1 { state.stepIndex += 1 }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    Button("Next Unfinished") { state.nextUnfinished() }
+                    Spacer()
+                    if !state.screenshotMatchNote.isEmpty {
+                        Text(state.screenshotMatchNote).font(.caption2).foregroundStyle(Theme.crystal).lineLimit(1)
+                    }
+                }
+                .controlSize(.small)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("No guides loaded (\(state.sourceNote)).")
+                Button("Reload") { state.reload() }
+            }
+        }
+    }
+
+    @ViewBuilder
+    func stepStatus(_ s: GuideStep, in g: Guide) -> some View {
+        if let r = state.status(of: s) {
+            Text(r.status == .completed ? "Completed · from your \(r.source)" : "Current · from your \(r.source)")
+                .font(.caption).foregroundStyle(r.status == .completed ? Theme.jade : Theme.crystal)
+        } else if s.fixed && s.tags["LOG"] == nil {
+            Text("Press Done once you have finished this in game.")
+                .font(.caption).foregroundStyle(Theme.gold)
+        }
+        if g.name == LogSurvey.guideName {
+            if s.tags["LOG"] != "none" && !capture.running {
+                Text("Start Screen Reading so this page can be recorded.")
+                    .font(.caption).foregroundStyle(Theme.ember)
+            }
+            if !state.surveyNote.isEmpty {
+                Text(state.surveyNote).font(.caption).foregroundStyle(Theme.muted)
+            }
+            if !state.recentlyRead.isEmpty {
+                Text("Just read: " + state.recentlyRead.joined(separator: ", "))
+                    .font(.caption2).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    // MARK: Achievements
 
     var currentSet: AchievementSetView? {
         state.achievementSets.first { $0.id == state.selectedSet }
     }
 
     var achievementsPane: some View {
-        HStack(spacing: 0) {
-            List(state.achievementSets, selection: $state.selectedSet) { s in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(s.title).font(.callout)
-                    Text(s.earned.map { "\($0) / \(s.total) earned" } ?? "\(s.total) achievements")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-                .tag(s.id)
-            }
-            .frame(width: 230)
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text(state.progressNote).font(.caption).fixedSize(horizontal: false, vertical: true)
-                if let s = currentSet {
-                    Text(s.title).font(.title3).bold()
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 10) {
-                            if !s.remaining.isEmpty {
-                                Text("TO DO").font(.caption2).tracking(2).foregroundStyle(.secondary)
-                                ForEach(s.remaining) { r in row(r) }
-                            }
-                            if !s.earnedRows.isEmpty {
-                                Text("EARNED").font(.caption2).tracking(2).foregroundStyle(.secondary)
-                                    .padding(.top, 6)
-                                ForEach(s.earnedRows) { r in row(r) }
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+        HStack(spacing: 8) {
+            Card {
+                List(state.achievementSets, selection: $state.selectedSet) { s in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(s.title).font(.callout)
+                        Text(s.earned.map { "\($0) / \(s.total) earned" } ?? "\(s.total) achievements")
+                            .font(.caption2).foregroundStyle(Theme.muted)
                     }
-                } else {
-                    Text("No achievement sets to show.").foregroundStyle(.secondary)
-                    Spacer()
+                    .tag(s.id)
                 }
-                HStack {
-                    Button("Reload") { state.reload() }
-                    Button("Choose progress file…") { state.chooseSnapshot() }
-                    Spacer()
-                    Text(state.achievementNote).font(.caption2).foregroundStyle(.secondary)
+                .scrollContentBackground(.hidden)
+                .listStyle(.sidebar)
+            }
+            .frame(width: 190)
+
+            Card {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(state.progressNote).font(.caption).foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let s = currentSet {
+                        Text(s.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.gold)
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 8) {
+                                if !s.remaining.isEmpty {
+                                    SectionLabel(text: "To Do")
+                                    ForEach(s.remaining) { r in row(r) }
+                                }
+                                if !s.earnedRows.isEmpty {
+                                    SectionLabel(text: "Earned").padding(.top, 6)
+                                    ForEach(s.earnedRows) { r in row(r) }
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    } else {
+                        Text("No achievement sets to show.").foregroundStyle(Theme.muted)
+                        Spacer()
+                    }
+                    HStack {
+                        Button("Reload") { state.reload() }
+                        Button("Choose Progress File…") { state.chooseSnapshot() }
+                        Spacer()
+                        Text(state.achievementNote).font(.caption2).foregroundStyle(Theme.muted).lineLimit(1)
+                    }
+                    .controlSize(.small)
                 }
             }
-            .padding()
-            .frame(minWidth: 520, minHeight: 420, alignment: .topLeading)
         }
     }
 
@@ -497,15 +536,15 @@ struct CompanionView: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline) {
                 Text(r.info.title).font(.callout).bold()
-                if let p = r.info.points { Text("\(p) pts").font(.caption2).foregroundStyle(.secondary) }
+                if let p = r.info.points { Text("\(p) pts").font(.caption2).foregroundStyle(Theme.muted) }
                 if let t = r.info.type, t == "missable" {
-                    Text("missable").font(.caption2).foregroundStyle(.orange)
+                    Text("Missable").font(.caption2).foregroundStyle(Theme.ember)
                 }
                 Spacer()
                 switch r.state {
-                case .earned(let d): Text("earned \(Self.shortDate(d))").font(.caption2).foregroundStyle(.green)
+                case .earned(let d): Text("Earned \(Self.shortDate(d))").font(.caption2).foregroundStyle(Theme.jade)
                 case .notEarned: EmptyView()
-                case .unknown: Text("progress unknown").font(.caption2).foregroundStyle(.secondary)
+                case .unknown: Text("Progress unknown").font(.caption2).foregroundStyle(Theme.muted)
                 }
             }
             if !r.info.description.isEmpty {
@@ -515,9 +554,9 @@ struct CompanionView: View {
                 HStack(spacing: 6) {
                     Text("Guide target: " + r.info.targets.map(\.label).joined(separator: "; ")
                          + (r.info.confidence.map { " (\($0) confidence)" } ?? ""))
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.caption2).foregroundStyle(Theme.muted)
                     if let link = state.guideLink(for: r.info) {
-                        Button("Open in guide") {
+                        Button("Open in Guide") {
                             state.selected = link.guide
                             state.stepIndex = link.step
                             tab = 0

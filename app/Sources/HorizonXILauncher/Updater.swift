@@ -54,7 +54,7 @@ final class Updater: ObservableObject {
         var message: String {
             switch self {
             case .clientLive: return "Close the game, then restart to update"
-            case .companionLive: return "Close VanaGuide, then restart to update"
+            case .companionLive: return "Close VanaGuide Server-Safe, then restart to update"
             case .workInFlight: return "Finish the running job, then restart to update"
             case .helperDidNotStart: return "Update didn't start. Try Restart again"
             case .notVerified: return "Update failed verification; fetching it again"

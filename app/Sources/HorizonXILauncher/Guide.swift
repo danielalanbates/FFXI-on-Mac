@@ -140,7 +140,7 @@ enum Guide {
             }
             if removeLoadLine(from: scripts) || enabled {
                 log("==> vanaguide: not allowed here — this world runs an addon allowlist and "
-                    + "Vanaguide is not on it")
+                    + "VanaGuide is not on it")
             }
             return
         }

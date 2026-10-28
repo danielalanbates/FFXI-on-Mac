@@ -840,12 +840,12 @@ struct ContentView: View {
     /// Vanaguide is on nobody's published list, so HorizonXI / CatsEyeXI / FFEra never get it.
     private var vanaguideHelp: String {
         if !Guide.isAvailable {
-            return "Vanaguide not found."
+            return "VanaGuide not found."
         }
         if !Guide.allowed(by: addonPolicy) {
             return "\(store.selected?.name ?? "This server") doesn't allow this addon."
         }
-        return "Loads the Vanaguide quest guide in this world."
+        return "Loads VanaGuide in this world."
     }
 
     /// The launcher's own update: one line, and only when there is something to act on (see
@@ -1029,7 +1029,7 @@ struct ContentView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("VanaGuide Server-Safe").font(.system(size: 12)).bold()
-                    Text("Companion app: the quest guide in its own window. Loads nothing into the game and reads nothing from the server. Optional screen reading — check your server's rules.")
+                    Text("The quest guide in its own window. Loads nothing into the game and reads nothing from the server. Optional screen reading — check your server's rules.")
                         .font(.system(size: 12)).foregroundStyle(Vana.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1654,15 +1654,12 @@ struct ContentView: View {
                         .help("Game audio follows your Mac's output device.")
                     Toggle("Keep the game window's shape and title", isOn: $perf.keepWindowShape)
                         .help("Resizing keeps the picture in proportion; the title stays FFXI on Mac.")
-                    Toggle("Read cutscenes aloud (VanaVoice)", isOn: $perf.narrateCutscenes)
+                    Toggle("VanaVoice — read cutscenes aloud", isOn: $perf.narrateCutscenes)
                         .disabled(!Narration.isAvailable || !Narration.allowed(by: addonPolicy))
                         .help(narrationHelp)
-                    Toggle("Quest guide (Vanaguide, local LSB only)", isOn: $perf.enableVanaguide)
+                    Toggle("VanaGuide — quest guide (local server only)", isOn: $perf.enableVanaguide)
                         .disabled(!Guide.isAvailable || !Guide.allowed(by: addonPolicy))
                         .help(vanaguideHelp)
-                    Button("Open Vanaguide Server-Safe") { Guide.openCompanion() }
-                        .disabled(Guide.companionURL == nil)
-                        .help("Separate guide window with optional screen reading. Check your server's rules.")
                     Toggle("Large address aware", isOn: $perf.largeAddressAware)
                     Divider()
                     RetroAchievementsSection(ra: ra, gameDir: active?.gameDir,
