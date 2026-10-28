@@ -5,6 +5,7 @@
 //   --auto-read <title>     pick the game window whose title contains <title> and start reading
 //   --crop l,t,w,h          chat area for --auto-read (percent)
 //   --ignore-title          find the character from the status box even if the title has it
+//   --replay <trace>        feed a recorded trace's OCR text through the reader
 //   --dev-autotest          Developer Mode: assign the newest heard speaker to the open quest, export
 // Normal launches never write the trace or start reading by themselves.
 

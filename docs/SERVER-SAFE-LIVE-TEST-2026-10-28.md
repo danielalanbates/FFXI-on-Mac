@@ -26,6 +26,31 @@ San d'Oria for *A Sentry's Peril* and exported `[0] = { name = 'A Sentry\'s Peri
 npc = 'Glenne' }`, matching the server's script. After the data fix below, a clean Server-Safe
 opened *A Sentry's Peril* from Glenne's line with no recordings.
 
+## Second run: Bastok, Windurst, Jeuno (b91)
+
+| NPC | Zone (detected) | Opened |
+|---|---|---|
+| Wahid | Bastok Mines | The Siren's Tear |
+| Corann | Port Bastok | The Quadav's Curse |
+| Hungry Wolf | Metalworks | Shady Business |
+| Hakkuru-Rinkuru | Port Windurst | Making Amends |
+| Fuepepe | Windurst Waters | Making the Grade |
+| Ojha Rhawash | Windurst Walls | Flower Child |
+| Collet | Upper Jeuno | A Clock Most Delicate |
+| Derrick | Lower Jeuno | Save the Clock Tower |
+| Karl | Port Jeuno | Child's Play (after the b91 fix) |
+| Radeivepart | Ru'Lude Gardens | Northward |
+
+All 13 zones visited today were detected. Horatius (Bastok Markets) never spoke: the in-game
+`/vg talk` driver failed, not Server-Safe. A first attempt was invalid because the in-game
+VanaGuide panel was covering the chat; the harness must hide it (`/vg` toggles it).
+
+b91 fixes, found by replaying the recorded run (`--replay <trace>`):
+- A stray old line at start-up opened *Child's Play* once, and the once-per-session limit then
+  ignored Karl's real line. Speaker matches need no such limit (a line is new only once).
+- The sample that shows a zone change is baseline for speaker matching (old lines re-show then).
+Replays of the earlier San d'Oria runs give exactly their quests (no regressions).
+
 ## Bugs found live and fixed (b90)
 
 | Symptom | Cause | Fix |

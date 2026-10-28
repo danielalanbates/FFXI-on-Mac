@@ -336,6 +336,7 @@ final class CompanionState: ObservableObject {
         let arrivals = ChatDiff.newLines(seen: &seenLines, previous: lastLines, current: rawLines)
         lastLines = rawLines
         let fresh = baselined ? arrivals.joined(separator: "\n") : ""
+        if !fresh.isEmpty { DevTrace.log("fresh", ["lines": arrivals]) }
         baselined = true
         var zoneChanged = false
         if let z = zones.zone(inChat: text) {
@@ -375,9 +376,14 @@ final class CompanionState: ObservableObject {
         // Titles: whole screen, two samples. Speakers: only lines new since reading began, so old
         // chat (a previous step, a previous session) never drags the guide somewhere else.
         let titled = ScreenshotGuideMatcher.match(text: text, entries: catalogue, guides: guides, speakers: false)
-        let spoken = fresh.isEmpty ? nil
+        // The sample that shows a zone change is baseline only: nobody speaks to an NPC in the
+        // same instant they arrive, and the log often re-shows old lines as it changes.
+        let spoken = (fresh.isEmpty || zoneChanged) ? nil
             : ScreenshotGuideMatcher.speakerMatch(text: fresh, entries: catalogue, guides: guides)
-        guard let confirmed = screenshotTracker.observe(titled) ?? screenshotTracker.openOnce(spoken) else { return }
+        // A giver's line counts as new only once, so it needs no once-per-session limit; that
+        // limit let a stray old line use up a quest and ignore the real one later (2026-10-28).
+        let speakerPick = spoken.flatMap { m in (m.guide == selected && m.step == stepIndex) ? nil : m }
+        guard let confirmed = screenshotTracker.observe(titled) ?? speakerPick else { return }
         // Keep a player's more advanced manual checkpoint in an already selected route.
         if ScreenshotGuideMatcher.preservesCheckpoint(currentGuide: selected, currentStep: stepIndex,
                                                       match: confirmed, guides: guides) {
@@ -466,6 +472,17 @@ struct CompanionView: View {
             state.requestDiscovery = { capture.beginDiscovery() }
             state.discoveryDone = { capture.endDiscovery() }
             if let want = DevTrace.value("--auto-read") { autoRead(want) }
+            // Test hook: --replay <trace.jsonl> feeds a recorded run's OCR text back through
+            // the same reader, so a live miss can be reproduced offline.
+            if let path = DevTrace.value("--replay"), let text = try? String(contentsOfFile: path, encoding: .utf8) {
+                for line in text.split(separator: "\n") {
+                    guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                          obj["event"] as? String == "ocr", let ocr = obj["text"] as? String else { continue }
+                    DevTrace.log("replay", ["at": obj["t"] as? String ?? ""])
+                    state.readScreenshotText(ocr)
+                }
+                DevTrace.log("replay-done")
+            }
         }
         .onChange(of: state.isSurveying) { capture.fullWindow = $0 }
         .onDisappear { capture.stop() }
