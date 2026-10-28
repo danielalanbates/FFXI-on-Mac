@@ -540,7 +540,8 @@ final class CompanionState: ObservableObject {
 struct CompanionView: View {
     @StateObject var state = CompanionState()
     @StateObject private var capture = ScreenGuideCapture()
-    // --tab <n> (test hook) opens on another tab, e.g. 1 = Achievements, for --snapshot.
+    @StateObject var wiki = WikiState()
+    // --tab <n> (test hook) opens on another tab, 1 Gear, 2 Skills, 3 Achievements, for --snapshot.
     @State private var tab = CommandLine.arguments.firstIndex(of: "--tab")
         .flatMap { CommandLine.arguments.indices.contains($0 + 1) ? Int(CommandLine.arguments[$0 + 1]) : nil } ?? 0
     @State private var showReading = false
@@ -554,7 +555,14 @@ struct CompanionView: View {
     var body: some View {
         VStack(spacing: 8) {
             header
-            Group { if tab == 0 { guidesPane } else { achievementsPane } }
+            Group {
+                switch tab {
+                case 1: gearPane
+                case 2: skillsPane
+                case 3: achievementsPane
+                default: guidesPane
+                }
+            }
                 .frame(maxHeight: .infinity)
         }
         .padding(10)
@@ -566,6 +574,7 @@ struct CompanionView: View {
             state.applyLauncherWorld()
         }
         .onAppear {
+            wiki.load(roots: CompanionState.vanaguideRoots)
             capture.receivedText = { state.readScreenshotText($0) }
             capture.receivedStatus = { state.readStatusText($0) }
             state.requestDiscovery = { capture.beginDiscovery() }
@@ -620,9 +629,11 @@ struct CompanionView: View {
                 Text("Server-Safe").font(.system(size: 12)).foregroundStyle(Theme.muted)
                 Picker("", selection: $tab) {
                     Text("Guides").tag(0)
-                    Text("Achievements").tag(1)
+                    Text("Gear").tag(1)
+                    Text("Skills").tag(2)
+                    Text("Achievements").tag(3)
                 }
-                .pickerStyle(.segmented).labelsHidden().frame(width: 190)
+                .pickerStyle(.segmented).labelsHidden().frame(width: 320)
                 Spacer()
                 if Features.screenReading { readingStatus }
             }
