@@ -1024,6 +1024,22 @@ struct ContentView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            // Not an addon: a separate app that loads nothing into the game, so it is offered on
+            // every world, allowlist or not. Players look for it here, not in Performance.
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("VanaGuide Server-Safe").font(.system(size: 12)).bold()
+                    Text("Companion app: the quest guide in its own window. Loads nothing into the game and reads nothing from the server. Optional screen reading — check your server's rules.")
+                        .font(.system(size: 12)).foregroundStyle(Vana.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Button("Open") { Guide.openCompanion() }
+                    .disabled(Guide.companionURL == nil)
+            }
+            .padding(8)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Vana.panel.opacity(0.6)))
+
             // Extras this project can fetch for the local world. Never shown for a live server
             // — nothing here is on any published approved list.
             if case .unrestricted = addonPolicy, let i = active {
