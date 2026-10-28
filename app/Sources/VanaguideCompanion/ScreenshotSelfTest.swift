@@ -80,6 +80,31 @@ extension CompanionSelfTest {
         checks.append(("reference targets preserve recorded coordinates and stay manual",
                        referenceStep?.zone == 230 && referenceStep?.posX == -138.33
                            && referenceStep?.posZ == 65.76 && referenceStep?.fixed == true))
+        // Getting started: a whole log page is read, many titles at once.
+        let page = LogSurvey.read(text: "Quests\nSan d'Oria\nCompleted Quests\nA Squire's Test\nA Squire's Test II\nGil: 1200",
+                                  entries: entries + duplicate, fallback: .current)
+        checks.append(("log page records exact titles and its heading's list",
+                       page.status == .completed && page.area == "sandoria" && page.keys == ["Q:sandoria,10", "Q:sandoria,11"]))
+        checks.append(("log page without a heading uses the step's list",
+                       LogSurvey.read(text: "A Squire's Test", entries: entries, fallback: .current).status == .current))
+        checks.append(("a truncated long title matches its unique stem",
+                       LogSurvey.read(text: "A Squire's Te...", entries: quests.filter { $0.id == 10 },
+                                      fallback: .current).keys == ["Q:sandoria,10"]))
+        var record = CharacterProgress(character: "Test", world: "Local")
+        _ = record.record("Q:sandoria,10", .completed, source: "quest log")
+        let downgraded = record.record("Q:sandoria,10", .current, source: "quest log")
+        _ = record.record("Q:sandoria,11", .current, source: "quest log")
+        let upgraded = record.record("Q:sandoria,11", .completed, source: "done")
+        checks.append(("progress never downgrades completed; Done upgrades current",
+                       !downgraded && upgraded && record.completedCount == 2 && record.currentCount == 0))
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("vg-progress-\(UUID().uuidString)")
+        let saved = ProgressStore.save(record, in: dir)
+        let loaded = ProgressStore.load(character: "Test", world: "Local", in: dir)
+        try? FileManager.default.removeItem(at: dir)
+        checks.append(("progress round-trips through its JSON file",
+                       saved && loaded.entries.keys.sorted() == record.entries.keys.sorted()))
+        checks.append(("character file names cannot escape the folder",
+                       !ProgressStore.fileName(character: "../x", world: "a/b").contains("/")))
         checks.append(("bottom chat crop scales to screenshot pixels",
                        ChatCrop().rect(width: 1600, height: 1000) == CGRect(x: 0, y: 650, width: 1600, height: 350)))
         checks.append(("invalid and nonfinite crop values are refused",

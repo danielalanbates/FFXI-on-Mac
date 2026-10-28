@@ -78,6 +78,8 @@ final class ScreenGuideCapture: ObservableObject {
     @Published var windows: [CaptureWindow] = []
     @Published var selectedID: CGWindowID?
     @Published var crop = ChatCrop()
+    /// Log pages sit mid-screen, not in the chat area: the Getting started steps read it all.
+    @Published var fullWindow = false
     @Published private(set) var running = false
     @Published private(set) var busy = false
     @Published private(set) var note = ""
@@ -157,7 +159,7 @@ final class ScreenGuideCapture: ObservableObject {
         guard #available(macOS 14.0, *), running, !busy, let target else { return }
         busy = true
         let token = session
-        let crop = crop
+        let crop = fullWindow ? ChatCrop(left: 0, top: 0, width: 100, height: 100) : crop
         Task {
             defer { busy = false }
             do {
