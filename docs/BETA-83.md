@@ -16,7 +16,7 @@ real local-LSB screenshot reads chat lines. **Not verified:** a live Server-Safe
 running game. Owner beta test pending (2026-10-28).
 
 Test path: launcher → world → Play; launcher → **Open Vanaguide Server-Safe** → Screenshot
-settings → Find game windows (grant Screen Recording once) → pick the game → set the chat
+settings → Find Game Window (grant Screen Recording once) → pick the game → set the chat
 rectangle over the chat log → Start → talk to a quest giver (e.g. Gulemont, Port San d'Oria).
 The matching section opens after two samples (10–20 s).
 

@@ -19,7 +19,7 @@ read client memory, read packets, contact a game server, or send game input.
 ## Usage
 
 1. Open **VanaGuide Server-Safe**. Screenshot mode starts off on every launch.
-2. Open **Screenshot settings…**, then **Find game windows**. macOS may ask for Screen Recording
+2. Open **Screen Reading…**, then **Find Game Window**. macOS may ask for Screen Recording
    permission for this app. No permission prompt runs at startup.
 3. Choose the game window. The list contains visible FFXI-titled game windows, plus (b83) Wine
    windows of a process running an FFXI loader, since private servers title the window with the
@@ -29,7 +29,7 @@ read client memory, read packets, contact a game server, or send game input.
 4. Set Left, Top, Width and Height as percentages from the game window's top-left corner. The
    default is the full-width bottom 35%, suitable for a conventional chat log. Custom chat layouts
    need a matching rectangle. Values must fit entirely within the selected window.
-5. Press **Start reading chat** where the server permits screenshot tools.
+5. Press **Start Reading** where the server permits screenshot tools.
 6. Leave quest/mission titles visible for two samples (normally 10–20 seconds). The guide opens a
    matching authored route if one is linked by its quest/mission tag, otherwise the database
    reference section. Use **Stop** when finished.
@@ -83,7 +83,7 @@ Apple API references: [window-only content filter](https://developer.apple.com/d
 [ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit),
 [Vision text recognition](https://developer.apple.com/documentation/vision/vnrecognizetextrequest).
 
-## Getting started and the local progress record (b84)
+## Getting Started and the local progress record (b84)
 
 Server-Safe cannot ask a server what a character has done, so it keeps its own record.
 
@@ -91,17 +91,28 @@ Server-Safe cannot ask a server what a character has done, so it keeps its own r
 | --- | --- |
 | Where | `~/Library/Application Support/VanaGuide Server-Safe/characters/<world>-<character>.json` |
 | Contents | Catalogue key → `current`/`completed`, date last seen, source (`quest log` or `done`) |
-| Written by | Getting started log reads; Done on a guide step (accept steps → current, others → completed) |
+| Written by | Getting Started log reads; Done on a guide step (accept steps → current, others → completed) |
 | Rules | Completed is never downgraded by a later read; nothing is ever deleted automatically |
 | Not stored | Images, OCR text, chat |
 
-The **Getting started** guide opens first for a character with nothing recorded:
+The **Getting Started** guide opens first for a character with nothing recorded:
 Main Menu (−) → Quests → home nation → Current Quests, then Completed Quests, optional other
 areas, then Missions. On those steps the whole game window is read (log pages are mid-screen),
 every exact title on a page is recorded under the visible heading (Current/Completed) or the
 step's list, a truncated `…` title matches a unique stem, and a title found in several areas is
 settled by the area heading on the page. Guide steps then show Completed/Current, and
-**Jump to next unfinished** skips completed ones.
+**Next Unfinished** skips completed ones.
 
 Not yet verified against a real in-game log page (no capture of one exists yet); the menu key
 is the default PC layout.
+
+## Names and design (b86)
+
+| Item | Standard |
+|---|---|
+| Products | VanaGuide (in-game addon), VanaGuide Server-Safe (separate app), VanaVoice, FFXI on Mac |
+| Internal identifiers | Unchanged: addon folder/name `Vanaguide`, executable `VanaguideCompanion` |
+| Buttons | Title case: Screen Reading…, Find Game Window, Start Reading, Stop, Load, Back, Done, Next Unfinished |
+| Guide names | Title case in Server-Safe (display only; the addon keys saved progress by its own names) |
+| Palette | The launcher's: night-blue gradient, crystal accent, gold headings, jade = completed, ember = attention (`Theme.swift`) |
+| Window | Fixed 620 × 460; Screen Reading settings live in a popover |
