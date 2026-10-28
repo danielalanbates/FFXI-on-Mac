@@ -148,3 +148,17 @@ Keep identifying evidence local and publish only a sanitized result summary. The
 offline suites are useful regression checks but do not substitute for this run.
 
 Copyright © 2026 Bates LLC. All rights reserved. [batesai.org](https://batesai.org) · help@batesai.org.
+
+## Second live run — 2026-10-28 08:05, PASSED for located steps
+
+Root cause of the first attempt's stall: the FFXI client binds fixed UDP port 54090, so the
+second launch matched the first (dead) launch's map session and its old key; the server
+then dropped it exactly 300 s (`MAX_TIME_LASTUPDATE`) after launch #1's session began.
+Restarting the services and launching **once** produced a fresh session and a normal zone-in.
+
+Using vanaguide `tools/guided_run.sh` against this lab: five located San d'Oria steps
+traveled across zones 230/232, talked to the right NPC, wrote every dialogue line to the
+narrator sink, and three quests reached **ACCEPTED** on the server (the other two are correctly
+not flagged by talking). The arrow rendered. Details: vanaguide `docs/VERIFY-2026-10-28.md`.
+Two harness bugs were fixed (same-instant sends; cmdpipe read/truncate race, PR #26).
+`/shutdown` logged out normally once a stuck event was cleared with `!release`.

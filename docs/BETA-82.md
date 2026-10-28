@@ -175,3 +175,9 @@ were zero, an exact-PID, non-force Wine normal-close request closed its windows.
 process-tree close, game signal or force termination was used. The guard then confirmed zero
 clients. The private native services and database stopped; the private wineserver exited
 naturally. The lab is retained, stopped, with identifying evidence outside Git.
+
+## Second local-world run — 2026-10-28, passed
+
+Single clean launch reached the world; guide → NPC → narration → quest ACCEPTED verified on
+three quests, cross-zone travel included. Normal `/shutdown` logout. See
+[LOCAL-LSB-TEST-PLAN.md](LOCAL-LSB-TEST-PLAN.md#second-live-run--2026-10-28-0805-passed-for-located-steps).
