@@ -12,7 +12,7 @@ read client memory, read packets, contact a game server, or send game input.
 | --- | --- |
 | Manual guide | Choose a guide and use Back / Done / Next. No Screen Recording permission required. |
 | Screenshot mode | Explicitly choose an FFXI window, specify its chat rectangle, then Start. Captures once immediately and every 10 seconds while enabled. |
-| Recognition | Apple Vision OCR runs locally on the cropped image. Two consecutive unambiguous exact quest/mission-title matches open the corresponding guide section. |
+| Recognition | Apple Vision OCR runs locally on the cropped image. Two consecutive samples with the same match open the guide section: an exact quest/mission title, or else (b83) a dialogue line whose speaker is a recorded quest giver (`Gulemont : …`). |
 | Stop | Stop is always visible while capture runs. Closing the guide window or a capture error stops reading. A closed, minimized, replaced or renamed game window requires a fresh selection. |
 | Progress | OCR never completes quests, advances checkpoints, changes achievement progress or supplies live player coordinates. The player confirms steps manually. |
 
@@ -21,7 +21,9 @@ read client memory, read packets, contact a game server, or send game input.
 1. Open **VanaGuide Server-Safe**. Screenshot mode starts off on every launch.
 2. Open **Screenshot settings…**, then **Find game windows**. macOS may ask for Screen Recording
    permission for this app. No permission prompt runs at startup.
-3. Choose the game window. The list contains visible FFXI-titled game windows, not displays or
+3. Choose the game window. The list contains visible FFXI-titled game windows, plus (b83) Wine
+   windows of a process running an FFXI loader, since private servers title the window with the
+   character's name, not displays or
    arbitrary desktop windows. An FFXI title must also belong to a known Wine/game process;
    browser/wiki and terminal titles are excluded, as is the launcher window.
 4. Set Left, Top, Width and Height as percentages from the game window's top-left corner. The
@@ -45,14 +47,16 @@ progress snapshot feature. No AI service or token spend is required for screensh
   parser, and creates quest-log reference sections. Recorded zones/coordinates/NPCs are preserved.
 - Reference sections are labelled as reference targets. They are not presented as complete
   authored walkthroughs, and they do not claim prerequisite-safe ordering or complete routing.
-- Titles normalize case, punctuation and diacritics. Matching uses whole words, not fuzzy NPC,
-  item or dialogue guesses. Single-word titles require a `Quest:` or `Mission:` label. Multiple
+- Titles normalize case, punctuation and diacritics. Matching uses whole words, not fuzzy item
+  or dialogue guesses. Speaker matching (b83) needs the whole speaker name before the colon to
+  equal a recorded quest giver; the newest such line wins, and a giver of several quests opens
+  the first with "(NPC offers N)" in the title. Single-word titles require a `Quest:` or `Mission:` label. Multiple
   titles, duplicate titles across logs, and overlapping sequel titles are refused as ambiguous.
 - An already-opened match does not repeatedly reset the guide while its line remains in chat.
   A manually advanced checkpoint in the same route is preserved. Stop/Start resets the matching
   session, permitting a deliberate new selection.
-- Dialogue rarely contains the quest's exact title. Recognition will not trigger for every
-  cutscene. Show the relevant quest/mission log title or select the section manually. Low OCR
+- Dialogue rarely contains the quest's exact title, so speaker matching does most of the work.
+  NPCs with no recorded quest, or quests with no recorded giver, do not trigger. Show the relevant quest/mission log title or select the section manually. Low OCR
   confidence, a cropped title, non-English text or small type can prevent matching.
 - Screenshot mode requires macOS 14 or later; the manual companion remains available on macOS 13.
   ScreenCaptureKit supplies a window-only image and Vision performs OCR on a utility task. Captures
