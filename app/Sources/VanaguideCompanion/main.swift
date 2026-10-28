@@ -47,6 +47,13 @@ final class CompanionState: ObservableObject {
     private var catalogue: [CatalogueEntry] = []
     private var screenshotTracker = ScreenshotMatchTracker()
 
+    /// This character's local progress record (see LogProgress.swift).
+    @Published var character = UserDefaults.standard.string(forKey: "progress.character") ?? ""
+    @Published var world = UserDefaults.standard.string(forKey: "progress.world") ?? ""
+    @Published var progress = CharacterProgress(character: "", world: "")
+    @Published var surveyNote = ""
+    @Published var recentlyRead: [String] = []
+
     @Published var achievementSets: [AchievementSetView] = []
     @Published var selectedSet: Int?
     @Published var achievementNote = ""
@@ -62,7 +69,74 @@ final class CompanionState: ObservableObject {
         set { UserDefaults.standard.set(newValue, forKey: "ra.chosenSnapshot") }
     }
 
-    init() { reload() }
+    init() {
+        reload()
+        loadCharacter()
+        // A character with nothing recorded starts on Getting started; others on their guides.
+        selected = progress.entries.isEmpty ? 0 : min(1, max(guides.count - 1, 0))
+    }
+
+    func loadCharacter() {
+        UserDefaults.standard.set(character, forKey: "progress.character")
+        UserDefaults.standard.set(world, forKey: "progress.world")
+        progress = ProgressStore.load(character: character, world: world)
+        surveyNote = progress.entries.isEmpty ? ""
+            : "\(progress.completedCount) completed, \(progress.currentCount) current on record."
+        recentlyRead = []
+    }
+
+    static func key(for step: GuideStep) -> String? {
+        if let t = step.tags["Q"] ?? step.tags["QA"] { return "Q:\(t)" }
+        if let t = step.tags["M"] ?? step.tags["MA"] { return "M:\(t)" }
+        return nil
+    }
+
+    func status(of step: GuideStep) -> LogRecord? {
+        Self.key(for: step).flatMap { progress.entries[$0] }
+    }
+
+    var isSurveying: Bool {
+        guard guides.indices.contains(selected), guides[selected].name == LogSurvey.guideName,
+              guides[selected].steps.indices.contains(stepIndex) else { return false }
+        return guides[selected].steps[stepIndex].tags["LOG"] != "none"
+    }
+
+    /// Done on a step with a quest/mission: accepting makes it current, anything else completes it.
+    func markDone(_ step: GuideStep) {
+        guard let key = Self.key(for: step) else { return }
+        let status: LogStatus = (step.kind == "A" || step.tags["QA"] != nil || step.tags["MA"] != nil)
+            ? .current : .completed
+        if progress.record(key, status, source: "done") { ProgressStore.save(progress) }
+    }
+
+    func nextUnfinished() {
+        guard guides.indices.contains(selected) else { return }
+        let steps = guides[selected].steps
+        var i = stepIndex + 1
+        while i < steps.count, status(of: steps[i])?.status == .completed { i += 1 }
+        if i < steps.count { stepIndex = i }
+    }
+
+    private func readLogPage(_ text: String) {
+        let step = guides[selected].steps[stepIndex]
+        let fallback = LogStatus(rawValue: step.tags["LOG"] ?? "")
+        let reading = LogSurvey.read(text: text, entries: catalogue, fallback: fallback)
+        guard let status = reading.status else {
+            surveyNote = "Open Current or Completed so the guide knows which list this is."
+            return
+        }
+        guard !reading.keys.isEmpty else {
+            surveyNote = "No quest or mission titles visible yet."
+            return
+        }
+        var added = 0
+        for key in reading.keys where progress.record(key, status, source: "quest log") { added += 1 }
+        ProgressStore.save(progress)
+        let names = reading.keys.compactMap { k in catalogue.first { $0.key == k }?.name }
+        recentlyRead = Array((names + recentlyRead).prefix(12))
+        surveyNote = "Read \(reading.keys.count) \(status.rawValue) (\(added) new). "
+            + "\(progress.completedCount) completed, \(progress.currentCount) current on record."
+    }
 
     /// Vanaguide addon roots (the folder holding guides/ and data/), first hit wins. The bundled
     /// copy when packaged; checkouts for development; VANAGUIDE_ROOT overrides. Nothing is read
@@ -92,7 +166,7 @@ final class CompanionState: ObservableObject {
             let loaded = GuideParser.loadAll(from: g)
             let entries = QuestCatalogue.entries(at: root)
             if !loaded.isEmpty || !entries.isEmpty {
-                guides = loaded
+                guides = [LogSurvey.guide] + loaded
                 catalogue = entries
                 guides += QuestCatalogue.referenceGuides(catalogue)
                 sourceNote = root.path.contains("/Resources/") ? "bundled guides" : "development checkout"
@@ -119,6 +193,7 @@ final class CompanionState: ObservableObject {
 
     /// Two consecutive unique matches select a section. Existing progress stays manual.
     func readScreenshotText(_ text: String) {
+        if isSurveying { readLogPage(text); return }
         let match = ScreenshotGuideMatcher.match(text: text, entries: catalogue, guides: guides)
         guard let confirmed = screenshotTracker.observe(match) else { return }
         // Keep a player's more advanced manual checkpoint in an already selected route.
@@ -188,6 +263,8 @@ struct CompanionView: View {
         VStack(spacing: 0) {
             screenshotControls
             Divider()
+            characterBar
+            Divider()
             Picker("", selection: $tab) {
                 Text("Guides").tag(0)
                 Text("Achievements").tag(1)
@@ -203,6 +280,7 @@ struct CompanionView: View {
             state.reloadProgress()
         }
         .onAppear { capture.receivedText = { state.readScreenshotText($0) } }
+        .onChange(of: state.isSurveying) { capture.fullWindow = $0 }
         .onDisappear { capture.stop() }
     }
 
@@ -257,6 +335,22 @@ struct CompanionView: View {
         .padding(10)
     }
 
+    var characterBar: some View {
+        HStack(spacing: 8) {
+            Text("Character").font(.caption)
+            TextField("Name", text: $state.character).frame(width: 120).textFieldStyle(.roundedBorder)
+                .onSubmit { state.loadCharacter() }
+            Text("World").font(.caption)
+            TextField("Server", text: $state.world).frame(width: 120).textFieldStyle(.roundedBorder)
+                .onSubmit { state.loadCharacter() }
+            Button("Load") { state.loadCharacter() }
+            Spacer()
+            Text("\(state.progress.completedCount) completed · \(state.progress.currentCount) current")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+    }
+
     func cropField(_ label: String, value: Binding<Double>) -> some View {
         HStack(spacing: 4) {
             Text(label).font(.caption)
@@ -299,18 +393,40 @@ struct CompanionView: View {
                         if let n = s.note {
                             Text(n).font(.callout).fixedSize(horizontal: false, vertical: true)
                         }
-                        if s.fixed {
+                        if let r = state.status(of: s) {
+                            Text(r.status == .completed ? "Completed (from your \(r.source))"
+                                                        : "In your current quests (from your \(r.source))")
+                                .font(.caption).foregroundStyle(r.status == .completed ? .green : .blue)
+                        } else if s.fixed && s.tags["LOG"] == nil {
                             Text("Manual checkpoint — press Done after completing it in game.")
                                 .font(.caption).foregroundStyle(.orange)
+                        }
+                        if g.name == LogSurvey.guideName {
+                            if s.tags["LOG"] != "none" && !capture.running {
+                                Text("Start reading (Screenshot settings…) so this page can be recorded.")
+                                    .font(.caption).foregroundStyle(.orange)
+                            }
+                            if !state.surveyNote.isEmpty {
+                                Text(state.surveyNote).font(.caption).foregroundStyle(.secondary)
+                            }
+                            if !state.recentlyRead.isEmpty {
+                                Text("Just read: " + state.recentlyRead.joined(separator: ", "))
+                                    .font(.caption2).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                     }
                     Spacer()
                     HStack {
                         Button("Back") { if state.stepIndex > 0 { state.stepIndex -= 1 } }
                         Button("Done / Next") {
+                            if let g = guide, g.steps.indices.contains(state.stepIndex) {
+                                state.markDone(g.steps[state.stepIndex])
+                            }
                             if let g = guide, state.stepIndex < g.steps.count - 1 { state.stepIndex += 1 }
                         }
                         .keyboardShortcut(.defaultAction)
+                        Button("Jump to next unfinished") { state.nextUnfinished() }
                         Spacer()
                         Text(state.sourceNote).font(.caption2).foregroundStyle(.secondary)
                     }
