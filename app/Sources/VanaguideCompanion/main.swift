@@ -49,7 +49,26 @@ final class CompanionState: ObservableObject {
     private var catalogue: [CatalogueEntry] = []
     @Published var zones = WorldMap()
     /// The player's zone, from the last "=== Area: … ===" line screen reading saw.
-    @Published var currentZone: Int? { didSet { if currentZone != oldValue { heardHere = [] } } }
+    @Published var currentZone: Int? {
+        didSet {
+            guard currentZone != oldValue else { return }
+            heardHere = []
+            if let z = currentZone, !character.isEmpty {
+                UserDefaults.standard.set(["zone": z, "at": Date().timeIntervalSince1970], forKey: "zone.\(world).\(character)")
+            }
+        }
+    }
+
+    /// The zone this character was last seen in, if within two hours: Server-Safe restarted
+    /// mid-session, the Area line may have scrolled away.
+    func restoreZone() {
+        guard currentZone == nil,
+              let d = UserDefaults.standard.dictionary(forKey: "zone.\(world).\(character)"),
+              let z = d["zone"] as? Int, let at = d["at"] as? Double,
+              Date().timeIntervalSince1970 - at < 7200 else { return }
+        currentZone = z
+        DevTrace.log("zone-restored", ["id": z])
+    }
 
     /// Developer Mode: record quest givers and zones while playing (LearnedData.swift).
     @Published var devMode = UserDefaults.standard.bool(forKey: "dev.mode") {
@@ -64,6 +83,11 @@ final class CompanionState: ObservableObject {
     @Published var discoveryNote = ""
     private var nameVote = CharacterDiscovery.Vote()
     private var lastAreaSeen: Date?
+    /// Lines on screen in the previous sample; Developer Mode only records speakers on new ones,
+    /// so a line still showing from the last zone is not credited to this one.
+    private var seenLines = Set<String>()
+    private var lastLines: [String]?
+    private var baselined = false
     var requestDiscovery: (() -> Void)?
     var discoveryDone: (() -> Void)?
 
@@ -86,16 +110,19 @@ final class CompanionState: ObservableObject {
     }
 
     func readStatusText(_ text: String) {
+        DevTrace.log("status", ["text": text])
         guard let n = nameVote.observe(CharacterDiscovery.candidates(fromStatus: text)) else { return }
         setCharacter(n)
         discoveryDone?()
     }
 
     func setCharacter(_ name: String) {
+        DevTrace.log("character", ["name": name, "world": world])
         discoveryNote = "Playing as \(name)."
-        guard name != character else { return }
+        guard name != character else { restoreZone(); return }
         character = name
         loadCharacter()
+        restoreZone()
         stepIndex = 0
         selected = progress.entries.isEmpty ? 0 : min(1, max(guides.count - 1, 0))
     }
@@ -124,6 +151,8 @@ final class CompanionState: ObservableObject {
     }
 
     init() {
+        // Someone who has used Screen Reading will again: load the recognizer now, not at Start.
+        if UserDefaults.standard.bool(forKey: "reading.used") { ScreenGuideCapture.warmUp() }
         reload()
         if let w = CharacterDiscovery.launcherWorld(), world.isEmpty || w != world { world = w }
         loadCharacter()
@@ -226,6 +255,7 @@ final class CompanionState: ObservableObject {
         let step = guides[selected].steps[stepIndex]
         let fallback = LogStatus(rawValue: step.tags["LOG"] ?? "")
         let reading = LogSurvey.read(text: text, entries: catalogue, fallback: fallback)
+        DevTrace.log("survey", ["keys": reading.keys, "status": reading.status?.rawValue ?? "", "area": reading.area ?? ""])
         guard let status = reading.status else {
             surveyNote = "Open Current Quests or Completed Quests so the guide knows which list this is."
             return
@@ -299,7 +329,22 @@ final class CompanionState: ObservableObject {
 
     /// Two consecutive unique matches select a section. Existing progress stays manual.
     func readScreenshotText(_ text: String) {
+        DevTrace.log("ocr", ["text": text, "surveying": isSurveying])
+        // A line is known by its first 24 normalized characters, so OCR noise later in a long
+        // line, or a re-wrap, does not make an old line look new.
+        let rawLines = text.components(separatedBy: .newlines).filter { !$0.isEmpty }
+        let arrivals = ChatDiff.newLines(seen: &seenLines, previous: lastLines, current: rawLines)
+        lastLines = rawLines
+        let fresh = baselined ? arrivals.joined(separator: "\n") : ""
+        baselined = true
+        var zoneChanged = false
         if let z = zones.zone(inChat: text) {
+            if z != currentZone {
+                DevTrace.log("zone", ["id": z, "name": zones.name(z)])
+                // Everything on screen at a zone change belongs to before it.
+                zoneChanged = true
+                seenLines = Set(ChatDiff.keys(rawLines))
+            }
             currentZone = z
             // An Area line after a quiet spell is a login or character switch: look again.
             if lastAreaSeen.map({ Date().timeIntervalSince($0) > 120 }) ?? true {
@@ -308,16 +353,31 @@ final class CompanionState: ObservableObject {
             }
             lastAreaSeen = Date()
         }
-        if devMode, let z = currentZone {
-            let heard = learned.hear(text, zone: z)
+        if devMode, !zoneChanged, let z = currentZone {
+            let heard = learned.hear(fresh, zone: z, excluding: character)
             if !heard.isEmpty {
+                DevTrace.log("heard", ["names": heard, "zone": z])
                 learned.save()
                 heardHere = Array((heard.reversed() + heardHere.filter { !heard.contains($0) }).prefix(12))
+                // Test hook (--dev-autotest): do what clicking the newest name and Export do.
+                if DevTrace.args.contains("--dev-autotest"), guides.indices.contains(selected),
+                   guides[selected].steps.indices.contains(stepIndex), let name = heard.last {
+                    let step = guides[selected].steps[stepIndex]
+                    if let key = Self.key(for: step), learned.givers[key] == nil {
+                        assignGiver(name, to: step)
+                        exportLearned()
+                        DevTrace.log("assigned", ["npc": name, "key": key, "note": devNote])
+                    }
+                }
             }
         }
         if isSurveying { readLogPage(text); return }
-        let match = ScreenshotGuideMatcher.match(text: text, entries: catalogue, guides: guides)
-        guard let confirmed = screenshotTracker.observe(match) else { return }
+        // Titles: whole screen, two samples. Speakers: only lines new since reading began, so old
+        // chat (a previous step, a previous session) never drags the guide somewhere else.
+        let titled = ScreenshotGuideMatcher.match(text: text, entries: catalogue, guides: guides, speakers: false)
+        let spoken = fresh.isEmpty ? nil
+            : ScreenshotGuideMatcher.speakerMatch(text: fresh, entries: catalogue, guides: guides)
+        guard let confirmed = screenshotTracker.observe(titled) ?? screenshotTracker.openOnce(spoken) else { return }
         // Keep a player's more advanced manual checkpoint in an already selected route.
         if ScreenshotGuideMatcher.preservesCheckpoint(currentGuide: selected, currentStep: stepIndex,
                                                       match: confirmed, guides: guides) {
@@ -327,6 +387,8 @@ final class CompanionState: ObservableObject {
         selected = confirmed.guide
         stepIndex = confirmed.step
         screenshotMatchNote = "Opened \(confirmed.title)."
+        DevTrace.log("opened", ["title": confirmed.title, "key": confirmed.key,
+                                "guide": guides[confirmed.guide].name, "step": confirmed.step + 1])
     }
 
     /// Re-read the snapshot when it changed on disk. File reads only.
@@ -403,9 +465,34 @@ struct CompanionView: View {
             capture.receivedStatus = { state.readStatusText($0) }
             state.requestDiscovery = { capture.beginDiscovery() }
             state.discoveryDone = { capture.endDiscovery() }
+            if let want = DevTrace.value("--auto-read") { autoRead(want) }
         }
         .onChange(of: state.isSurveying) { capture.fullWindow = $0 }
         .onDisappear { capture.stop() }
+    }
+
+    /// Test hook: choose the game window by title and start reading, with no clicks.
+    func autoRead(_ want: String) {
+        if let c = DevTrace.crop { capture.crop = c }
+        capture.refreshWindows()
+        Task { @MainActor in
+            for _ in 0..<40 {
+                if let w = capture.windows.first(where: { $0.title.localizedCaseInsensitiveContains(want) })
+                    ?? (want.isEmpty ? capture.windows.first : nil) {
+                    capture.selectedID = w.id
+                    state.resetScreenshotMatching()
+                    capture.fullWindow = state.isSurveying
+                    capture.start()
+                    let title = DevTrace.args.contains("--ignore-title") ? nil : capture.targetTitle
+                    DevTrace.log("reading", ["window": w.title, "running": capture.running, "note": capture.note])
+                    state.readingStarted(windowTitle: title)
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                if !capture.busy && capture.windows.isEmpty { capture.refreshWindows() }
+            }
+            DevTrace.log("reading-failed", ["note": capture.note, "windows": capture.windows.map(\.label)])
+        }
     }
 
     // MARK: Header — tabs, character, screen reading
@@ -424,15 +511,15 @@ struct CompanionView: View {
                 Button {
                     state.devMode.toggle()
                 } label: {
-                    Label("Developer", systemImage: state.devMode ? "hammer.fill" : "hammer")
-                        .font(.system(size: 11, weight: .semibold))
-                        .lineLimit(1).fixedSize()
+                    Image(systemName: state.devMode ? "hammer.fill" : "hammer")
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(state.devMode ? Theme.night : Theme.text)
-                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .frame(width: 26, height: 20)
                         .background(Capsule().fill(state.devMode ? Theme.gold : Color.white.opacity(0.12)))
                 }
                 .buttonStyle(.plain)
-                .help("Developer Mode: record quest givers and their zones while you play.")
+                .help(state.devMode ? "Developer Mode is on: recording quest givers and zones. Click to turn off."
+                                    : "Developer Mode: record quest givers and their zones while you play.")
                 readingStatus
             }
             HStack(spacing: 6) {
@@ -455,9 +542,9 @@ struct CompanionView: View {
     var readingStatus: some View {
         HStack(spacing: 6) {
             if capture.running {
-                Circle().fill(Theme.jade).frame(width: 7, height: 7)
-                Text(capture.discovering ? "Finding Character" : (state.isSurveying ? "Reading Window" : "Reading Chat"))
-                    .font(.caption)
+                Circle().fill(ScreenGuideCapture.warm ? Theme.jade : Theme.gold).frame(width: 8, height: 8)
+                    .help(!ScreenGuideCapture.warm ? "Preparing text recognition…"
+                          : capture.discovering ? "Finding your character…" : capture.note)
                 Button("Stop") { capture.stop() }.controlSize(.small)
             } else {
                 Button("Screen Reading…") { showReading.toggle() }
@@ -591,7 +678,7 @@ struct CompanionView: View {
         let npc = s.tags["NPC"]?.npcDisplay
         let isQuest = s.tags["Q"] != nil || s.tags["QA"] != nil
         let isMission = s.tags["M"] != nil || s.tags["MA"] != nil
-        Text(npc.map { "Talk to \($0)" } ?? s.title)
+        Text(npc.map { $0.hasPrefix("the ??? marker") ? "Examine \($0)" : "Talk to \($0)" } ?? s.title)
             .font(.system(size: 17, weight: .semibold))
         if s.zone != nil {
             Label("in \(state.zones.name(s.zone))", systemImage: "mappin.and.ellipse")
@@ -619,7 +706,9 @@ struct CompanionView: View {
             SectionLabel(text: "How to get there").padding(.top, 4)
             if let here = state.currentZone {
                 if here == target {
-                    Text(npc.map { "You're in the right place. Look around for \($0), walk up to them, target them and press Enter to talk." }
+                    Text(npc.map { $0.isMarker
+                            ? "You're in the right place. Look for a small glowing \"???\" spot, target it and press Enter."
+                            : "You're in the right place. Look around for \($0), walk up to them, target them and press Enter to talk." }
                          ?? "You're in the right place.")
                         .font(.callout).fixedSize(horizontal: false, vertical: true)
                 } else if let hops = state.zones.route(from: here, to: target) {
@@ -628,14 +717,16 @@ struct CompanionView: View {
                         Text("\(i + 1). \(line)").font(.callout)
                     }
                     if let npc {
-                        Text("\(hops.count + 1). Find \(npc), target them and press Enter to talk.").font(.callout)
+                        Text("\(hops.count + 1). " + (npc.isMarker ? "Find the small glowing \"???\" spot, target it and press Enter."
+                                                                   : "Find \(npc), target them and press Enter to talk."))
+                            .font(.callout)
                     }
                 } else {
                     Text("No known route from \(state.zones.name(here)) yet. Head for \(state.zones.name(target)).")
                         .font(.callout)
                 }
             } else {
-                Text("Go to \(state.zones.name(target))\(npc.map { " and find \($0). Target them and press Enter to talk." } ?? ".")")
+                Text("Go to \(state.zones.name(target))\(npc.map { $0.isMarker ? " and find the small glowing \"???\" spot. Target it and press Enter." : " and find \($0). Target them and press Enter to talk." } ?? ".")")
                     .font(.callout).fixedSize(horizontal: false, vertical: true)
                 Text("Turn on Screen Reading and the guide will give turn-by-turn directions from where you are.")
                     .font(.caption).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)

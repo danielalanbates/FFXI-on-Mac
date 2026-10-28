@@ -99,6 +99,7 @@ final class ScreenGuideCapture: ObservableObject {
         guard running, !discovering else { return }
         discovering = true
         discoveryEnds = Date().addingTimeInterval(seconds)
+        DevTrace.log("discovery", ["seconds": seconds])
         schedule(every: 2)
     }
 
@@ -118,6 +119,7 @@ final class ScreenGuideCapture: ObservableObject {
 
     func refreshWindows() {
         guard !running, !busy else { return }
+        Self.warmUp()
         guard #available(macOS 14.0, *) else { note = "Screenshot mode needs macOS 14 or later."; return }
         // Permission is requested only after this explicit button press; never on app launch.
         guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {
@@ -165,13 +167,16 @@ final class ScreenGuideCapture: ObservableObject {
         session = UUID()
         ocrFailures = 0
         running = true
-        note = "Reading the selected chat area every 10 seconds."
+        UserDefaults.standard.set(true, forKey: "reading.used")
+        note = Self.warm ? "Reading the selected chat area every 10 seconds."
+                         : "Preparing text recognition (about a minute, once per launch)…"
         // First sample is immediate; subsequent samples never overlap a pending capture/OCR.
         capture()
         schedule(every: 10)
     }
 
     func stop(note: String = "Screenshot reading stopped.") {
+        DevTrace.log("stop", ["note": note])
         timer?.invalidate()
         timer = nil
         discovering = false
@@ -184,6 +189,8 @@ final class ScreenGuideCapture: ObservableObject {
 
     private func capture() {
         guard #available(macOS 14.0, *), running, !busy, let target else { return }
+        // The name search's 30 s only count once the recognizer is ready.
+        if discovering, !Self.warm { discoveryEnds = Date().addingTimeInterval(30) }
         if discovering, let ends = discoveryEnds, Date() > ends { endDiscovery() }
         let readStatus = discovering
         busy = true
@@ -220,9 +227,10 @@ final class ScreenGuideCapture: ObservableObject {
                     ocrFailures += 1
                     // macOS compiles the recognizer for the Neural Engine on first use (minutes,
                     // seen 2026-10-28); requests fail or hang meanwhile. Keep trying, say why.
-                    note = ocrFailures >= 3
-                        ? "macOS is still preparing text recognition. This can take several minutes the first time."
-                        : "Skipped one unreadable sample."
+                    note = !Self.warm
+                        ? "Preparing text recognition (about a minute, once per launch)…"
+                        : (ocrFailures >= 3 ? "Text recognition is not responding; still trying."
+                                            : "Skipped one unreadable sample.")
                     return
                 }
                 ocrFailures = 0
@@ -242,6 +250,33 @@ final class ScreenGuideCapture: ObservableObject {
     }
 
     struct RecognitionTimeout: Error {}
+    /// The recognizer's first request in a process loads its model: about 65 s on this Mac
+    /// (2026-10-28), then 0.1 s per read. Warm it up before reading starts.
+    nonisolated(unsafe) static var warm = false
+
+    nonisolated static func warmUp() {
+        guard !warm, !pending else { return }
+        pending = true
+        DispatchQueue.global(qos: .utility).async {
+            let t = Date()
+            _ = try? recognize(sampleImage())
+            warm = true
+            pending = false
+            DevTrace.log("warm", ["seconds": Date().timeIntervalSince(t)])
+        }
+    }
+
+    /// A few words of black text on white, enough to load detection and recognition.
+    nonisolated static func sampleImage() -> CGImage {
+        let size = NSSize(width: 320, height: 60)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor.white.setFill(); NSRect(origin: .zero, size: size).fill()
+        ("Port San d'Oria" as NSString).draw(at: NSPoint(x: 10, y: 18),
+            withAttributes: [.font: NSFont.systemFont(ofSize: 24), .foregroundColor: NSColor.black])
+        image.unlockFocus()
+        return image.cgImage(forProposedRect: nil, context: nil, hints: nil)!
+    }
     /// A recognition still running from an earlier timeout; no second one starts beside it.
     nonisolated(unsafe) private static var pending = false
 
@@ -261,6 +296,7 @@ final class ScreenGuideCapture: ObservableObject {
             }
             DispatchQueue.global(qos: .utility).async {
                 let result = Result { try recognize(image) }
+                warm = true
                 pending = false
                 finish(result)
             }
@@ -268,17 +304,58 @@ final class ScreenGuideCapture: ObservableObject {
         }
     }
 
-    /// On-device text recognition; lines under 60% confidence are dropped.
+    /// On-device text recognition; lines under 60% confidence are dropped. Vision returns a
+    /// chat row as separate pieces when the game spaces them out ("Gulemont" and "It's been…"
+    /// with the colon lost, 2026-10-28), so pieces are put back into rows by position.
     nonisolated static func recognize(_ image: CGImage) throws -> String {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.recognitionLanguages = ["en-US"]
         request.usesLanguageCorrection = false
         try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
-        return (request.results ?? []).compactMap { observation -> String? in
-            guard let candidate = observation.topCandidates(1).first,
-                  candidate.confidence >= 0.6 else { return nil }
-            return candidate.string
-        }.joined(separator: "\n")
+        let pieces: [OCRPiece] = (request.results ?? []).compactMap { observation in
+            guard let candidate = observation.topCandidates(1).first, candidate.confidence >= 0.6 else { return nil }
+            let r = observation.boundingBox
+            return OCRPiece(text: candidate.string, x: r.minX, midY: r.midY, height: r.height, width: r.width)
+        }
+        let aspect = CGFloat(image.width) / CGFloat(max(image.height, 1))
+        return OCRPiece.rows(pieces, aspect: aspect).joined(separator: "\n")
+    }
+}
+
+/// One recognized text box, in Vision's normalized coordinates (origin bottom left).
+struct OCRPiece {
+    let text: String
+    let x: CGFloat
+    let midY: CGFloat
+    let height: CGFloat
+    var width: CGFloat = 0
+
+    /// Pieces on the same row (centres within half a line) joined left to right, rows top down.
+    /// A row that begins with a lone name gets its speaker separator back: "Name : text".
+    static func rows(_ pieces: [OCRPiece], aspect: CGFloat = 1) -> [String] {
+        var rows: [[OCRPiece]] = []
+        for p in pieces.sorted(by: { $0.midY > $1.midY }) {
+            if let i = rows.firstIndex(where: { abs($0[0].midY - p.midY) < max($0[0].height, p.height) * 0.5 }) {
+                rows[i].append(p)
+            } else {
+                rows.append([p])
+            }
+        }
+        return rows.map { row in
+            let sorted = row.sorted { $0.x < $1.x }
+            let parts = sorted.map(\.text)
+            guard parts.count > 1 else { return parts.first ?? "" }
+            let first = parts[0].trimmingCharacters(in: .whitespaces)
+            // The game's " : " leaves a gap of about a line height; ordinary word spacing is far
+            // smaller ("Deleted San d'Oria | quest 6…" must not become a speaker).
+            let gap = (sorted[1].x - (sorted[0].x + sorted[0].width)) * aspect
+            let lone = gap >= sorted[0].height * 0.8 && sorted[0].width > 0
+                && !first.contains(":") && (1...3).contains(first.split(separator: " ").count)
+                && first.first?.isUppercase == true
+                && first.allSatisfy { $0.isLetter || $0 == " " || $0 == "'" || $0 == "-" }
+            return lone ? first + " : " + parts.dropFirst().joined(separator: " ")
+                        : parts.joined(separator: " ")
+        }
     }
 }

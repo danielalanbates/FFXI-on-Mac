@@ -124,6 +124,11 @@ extension CompanionSelfTest {
                                                 "Airship to Jeuno (Port San d'Oria counter) (needs an Airship Pass)"]))
         checks.append(("already there is an empty route", map.route(from: 232, to: 232) == []))
         checks.append(("NPC names drop underscores", "Fyi_Chalmwoh".npcDisplay == "Fyi Chalmwoh"))
+        checks.append(("??? spots read as markers, not names",
+                       "qm1".npcDisplay == "the ??? marker" && "qm6 (H-10/Boat)".npcDisplay == "the ??? marker (H-10/Boat)"
+                           && "Hanaa_Punaa".npcDisplay == "Hanaa Punaa"))
+        checks.append(("misread addon lines are not speakers",
+                       LearnedData.speakers(in: "Vanaguidel release : x\nHanaa Punaa : Hello") == ["Hanaa Punaa"]))
         checks.append(("speakers are read from NPC lines, not system lines",
                        LearnedData.speakers(in: "Gulemont : Ahhh!\n=== Area: Port San d'Oria ===\nObtained: Gil\n[1] Labguide : hi\nPortaure : Well, well...")
                            == ["Gulemont", "Portaure"]))
@@ -153,6 +158,31 @@ extension CompanionSelfTest {
         checks.append(("the launcher's world fills in World",
                        CharacterDiscovery.launcherWorld(at: sessionFile) == "Local server"))
         try? FileManager.default.removeItem(at: sessionDir)
+        let rows = OCRPiece.rows([
+            OCRPiece(text: "It's been twenty years", x: 0.2, midY: 0.50, height: 0.04, width: 0.5),
+            OCRPiece(text: "Gulemont", x: 0.0, midY: 0.505, height: 0.04, width: 0.14),
+            OCRPiece(text: "Deleted San d'Oria", x: 0.0, midY: 0.10, height: 0.04, width: 0.3),
+            OCRPiece(text: "quest 6 from Labguide.", x: 0.31, midY: 0.10, height: 0.04, width: 0.3),
+            OCRPiece(text: "=== Area: Port San d'Oria ===", x: 0.0, midY: 0.30, height: 0.04),
+            OCRPiece(text: "Labguide : !pos 1 2 3", x: 0.0, midY: 0.70, height: 0.04),
+        ])
+        checks.append(("OCR pieces rebuild chat rows and the speaker separator",
+                       rows == ["Labguide : !pos 1 2 3", "Gulemont : It's been twenty years",
+                                "=== Area: Port San d'Oria ===", "Deleted San d'Oria quest 6 from Labguide."]))
+        var me = LearnedData()
+        checks.append(("the player's own lines are not speakers",
+                       me.hear("Labguide : !pos 1\nGulemont : Hi", zone: 232, excluding: "Labguide") == ["Gulemont"]))
+        var seen = Set(ChatDiff.keys(["top cut", "a", "Glenne : Oh"]))
+        let arrivedFirst = ChatDiff.newLines(seen: &seen, current: ["top cut off", "a", "Glenne : Oh", "Lusiane : Hi"])
+        let again = ChatDiff.newLines(seen: &seen, current: ["a", "Lusiane : Hi", "Glenne : Oh"])
+        let repeatLine = ChatDiff.newLines(seen: &seen, current: ["a", "Glenne : Oh", "Lusiane : Hi", "Glenne : Oh"])
+        checks.append(("a line counts once, the first time it shows; the cut top row never does",
+                       arrivedFirst == ["Lusiane : Hi"] && again.isEmpty))
+        checks.append(("an NPC repeating the same line is heard again", repeatLine == ["Glenne : Oh"]))
+        var full = Set(ChatDiff.keys(["x", "a", "Glenne : Oh", "b"]))
+        let scrolled = ChatDiff.newLines(seen: &full, previous: ["x", "a", "Glenne : Oh", "b"],
+                                         current: ["a", "Glenne : Oh", "b", "Glenne : Oh"])
+        checks.append(("a repeat that scrolls the old copy away is still heard", scrolled == ["Glenne : Oh"]))
         checks.append(("bottom chat crop scales to screenshot pixels",
                        ChatCrop().rect(width: 1600, height: 1000) == CGRect(x: 0, y: 650, width: 1600, height: 350)))
         checks.append(("invalid and nonfinite crop values are refused",
