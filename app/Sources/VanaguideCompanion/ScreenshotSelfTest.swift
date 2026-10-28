@@ -135,6 +135,24 @@ extension CompanionSelfTest {
         checks.append(("heard speakers are counted per zone", learned.speakers["Gulemont"]?["232"] == 2))
         checks.append(("export writes mergeable guide data",
                        exported.contains("[10] = { name = 'A Squire\\'s Test', zone = 230, npc = 'Balasiel' },")))
+        checks.append(("a character-name window title is the character",
+                       CharacterDiscovery.name(fromTitle: "Labguide") == "Labguide"
+                           && CharacterDiscovery.name(fromTitle: "FFXI on Mac") == nil
+                           && CharacterDiscovery.name(fromTitle: "FFXI") == nil))
+        checks.append(("the status box gives the name beside the HP",
+                       CharacterDiscovery.candidates(fromStatus: "Solo\nLabguide 507 g") == ["Labguide"]
+                           && CharacterDiscovery.candidates(fromStatus: "Solo 3\nGil 1200 Gulemont") == []))
+        var vote = CharacterDiscovery.Vote()
+        let once = vote.observe(["Labguide"])
+        let twice = vote.observe(["Labguide"])
+        checks.append(("a name is trusted after two readings", once == nil && twice == "Labguide"))
+        let sessionDir = FileManager.default.temporaryDirectory.appendingPathComponent("vg-session-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        let sessionFile = sessionDir.appendingPathComponent("session.json")
+        try? Data(#"{"updated":"x","world":"Local server"}"#.utf8).write(to: sessionFile)
+        checks.append(("the launcher's world fills in World",
+                       CharacterDiscovery.launcherWorld(at: sessionFile) == "Local server"))
+        try? FileManager.default.removeItem(at: sessionDir)
         checks.append(("bottom chat crop scales to screenshot pixels",
                        ChatCrop().rect(width: 1600, height: 1000) == CGRect(x: 0, y: 650, width: 1600, height: 350)))
         checks.append(("invalid and nonfinite crop values are refused",
