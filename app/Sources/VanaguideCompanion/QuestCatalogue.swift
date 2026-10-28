@@ -126,7 +126,8 @@ enum ScreenshotGuideMatcher {
     /// Exact normalized title, with word boundaries; no fuzzy guesses from item chatter. A single
     /// short word such as "Dawn" requires an explicit quest/mission label. Without a title, an
     /// exact quest-giver speaker name is the fallback (see speakerMatch).
-    static func match(text: String, entries: [CatalogueEntry], guides: [Guide]) -> ScreenshotGuideMatch? {
+    static func match(text: String, entries: [CatalogueEntry], guides: [Guide],
+                      speakers: Bool = true) -> ScreenshotGuideMatch? {
         let lines = text.components(separatedBy: .newlines).map(normalized).filter { !$0.isEmpty }
         guard !lines.isEmpty else { return nil }
         var hits: [CatalogueEntry] = []
@@ -149,7 +150,7 @@ enum ScreenshotGuideMatcher {
         // The same name in multiple logs, or several names on one screenshot, is ambiguous.
         if hits.count > 1 { return nil }
         if let entry = hits.first { return locate(entry, title: entry.name, guides: guides) }
-        return speakerMatch(text: text, entries: entries, guides: guides)
+        return speakers ? speakerMatch(text: text, entries: entries, guides: guides) : nil
     }
 
     /// FFXI rarely prints a quest's title, but every NPC line starts with the speaker:
@@ -193,6 +194,13 @@ struct ScreenshotMatchTracker {
     private var previous: String?
     private var repeated = 0
     private var opened = Set<String>()
+
+    /// A quest giver speaking on a line that just appeared is enough on its own; each quest is
+    /// still opened only once per reading session.
+    mutating func openOnce(_ match: ScreenshotGuideMatch?) -> ScreenshotGuideMatch? {
+        guard let match, opened.insert(match.key).inserted else { return nil }
+        return match
+    }
 
     mutating func observe(_ match: ScreenshotGuideMatch?) -> ScreenshotGuideMatch? {
         guard let match else { previous = nil; repeated = 0; return nil }

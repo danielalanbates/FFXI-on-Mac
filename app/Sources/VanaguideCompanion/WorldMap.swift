@@ -104,6 +104,20 @@ struct WorldMap {
 }
 
 extension String {
-    /// "Fyi_Chalmwoh" -> "Fyi Chalmwoh".
-    var npcDisplay: String { replacingOccurrences(of: "_", with: " ") }
+    /// "Fyi_Chalmwoh" -> "Fyi Chalmwoh"; the game's glowing "???" spots (qm1, "qm6 (H-10/Boat)",
+    /// "blank divine might") -> "the ??? marker", keeping any map hint.
+    var npcDisplay: String {
+        let name = replacingOccurrences(of: "_", with: " ").trimmingCharacters(in: .whitespaces)
+        let lower = name.lowercased()
+        if lower.hasPrefix("qm") || lower.hasPrefix("blank") || lower.hasPrefix("iy") || lower.hasPrefix("iz") {
+            if let open = name.firstIndex(of: "("), let close = name.lastIndex(of: ")"), open < close {
+                return "the ??? marker (\(name[name.index(after: open)..<close].trimmingCharacters(in: .whitespaces)))"
+            }
+            return "the ??? marker"
+        }
+        return name
+    }
+
+    /// "???" spots are examined, people are talked to.
+    var isMarker: Bool { npcDisplay.hasPrefix("the ??? marker") }
 }
