@@ -88,6 +88,33 @@ final class ScreenGuideCapture: ObservableObject {
     private var target: CaptureWindow?
     private var ocrFailures = 0
     var receivedText: ((String) -> Void)?
+    /// Status-box text while a character-name search runs (CharacterDiscovery).
+    var receivedStatus: ((String) -> Void)?
+    @Published private(set) var discovering = false
+    private var discoveryEnds: Date?
+    var targetTitle: String? { target?.title }
+
+    /// Read every 2 seconds, status box included, for up to `seconds`; then back to 10.
+    func beginDiscovery(seconds: TimeInterval = 30) {
+        guard running, !discovering else { return }
+        discovering = true
+        discoveryEnds = Date().addingTimeInterval(seconds)
+        schedule(every: 2)
+    }
+
+    func endDiscovery() {
+        guard discovering else { return }
+        discovering = false
+        discoveryEnds = nil
+        if running { schedule(every: 10) }
+    }
+
+    private func schedule(every seconds: TimeInterval) {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.capture() }
+        }
+    }
 
     func refreshWindows() {
         guard !running, !busy else { return }
@@ -141,14 +168,14 @@ final class ScreenGuideCapture: ObservableObject {
         note = "Reading the selected chat area every 10 seconds."
         // First sample is immediate; subsequent samples never overlap a pending capture/OCR.
         capture()
-        timer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.capture() }
-        }
+        schedule(every: 10)
     }
 
     func stop(note: String = "Screenshot reading stopped.") {
         timer?.invalidate()
         timer = nil
+        discovering = false
+        discoveryEnds = nil
         running = false
         target = nil
         session = UUID() // invalidates callbacks from any already-running OCR request
@@ -157,6 +184,8 @@ final class ScreenGuideCapture: ObservableObject {
 
     private func capture() {
         guard #available(macOS 14.0, *), running, !busy, let target else { return }
+        if discovering, let ends = discoveryEnds, Date() > ends { endDiscovery() }
+        let readStatus = discovering
         busy = true
         let token = session
         let crop = fullWindow ? ChatCrop(left: 0, top: 0, width: 100, height: 100) : crop
@@ -185,33 +214,71 @@ final class ScreenGuideCapture: ObservableObject {
                 }
                 // Vision occasionally fails one request on the Neural Engine and succeeds on the
                 // next (seen 2026-10-28). Skip that sample; stop only when it keeps failing.
-                let ocr = Task.detached(priority: .utility) { () throws -> String in
-                    let request = VNRecognizeTextRequest()
-                    request.recognitionLevel = .accurate
-                    request.recognitionLanguages = ["en-US"]
-                    request.usesLanguageCorrection = false
-                    try VNImageRequestHandler(cgImage: chat, options: [:]).perform([request])
-                    return (request.results ?? []).compactMap { observation -> String? in
-                        guard let candidate = observation.topCandidates(1).first,
-                              candidate.confidence >= 0.6 else { return nil }
-                        return candidate.string
-                    }.joined(separator: "\n")
-                }
                 let text: String
-                do { text = try await ocr.value } catch {
+                do { text = try await Self.recognizeWithTimeout(chat) } catch {
                     guard session == token, running else { return }
                     ocrFailures += 1
-                    if ocrFailures >= 3 { stop(note: "Text recognition keeps failing. Try Start again.") }
-                    else { note = "Skipped one unreadable sample." }
+                    // macOS compiles the recognizer for the Neural Engine on first use (minutes,
+                    // seen 2026-10-28); requests fail or hang meanwhile. Keep trying, say why.
+                    note = ocrFailures >= 3
+                        ? "macOS is still preparing text recognition. This can take several minutes the first time."
+                        : "Skipped one unreadable sample."
                     return
                 }
                 ocrFailures = 0
                 guard session == token, running else { return }
                 receivedText?(text)
+                if readStatus, let r = CharacterDiscovery.statusCrop.rect(width: image.width, height: image.height),
+                   let box = image.cropping(to: r),
+                   let status = try? await Self.recognizeWithTimeout(box) {
+                    guard session == token, running else { return }
+                    receivedStatus?(status)
+                }
             } catch {
                 guard session == token else { return }
                 stop(note: "Screenshot reading stopped. Check the game window and permission.")
             }
         }
+    }
+
+    struct RecognitionTimeout: Error {}
+    /// A recognition still running from an earlier timeout; no second one starts beside it.
+    nonisolated(unsafe) private static var pending = false
+
+    /// Gives up after `seconds`; a hung request is left to finish on its own, never stacked.
+    /// (A task group would wait for the hung child, so the first result resumes a continuation.)
+    nonisolated static func recognizeWithTimeout(_ image: CGImage, seconds: Double = 8) async throws -> String {
+        let lock = NSLock()
+        if (lock.withLock { pending }) { throw RecognitionTimeout() }
+        pending = true
+        return try await withCheckedThrowingContinuation { (done: CheckedContinuation<String, Error>) in
+            var resumed = false
+            func finish(_ result: Result<String, Error>) {
+                lock.lock(); defer { lock.unlock() }
+                guard !resumed else { return }
+                resumed = true
+                done.resume(with: result)
+            }
+            DispatchQueue.global(qos: .utility).async {
+                let result = Result { try recognize(image) }
+                pending = false
+                finish(result)
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { finish(.failure(RecognitionTimeout())) }
+        }
+    }
+
+    /// On-device text recognition; lines under 60% confidence are dropped.
+    nonisolated static func recognize(_ image: CGImage) throws -> String {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.recognitionLanguages = ["en-US"]
+        request.usesLanguageCorrection = false
+        try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
+        return (request.results ?? []).compactMap { observation -> String? in
+            guard let candidate = observation.topCandidates(1).first,
+                  candidate.confidence >= 0.6 else { return nil }
+            return candidate.string
+        }.joined(separator: "\n")
     }
 }

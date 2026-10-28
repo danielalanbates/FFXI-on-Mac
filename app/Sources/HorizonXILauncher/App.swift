@@ -1034,7 +1034,7 @@ struct ContentView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
-                Button("Open") { Guide.openCompanion() }
+                Button("Open") { Guide.openCompanion(world: store.selected?.name ?? "") }
                     .disabled(Guide.companionURL == nil)
                     .help(Guide.companionSupported ? "" : "Needs macOS 14 or later.")
             }
@@ -2898,6 +2898,7 @@ struct ContentView: View {
         localServerSlowing = false
         updateChecked = false
         Credentials.setUsername(user, forWorld: store.selected?.name ?? "")
+        Guide.shareSession(world: store.selected?.name ?? "")
         Credentials.remember = remember
         if remember { Credentials.savePassword(pass, for: user, world: store.selected?.name ?? "") }
         else { Credentials.savePassword("", for: user, world: store.selected?.name ?? "") }

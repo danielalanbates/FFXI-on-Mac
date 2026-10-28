@@ -28,7 +28,21 @@ enum Guide {
         return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
     }
 
-    static func openCompanion() {
+    /// Tells Server-Safe which world is being played, so it can fill in World by itself.
+    /// A tiny JSON file in Server-Safe's own Application Support folder; no credentials.
+    static func shareSession(world: String) {
+        guard !world.isEmpty,
+              let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        else { return }
+        let dir = base.appendingPathComponent("VanaGuide Server-Safe", isDirectory: true)
+        let body: [String: String] = ["world": world, "updated": ISO8601DateFormatter().string(from: Date())]
+        guard let data = try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]) else { return }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? data.write(to: dir.appendingPathComponent("session.json"), options: .atomic)
+    }
+
+    static func openCompanion(world: String = "") {
+        shareSession(world: world)
         let identifier = "org.batesai.vanaguide-companion"
         if let existing = NSWorkspace.shared.runningApplications.first(where: {
             $0.bundleIdentifier == identifier

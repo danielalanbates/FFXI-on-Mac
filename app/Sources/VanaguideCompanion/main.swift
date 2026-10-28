@@ -59,6 +59,46 @@ final class CompanionState: ObservableObject {
     /// Speakers seen in the current zone this session, newest first.
     @Published var heardHere: [String] = []
     @Published var devNote = ""
+
+    /// Character discovery (CharacterDiscovery.swift) and the launcher-supplied world.
+    @Published var discoveryNote = ""
+    private var nameVote = CharacterDiscovery.Vote()
+    private var lastAreaSeen: Date?
+    var requestDiscovery: (() -> Void)?
+    var discoveryDone: (() -> Void)?
+
+    /// Fill World from the launcher's session file when it names a different one.
+    func applyLauncherWorld() {
+        guard let w = CharacterDiscovery.launcherWorld(), w != world else { return }
+        world = w
+        loadCharacter()
+    }
+
+    /// Reading just started: use the window title if it is the name, else search the status box.
+    func readingStarted(windowTitle: String?) {
+        nameVote = CharacterDiscovery.Vote()
+        if let n = windowTitle.flatMap(CharacterDiscovery.name(fromTitle:)) {
+            setCharacter(n)
+        } else {
+            discoveryNote = "Looking for your character name…"
+            requestDiscovery?()
+        }
+    }
+
+    func readStatusText(_ text: String) {
+        guard let n = nameVote.observe(CharacterDiscovery.candidates(fromStatus: text)) else { return }
+        setCharacter(n)
+        discoveryDone?()
+    }
+
+    func setCharacter(_ name: String) {
+        discoveryNote = "Playing as \(name)."
+        guard name != character else { return }
+        character = name
+        loadCharacter()
+        stepIndex = 0
+        selected = progress.entries.isEmpty ? 0 : min(1, max(guides.count - 1, 0))
+    }
     private var screenshotTracker = ScreenshotMatchTracker()
 
     /// This character's local progress record (see LogProgress.swift).
@@ -85,6 +125,7 @@ final class CompanionState: ObservableObject {
 
     init() {
         reload()
+        if let w = CharacterDiscovery.launcherWorld(), world.isEmpty || w != world { world = w }
         loadCharacter()
         // A character with nothing recorded starts on Getting started; others on their guides.
         selected = progress.entries.isEmpty ? 0 : min(1, max(guides.count - 1, 0))
@@ -258,7 +299,15 @@ final class CompanionState: ObservableObject {
 
     /// Two consecutive unique matches select a section. Existing progress stays manual.
     func readScreenshotText(_ text: String) {
-        if let z = zones.zone(inChat: text) { currentZone = z }
+        if let z = zones.zone(inChat: text) {
+            currentZone = z
+            // An Area line after a quiet spell is a login or character switch: look again.
+            if lastAreaSeen.map({ Date().timeIntervalSince($0) > 120 }) ?? true {
+                nameVote = CharacterDiscovery.Vote()
+                requestDiscovery?()
+            }
+            lastAreaSeen = Date()
+        }
         if devMode, let z = currentZone {
             let heard = learned.hear(text, zone: z)
             if !heard.isEmpty {
@@ -347,8 +396,14 @@ struct CompanionView: View {
         .background(Theme.backdrop)
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
             state.reloadProgress()
+            state.applyLauncherWorld()
         }
-        .onAppear { capture.receivedText = { state.readScreenshotText($0) } }
+        .onAppear {
+            capture.receivedText = { state.readScreenshotText($0) }
+            capture.receivedStatus = { state.readStatusText($0) }
+            state.requestDiscovery = { capture.beginDiscovery() }
+            state.discoveryDone = { capture.endDiscovery() }
+        }
         .onChange(of: state.isSurveying) { capture.fullWindow = $0 }
         .onDisappear { capture.stop() }
     }
@@ -387,6 +442,9 @@ struct CompanionView: View {
                     .onSubmit { state.loadCharacter() }
                 Button("Load") { state.loadCharacter() }
                 Spacer()
+                if !state.discoveryNote.isEmpty {
+                    Text(state.discoveryNote).font(.caption).foregroundStyle(Theme.crystal).lineLimit(1)
+                }
                 Text("\(state.progress.completedCount) completed · \(state.progress.currentCount) current")
                     .font(.caption).foregroundStyle(Theme.muted)
             }
@@ -398,7 +456,8 @@ struct CompanionView: View {
         HStack(spacing: 6) {
             if capture.running {
                 Circle().fill(Theme.jade).frame(width: 7, height: 7)
-                Text(state.isSurveying ? "Reading Window" : "Reading Chat").font(.caption)
+                Text(capture.discovering ? "Finding Character" : (state.isSurveying ? "Reading Window" : "Reading Chat"))
+                    .font(.caption)
                 Button("Stop") { capture.stop() }.controlSize(.small)
             } else {
                 Button("Screen Reading…") { showReading.toggle() }
@@ -437,6 +496,7 @@ struct CompanionView: View {
                     state.resetScreenshotMatching()
                     capture.fullWindow = state.isSurveying
                     capture.start()
+                    state.readingStarted(windowTitle: capture.targetTitle)
                     tab = 0
                     showReading = false
                 }
