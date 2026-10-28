@@ -43,7 +43,11 @@ extension CompanionSelfTest {
             ("catalogue parses literal quest and mission facts", quests.count == 2 && missions.count == 1),
             ("OCR title normalizes curly apostrophes and punctuation", trial?.title == "A Squire's Test"),
             ("OCR opens authored acceptance before a generated reference", trial?.guide == 0 && trial?.step == 0),
-            ("OCR does not guess a quest from NPC dialogue", match("Balasiel: Bring me a root.") == nil),
+            ("a quest giver's dialogue opens their quest", match("Balasiel : Bring me a root.")?.key == "Q:sandoria,10"),
+            ("an unknown later speaker falls back to the last quest giver", match("Balasiel : Hello.\nGulemont : Ahhh!")?.key == "Q:sandoria,10"
+                && match("Someone : Hi.\nBalasiel : Hello.")?.key == "Q:sandoria,10"),
+            ("a player or unknown speaker opens nothing", match("Labguide : !pos 1 2 3") == nil),
+            ("a speaker named only inside a line opens nothing", match("Ask Balasiel about it.") == nil),
             ("OCR rejects several quest titles in one capture",
              match("A Squire's Test\nMission: Dawn") == nil),
             ("OCR does not match inside a longer word", match("A Squire's Testing") == nil),
@@ -94,6 +98,13 @@ extension CompanionSelfTest {
                                                          bundle: "", executable: "horizon-loader.exe")
                            && !GameWindowIdentity.matches(title: "Notepad", owner: "wine64-preloader",
                                                           bundle: "org.winehq.wine", executable: "wine64-preloader")))
+        checks.append(("a character-named window of an FFXI loader process is the game",
+                       GameWindowIdentity.matches(title: "Labguide", owner: "wine", bundle: "",
+                                                  executable: "wine", gameProcess: true)
+                           && !GameWindowIdentity.matches(title: "Labguide", owner: "Google Chrome",
+                                                          bundle: "com.google.chrome", executable: "Google Chrome",
+                                                          gameProcess: true)
+                           && !GameWindowIdentity.isGameProcess(ProcessInfo.processInfo.processIdentifier)))
         // Explicit developer override only: never enumerate or hydrate Drive during this fixture.
         if let path = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"] {
             let real = QuestCatalogue.entries(at: URL(fileURLWithPath: path))
