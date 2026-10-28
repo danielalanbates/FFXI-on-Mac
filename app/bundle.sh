@@ -58,7 +58,7 @@ fi
 # .../wine/lib/wine/../../bin/wineserver, so the whole folder is matched. Other Wine apps
 # (CrossOver, Whisky, XIV on Mac) keep their wine elsewhere and do not count. Checked before the
 # build and again right before the swap. "Install FFXI on Mac.command" uses the same pattern.
-LIVE_PATTERN='FFXI-on-Mac\.app/Contents/(MacOS|Resources/x87sidecar)|horizon-loader|Ashita-cli|/wine-coop/wine/|/SharedSupport/wine/'
+LIVE_PATTERN='FFXI-on-Mac\.app/Contents/(MacOS|Resources/x87sidecar|Helpers/[^/]+\.app/Contents/MacOS/VanaguideCompanion)|horizon-loader|Ashita-cli|/wine-coop/wine/|/SharedSupport/wine/'
 APPLICATIONS_ID="$(/usr/bin/stat -f %d:%i /Applications)"
 # Pid and executable of each match, never the arguments: a loader's carry the account password.
 # Fails when nothing matches.
@@ -95,8 +95,8 @@ cd "$HERE"
 if [[ -n "${HXI_BINARY:-}" ]]; then
   BIN="$HXI_BINARY"
 else
-  swift build -c release --scratch-path "$BUILD_DIR"
-  BIN="$(swift build -c release --scratch-path "$BUILD_DIR" --show-bin-path)/HorizonXILauncher"
+  swift build --build-system native -c release -j 1 --scratch-path "$BUILD_DIR" -Xswiftc -parse-as-library
+  BIN="$(swift build --build-system native -c release --scratch-path "$BUILD_DIR" --show-bin-path)/HorizonXILauncher"
 fi
 [[ -x "$BIN" ]] || { echo "build produced no binary" >&2; exit 1; }
 
@@ -111,8 +111,8 @@ bundle_addon() {
 VANAGUIDE_SOURCE="${HXI_VANAGUIDE_SOURCE:-$REPO/../vanaguide/Vanaguide}"
 VANAVOICE_SOURCE="${HXI_VANAVOICE_SOURCE:-$REPO/../vanavoice/addon/vanavoice}"
 WINECURSOR_SOURCE="${HXI_WINECURSOR_SOURCE:-$REPO/addons/winecursor}"
-VANAGUIDE_LICENSE="$REPO/../vanaguide/LICENSE"
-VANAVOICE_LICENSE="$REPO/../vanavoice/LICENSE"
+VANAGUIDE_LICENSE="${VANAGUIDE_SOURCE:h}/LICENSE"
+VANAVOICE_LICENSE="${VANAVOICE_SOURCE:h:h}/LICENSE"
 
 for relative in \
   Vanaguide.lua core/guide.lua core/progress.lua core/story.lua core/conditions.lua \
@@ -309,6 +309,12 @@ PLIST
 if [[ -z "${HXI_SIGN_ID:-}" && -z "${HXI_ADHOC:-}" ]]; then
   HXI_SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ {print $2; exit}')"
 fi
+# The guide remains a separate process and starts only when the player opens it. Embed the
+# matching GUI so the ordinary GitHub launcher update carries both parts together.
+COMPANION_BIN="${HXI_COMPANION_BINARY:-${BIN:h}/VanaguideCompanion}"
+[[ -x "$COMPANION_BIN" ]] || { echo "companion binary missing: $COMPANION_BIN" >&2; exit 1; }
+HXI_COMPANION_BINARY="$COMPANION_BIN" HXI_VANAGUIDE_SOURCE="$VANAGUIDE_SOURCE" \
+  HXI_SIGN_ID="${HXI_SIGN_ID:-}" "$HERE/bundle-server-safe.sh" "$APP/Contents/Helpers"
 # Signature. Ad-hoc by default; set HXI_SIGN_ID to a Developer ID hash for a release build
 # that can be notarised. Use the certificate *hash*, not its name -- there are two identical
 # "Developer ID Application: Daniel Bates" certs in the login keychain and codesign rejects

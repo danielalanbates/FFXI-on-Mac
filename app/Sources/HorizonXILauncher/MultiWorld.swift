@@ -691,6 +691,10 @@ enum LaunchLock {
         Task.detached {
             let deadline = Date().addingTimeInterval(timeout)
             while Date() < deadline {
+                // An already-gone spawn with no inherited process group needs no global ps.
+                // On an online-only volume ps can stall while resolving unrelated paths,
+                // unnecessarily holding every world's launch lock after this spawn exited.
+                if group == nil, kill(pid, 0) != 0, errno == ESRCH { break }
                 let snap = LiveClients.snapshot()
                 if snap.clients.contains(where: { $0.pid == pid || (group != nil && $0.group == group) }) { break }
                 if snap.groups[pid] == nil { break }

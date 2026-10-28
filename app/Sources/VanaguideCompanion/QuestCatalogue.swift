@@ -1,0 +1,143 @@
+// Copyright (c) 2026 Daniel Bates / Bates LLC. All rights reserved.
+
+import Foundation
+
+/// Reads literal tables only. generated.lua executes Lua to create most addon guides, so its
+/// content is deliberately recreated here from the same bundled quest/mission facts.
+struct CatalogueEntry {
+    let key: String
+    let name: String
+    let area: String
+    let id: Int
+    let mission: Bool
+    let data: LuaTable
+
+    var tag: String { "\(area),\(id)" }
+}
+
+enum QuestCatalogue {
+    static func entries(at root: URL) -> [CatalogueEntry] {
+        [read(root.appendingPathComponent("data/quests.lua"), mission: false),
+         read(root.appendingPathComponent("data/missions.lua"), mission: true)].flatMap { $0 }
+    }
+
+    static func read(_ file: URL, mission: Bool) -> [CatalogueEntry] {
+        guard let text = try? String(contentsOf: file, encoding: .utf8) else { return [] }
+        return parse(text, mission: mission)
+    }
+
+    static func parse(_ text: String, mission: Bool) -> [CatalogueEntry] {
+        var entries: [CatalogueEntry] = []
+        for table in LuaDataReader.tables(in: text) {
+            for area in table.keys.sorted() {
+                guard let values = table[area]?.table else { continue }
+                for key in values.keys.sorted(by: { (Int($0) ?? 0) < (Int($1) ?? 0) }) {
+                    guard let id = Int(key), let data = values[key]?.table,
+                          let name = data["name"]?.string, !name.isEmpty else { continue }
+                    entries.append(CatalogueEntry(key: "\(mission ? "M" : "Q"):\(area),\(id)",
+                                                  name: name, area: area, id: id,
+                                                  mission: mission, data: data))
+                }
+            }
+        }
+        return entries
+    }
+
+    /// One reference section per log area. These provide recorded targets, not an invented
+    /// walkthrough. Authored routes remain at the front of the guide list.
+    static func referenceGuides(_ entries: [CatalogueEntry]) -> [Guide] {
+        let groups = Dictionary(grouping: entries) { "\($0.mission ? "Missions" : "Quests") · \($0.area)" }
+        return groups.keys.sorted().map { title in
+            let steps = (groups[title] ?? []).map { entry in
+                let d = entry.data
+                var note = d["npc"]?.string.map { "Talk to \($0). " } ?? ""
+                if let level = d["level"]?.int { note += "Level \(level). " }
+                if d["zone"]?.int == nil { note += "No location recorded. " }
+                note += "Reference target; confirm prerequisites and progress in game."
+                return GuideStep(kind: "C", title: entry.name, zone: d["zone"]?.int,
+                                 posX: number(d["x"]), posZ: number(d["z"]), note: note,
+                                 fixed: true, tags: [entry.mission ? "M" : "Q": entry.tag])
+            }
+            return Guide(name: title, desc: "Quest-log reference targets from the bundled database.",
+                         levels: "", steps: steps, isReference: true)
+        }
+    }
+
+    private static func number(_ value: LuaValue?) -> Double? {
+        guard let text = value?.string else { return nil }
+        return Double(text)
+    }
+}
+
+struct ScreenshotGuideMatch: Equatable {
+    let key: String
+    let title: String
+    let guide: Int
+    let step: Int
+}
+
+enum ScreenshotGuideMatcher {
+    /// An authored route's manual checkpoint stays ahead of a recognized acceptance step.
+    /// Reference lists contain unrelated quest IDs, so a lower index is a new target, not a rewind.
+    static func preservesCheckpoint(currentGuide: Int, currentStep: Int,
+                                    match: ScreenshotGuideMatch, guides: [Guide]) -> Bool {
+        currentGuide == match.guide && currentStep > match.step
+            && guides.indices.contains(currentGuide) && !guides[currentGuide].isReference
+    }
+
+    static func normalized(_ text: String) -> String {
+        text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    /// Exact normalized title, with word boundaries; no fuzzy guesses from NPC names or item
+    /// chatter. A single short word such as "Dawn" requires an explicit quest/mission label.
+    static func match(text: String, entries: [CatalogueEntry], guides: [Guide]) -> ScreenshotGuideMatch? {
+        let lines = text.components(separatedBy: .newlines).map(normalized).filter { !$0.isEmpty }
+        guard !lines.isEmpty else { return nil }
+        var hits: [CatalogueEntry] = []
+        for entry in entries {
+            let name = normalized(entry.name)
+            guard !name.isEmpty else { continue }
+            let words = name.split(separator: " ")
+            let found = lines.contains { line in
+                guard (" " + line + " ").contains(" " + name + " ") else { return false }
+                if words.count < 2 {
+                    return line.hasPrefix("quest " + name) || line.hasPrefix("mission " + name)
+                }
+                if name.count < 9 {
+                    return line == name || line.hasPrefix("quest " + name) || line.hasPrefix("mission " + name)
+                }
+                return true
+            }
+            if found { hits.append(entry) }
+        }
+        // The same name in multiple logs, or several names on one screenshot, is ambiguous.
+        guard hits.count == 1, let entry = hits.first else { return nil }
+        for (gi, guide) in guides.enumerated() {
+            for (si, step) in guide.steps.enumerated() {
+                let tags = entry.mission ? ["M", "MA"] : ["Q", "QA"]
+                if tags.contains(where: { step.tags[$0] == entry.tag }) {
+                    return ScreenshotGuideMatch(key: entry.key, title: entry.name, guide: gi, step: si)
+                }
+            }
+        }
+        return nil
+    }
+}
+
+/// Debounces persistent chat text. Re-reading the same line must not keep jumping back after
+/// the player uses Next. Nothing in this state machine marks a quest or guide step complete.
+struct ScreenshotMatchTracker {
+    private var previous: String?
+    private var repeated = 0
+    private var opened = Set<String>()
+
+    mutating func observe(_ match: ScreenshotGuideMatch?) -> ScreenshotGuideMatch? {
+        guard let match else { previous = nil; repeated = 0; return nil }
+        if previous == match.key { repeated += 1 } else { previous = match.key; repeated = 1 }
+        guard repeated >= 2, opened.insert(match.key).inserted else { return nil }
+        return match
+    }
+}

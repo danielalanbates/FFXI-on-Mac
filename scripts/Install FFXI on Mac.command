@@ -80,7 +80,7 @@ ok "using ${APP:t} · $PREFIX"
 # step 4 replaces the launcher. The same processes app/bundle.sh refuses to install under (see its
 # LIVE_PATTERN); it checks again itself before the swap. Pid and executable only: a loader's
 # arguments carry the account password.
-LIVE_PATTERN='FFXI-on-Mac\.app/Contents/(MacOS|Resources/x87sidecar)|horizon-loader|Ashita-cli|/wine-coop/wine/|/SharedSupport/wine/'
+LIVE_PATTERN='FFXI-on-Mac\.app/Contents/(MacOS|Resources/x87sidecar|Helpers/[^/]+\.app/Contents/MacOS/VanaguideCompanion)|horizon-loader|Ashita-cli|/wine-coop/wine/|/SharedSupport/wine/'
 if live=$(/usr/bin/pgrep -f "$LIVE_PATTERN"); then
   print -r -- ""
   /bin/ps -o pid=,comm= -p "${(j:,:)${(f)live}}" 2>/dev/null | while read -r line; do info "$DIM$line$OFF"; done

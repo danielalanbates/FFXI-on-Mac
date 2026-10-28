@@ -1,5 +1,18 @@
 # What to do next
 
+**Current priorities (2026-10-27, beta 82)**
+
+1. Read [BETA-82.md](BETA-82.md) for the current checkout, validation record and remaining
+   local-only gameplay checks. Preserve the installed playable app while a session is running.
+2. Beta-test [VanaGuide Server-Safe](SERVER-SAFE-GUIDE.md) with local LSB dialogue/log titles.
+   Test narration and sequential quests locally; never use hosted servers for addon/bot tests.
+3. Evaluate the newly released runtime candidates in the isolated lab described in
+   [the dependency review](DEPENDENCIES-2026-10-27.md), before proposing a runtime migration.
+4. Review the source PRs, then require stable real use and the release checklist before a
+   public app release. Source publication does not imply a stable binary release.
+
+The ranked list below predates betas 70–82. Consult the newer beta records before acting on it.
+
 Updated 2026-10-14, ranked. Context, PR table and dead ends: [`HANDOFF.md`](HANDOFF.md). Every b59
 change and its live-test recipe: [`BETA-59.md`](BETA-59.md). The August version of this list is
 in `archive/docs-2026-08/`.

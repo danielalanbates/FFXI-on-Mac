@@ -1,5 +1,12 @@
 # Handoff — read this first
 
+**2026-10-27: current work is beta 82, based on beta 81 (`87a5a02`). Read
+[BETA-82.md](BETA-82.md), [SERVER-SAFE-GUIDE.md](SERVER-SAFE-GUIDE.md) and
+[DEPENDENCIES-2026-10-27.md](DEPENDENCIES-2026-10-27.md) first.** The running Applications
+launcher was build 80 at the start of this pass; public release remains 3.10 build 68.
+The older state and next-step lists below are historical and must not be used to downgrade
+the local beta or repeat already-landed work.
+
 Updated 2026-10-24, beta 3.10 build 71 (state table); the rest as of 2026-10-14, beta 3.9 build 59. Short on purpose: what is true now, what gates a release,
 what is open. Every b59 change and the live tests it needs: [`BETA-59.md`](BETA-59.md). Ranked
 next steps: [`NEXT.md`](NEXT.md). The August handoffs (read-back diagnosis, probes, early dead

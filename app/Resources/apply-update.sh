@@ -93,6 +93,51 @@ fail() { reason="$1"; exit 1; }
 # A failure every later try would meet too (the folder or the rename refused).
 fail_lasting() { lasting=1; fail "$1"; }
 
+# Read executable names, never command arguments (a game loader's arguments may hold a
+# password). Match a nested helper by a literal bundle prefix, so spaces and regex syntax in
+# an install path cannot broaden the match. Return 2 if inspection itself failed.
+bundle_has_live_companion() {
+  local bundle="$1" processes process_uid process_path candidates result scan reader attempt
+  # pgrep reads kernel command metadata and emits PIDs only. Restrict ps to these candidates:
+  # resolving every unrelated executable path can block on unavailable cloud storage.
+  candidates="$(/usr/bin/pgrep -f '/Contents/Helpers/[^/]+\.app/Contents/MacOS/VanaguideCompanion([[:space:]]|$)')"
+  result=$?
+  (( result == 1 )) && return 1
+  (( result == 0 )) || return 2
+  scan="$(/usr/bin/mktemp "$workdir/.companion-scan.XXXXXX")" || return 2
+  /bin/ps -ww -p "${(j:,:)${(f)candidates}}" -o uid=,comm= > "$scan" &
+  reader=$!
+  for attempt in {1..30}; do
+    /bin/kill -0 "$reader" 2>/dev/null || break
+    /bin/sleep 0.1
+  done
+  if /bin/kill -0 "$reader" 2>/dev/null; then
+    # Only this helper's inspection child is stopped. Do not wait on an unresponsive path.
+    /bin/kill -TERM "$reader" 2>/dev/null
+    /bin/rm -f "$scan"
+    return 2
+  fi
+  wait "$reader"; result=$?
+  processes="$(/bin/cat "$scan")"
+  /bin/rm -f "$scan"
+  # Candidates can exit between pgrep and ps. Empty metadata proves no remaining candidate.
+  (( result == 0 || result == 1 )) || return 2
+  while read -r process_uid process_path; do
+    [[ "$process_uid" == "$UID" ]] || continue
+    if [[ "$process_path" == "$bundle"/Contents/Helpers/*.app/Contents/MacOS/VanaguideCompanion ]]; then
+      return 0
+    fi
+  done <<< "$processes"
+  return 1
+}
+refuse_live_companion() {
+  local result
+  bundle_has_live_companion "$current"; result=$?
+  (( result == 1 )) && return 0
+  (( result == 0 )) && fail "close VanaGuide before restarting to update"
+  fail "could not check whether VanaGuide is running"
+}
+
 say "helper started: launcher pid $pid, $staged -> $current"
 
 # Wait for the launcher to quit. It quits as soon as it sees this helper hold the lock; if it
@@ -109,6 +154,7 @@ launcher_gone=1
 [[ -d "$current" ]] || fail "the current app is missing"
 [[ -w "${current:h}" ]] || fail_lasting "no write access to ${current:h}"
 [[ ! -e "$backup" ]] || fail "a leftover $backup is in the way"
+refuse_live_companion
 /bin/rm -rf "$candidate"
 
 # Copy and verify beside the app before touching it. A failed copy leaves the app as it was.
@@ -126,6 +172,9 @@ if /usr/bin/pgrep -qf -U "$UID" "$current/Contents/MacOS/"; then
   launcher_gone=0
   fail "the launcher was reopened during the update"
 fi
+# The guide can be opened while the candidate is copied/verified. Keep its enclosing bundle
+# intact, rather than terminating it or renaming resources underneath an active capture.
+refuse_live_companion
 /bin/mv "$current" "$backup" || fail_lasting "could not move the current app aside"
 moved_current=1
 [[ ! -e "$current" ]] || fail "$current reappeared during the swap"
@@ -144,7 +193,12 @@ say "opened $current"
 
 # Keep exactly one previous copy, outside Applications. Never the app just opened, should the
 # launcher have been running from a previous copy in the work dir.
-for old in "$workdir"/previous*.app(N); do [[ "${old:A}" == "${current:A}" ]] || /bin/rm -rf "$old"; done
+for old in "$workdir"/previous*.app(N); do
+  [[ "${old:A}" == "${current:A}" ]] && continue
+  bundle_has_live_companion "$old"; result=$?
+  if (( result == 1 )); then /bin/rm -rf "$old"
+  else say "kept a previous copy while its guide may be running: ${old:t}"; fi
+done
 old_version="$(/usr/bin/plutil -extract CFBundleShortVersionString raw "$backup/Contents/Info.plist" 2>/dev/null || echo unknown)"
 old_build="$(/usr/bin/plutil -extract CFBundleVersion raw "$backup/Contents/Info.plist" 2>/dev/null || echo 0)"
 keep="$workdir/previous-${old_version}-b${old_build}.app"

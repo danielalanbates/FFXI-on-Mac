@@ -4,6 +4,8 @@
 # the helper as its sixth argument). It runs under `env -i` and `zsh -f`, as the launcher starts it.
 #
 #   ./scripts/tests/apply-update-test.sh <notarized app signed by team MG4YW8XX2Z>
+#   ./scripts/tests/apply-update-test.sh --companion-only
+# The latter uses an unsigned, synthetic bundle and relocated /bin/sleep fixture only.
 #
 # The given app plays the downloaded update (any of this team's notarized apps will do, e.g.
 # DockFix.app); a bare bundle plays the installed launcher. The real updater additionally pins
@@ -12,11 +14,17 @@ set -uo pipefail
 REPO="${0:A:h:h:h}"
 HELPER="$REPO/app/Resources/apply-update.sh"
 UPDATE="${1:-}"
-[[ -d "$UPDATE" ]] || { print -u2 "usage: $0 <notarized MG4YW8XX2Z app>"; exit 2; }
+COMPANION_ONLY=0
+if [[ "$UPDATE" == --companion-only ]]; then COMPANION_ONLY=1
+elif [[ ! -d "$UPDATE" ]]; then print -u2 "usage: $0 <notarized MG4YW8XX2Z app> | --companion-only"; exit 2; fi
 TEAM_REQ='anchor apple generic and certificate leaf[subject.OU] = "MG4YW8XX2Z"'
 PINNED_REQ='anchor apple generic and identifier "org.batesai.horizonxi-on-mac" and certificate leaf[subject.OU] = "MG4YW8XX2Z"'
 
 T="$(mktemp -d "${TMPDIR:-/tmp}/apply-update-test.XXXXXX")"
+if (( COMPANION_ONLY )); then
+  UPDATE="$T/fixture-update.app"
+  mkdir -p "$UPDATE/Contents"
+fi
 trap '/usr/bin/chflags -R nouchg "$T" 2>/dev/null; /bin/chmod -R u+w "$T" 2>/dev/null; /bin/rm -rf "$T"' EXIT
 fails=0
 check() { if eval "$2"; then print "  ok   $1"; else print "  FAIL $1"; fails=$((fails + 1)); fi }
@@ -46,6 +54,52 @@ dead_pid() { /bin/sleep 0 & local p=$!; wait $p 2>/dev/null; print $p; }
 # Started the way the launcher starts it (UpdateWork.helperCommand), plus the stubs argument.
 CLEAN=(/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/zsh -f)
 helper() { "${CLEAN[@]}" "$HELPER" "$@" "$stubs"; }
+
+companion_checks() {
+  local fixture standin rc
+  print "companion: refuse a nested GUI before verification or bundle replacement"
+  setup
+  fixture="$current/Contents/Helpers/Vanaguide Server-Safe.app/Contents/MacOS/VanaguideCompanion"
+  mkdir -p "${fixture:h}"
+  cp /bin/sleep "$fixture"
+  # A relocated platform-signed binary is killed by macOS; sign this throwaway copy only.
+  /usr/bin/codesign --force -s - "$fixture" >/dev/null 2>&1
+  "$fixture" 30 &
+  standin=$!
+  helper "$(dead_pid)" "$staged" "$current" "$work" "$TEAM_REQ"; rc=$?
+  /bin/kill "$standin" 2>/dev/null
+  wait "$standin" 2>/dev/null
+  check "nested guide prevents a swap" "(( rc != 0 ))"
+  check "old app and nested executable stay in place" "[[ -f '$current/Contents/marker' && -x '$fixture' ]]"
+  check "reason asks the user to close the guide" "grep -qx 'reason=close VanaGuide before restarting to update' '$work/last-failure'"
+  check "the old launcher is reopened only through the test stub" "grep -qx '$current' '$T/open.calls'"
+  check "staged update kept for retry" "[[ -d '$staged' ]]"
+  check "guide refusal releases the helper lock" "[[ ! -e '$work/apply.lock' ]]"
+  check "no copy or rename happened before refusal" "[[ -z \$(ls '$apps' | grep -v '^FFXI-on-Mac.app\$') ]]"
+
+  print "companion: an independent copy does not block this launcher's update"
+  setup
+  fixture="$T/FFXI-on-Mac.app-other/Contents/Helpers/Vanaguide.app/Contents/MacOS/VanaguideCompanion"
+  mkdir -p "${fixture:h}"
+  cp /bin/sleep "$fixture"
+  /usr/bin/codesign --force -s - "$fixture" >/dev/null 2>&1
+  "$fixture" 30 &
+  standin=$!
+  helper "$(dead_pid)" "$staged" "$current" "$work" "$TEAM_REQ"; rc=$?
+  /bin/kill "$standin" 2>/dev/null
+  wait "$standin" 2>/dev/null
+  if (( COMPANION_ONLY )); then
+    check "independent guide reaches ordinary unsigned-update rejection" "grep -qx 'reason=the update is not signed by this project' '$work/last-failure'"
+  else
+    check "independent guide permits verified update" "(( rc == 0 ))"
+  fi
+}
+
+if (( COMPANION_ONLY )); then
+  companion_checks
+  if (( fails == 0 )); then print "all checks passed"; else print "$fails FAILED"; fi
+  (( fails == 0 )); exit $?
+fi
 
 print "1. success: swap, reopen, register, keep exactly one previous copy"
 setup
@@ -197,6 +251,8 @@ check "the app just opened is still there, updated" "[[ -d '$current/Contents/Ma
 check "nothing moved into the new app" "[[ \$(ls '$current') == Contents ]]"
 check "the previous app left beside it" "[[ -f \$(print -r -- '$current'.previous-*(N[1]))/Contents/marker ]]"
 current="$saved"
+
+companion_checks
 
 print
 if (( fails == 0 )); then print "all checks passed"; else print "$fails FAILED"; fi
