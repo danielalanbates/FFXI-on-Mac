@@ -82,3 +82,26 @@ Do not call offline fixtures evidence of a live character walkthrough or a serve
 Apple API references: [window-only content filter](https://developer.apple.com/documentation/screencapturekit/sccontentfilter/init(desktopindependentwindow:)),
 [ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit),
 [Vision text recognition](https://developer.apple.com/documentation/vision/vnrecognizetextrequest).
+
+## Getting started and the local progress record (b84)
+
+Server-Safe cannot ask a server what a character has done, so it keeps its own record.
+
+| Item | Detail |
+| --- | --- |
+| Where | `~/Library/Application Support/VanaGuide Server-Safe/characters/<world>-<character>.json` |
+| Contents | Catalogue key → `current`/`completed`, date last seen, source (`quest log` or `done`) |
+| Written by | Getting started log reads; Done on a guide step (accept steps → current, others → completed) |
+| Rules | Completed is never downgraded by a later read; nothing is ever deleted automatically |
+| Not stored | Images, OCR text, chat |
+
+The **Getting started** guide opens first for a character with nothing recorded:
+Main Menu (−) → Quests → home nation → Current Quests, then Completed Quests, optional other
+areas, then Missions. On those steps the whole game window is read (log pages are mid-screen),
+every exact title on a page is recorded under the visible heading (Current/Completed) or the
+step's list, a truncated `…` title matches a unique stem, and a title found in several areas is
+settled by the area heading on the page. Guide steps then show Completed/Current, and
+**Jump to next unfinished** skips completed ones.
+
+Not yet verified against a real in-game log page (no capture of one exists yet); the menu key
+is the default PC layout.
