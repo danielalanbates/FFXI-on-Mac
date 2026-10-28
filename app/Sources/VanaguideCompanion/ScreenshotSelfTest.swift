@@ -155,6 +155,9 @@ extension CompanionSelfTest {
         try? FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
         let sessionFile = sessionDir.appendingPathComponent("session.json")
         try? Data(#"{"updated":"x","world":"Local server"}"#.utf8).write(to: sessionFile)
+        checks.append(("a server's own Gear and Skills folder is keyed by its name",
+                       WikiState.serverKey(for: "CatsEyeXI") == "catseyexi" && WikiState.serverKey(for: "PegasusXI") == "pegasusxi"
+                           && WikiState.serverKey(for: "Local server") == "localserver" && WikiState.serverKey(for: "") == ""))
         checks.append(("the launcher's world fills in World",
                        CharacterDiscovery.launcherWorld(at: sessionFile) == "Local server"))
         checks.append(("before the launcher shares its list, Server lists the shipped worlds",

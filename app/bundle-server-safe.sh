@@ -47,6 +47,13 @@ for subdir in guides data; do
     cp "$file" "$STAGE/Contents/Resources/Vanaguide/$subdir/"
   done
 done
+# Per-server Gear and Skills, generated from each server's public source (data/servers/<key>/).
+for dir in "$SOURCE/data/servers/"*(N/); do
+  mkdir -p "$STAGE/Contents/Resources/Vanaguide/data/servers/${dir:t}"
+  for file in "$dir"*.lua(N); do
+    cp "$file" "$STAGE/Contents/Resources/Vanaguide/data/servers/${dir:t}/"
+  done
+done
 cp "$REPO/LICENSE" "$STAGE/Contents/Resources/LICENSE"
 [[ ! -f "${SOURCE:h}/LICENSE" ]] || cp "${SOURCE:h}/LICENSE" "$STAGE/Contents/Resources/Vanaguide/LICENSE"
 [[ ! -f "$HERE/AppIcon.icns" ]] || cp "$HERE/AppIcon.icns" "$STAGE/Contents/Resources/AppIcon.icns"

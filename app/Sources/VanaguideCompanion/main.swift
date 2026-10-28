@@ -173,6 +173,8 @@ final class CompanionState: ObservableObject {
             world = w
             character = Self.lastCharacter(on: w)
         }
+        // Test hook: --world <name> picks the server, as the Server list would (for --snapshot).
+        if let w = DevTrace.value("--world") { world = w }
         loadCharacter()
         // A character with nothing recorded starts on Getting started; others on their guides.
         selected = startGuide
@@ -574,7 +576,7 @@ struct CompanionView: View {
             state.applyLauncherWorld()
         }
         .onAppear {
-            wiki.load(roots: CompanionState.vanaguideRoots)
+            wiki.load(roots: CompanionState.vanaguideRoots, world: state.world)
             capture.receivedText = { state.readScreenshotText($0) }
             capture.receivedStatus = { state.readStatusText($0) }
             state.requestDiscovery = { capture.beginDiscovery() }
@@ -593,6 +595,7 @@ struct CompanionView: View {
             }
         }
         .onChange(of: state.isSurveying) { capture.fullWindow = $0 }
+        .onChange(of: state.world) { wiki.load(roots: CompanionState.vanaguideRoots, world: $0) }
         .onDisappear { capture.stop() }
     }
 
