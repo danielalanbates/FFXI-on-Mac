@@ -264,6 +264,7 @@ enum Vana {
 }
 
 struct ContentView: View {
+    @AppStorage(Guide.autoOpenKey) private var guideWithPlay = false
     /// Every install the last scan found, the one in use included: what DXVK's cache is seeded from.
     @State private var installs: [Install] = []
     /// The install in use: `install.last`, nil while it is not on disk (InstallSelection).
@@ -1031,14 +1032,19 @@ struct ContentView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("VanaGuide Server-Safe").font(.system(size: 12)).bold()
-                    Text("The quest guide in its own window. Loads nothing into the game and reads nothing from the server. Optional screen reading — check your server's rules.")
+                    Text("Quests, gear, skills and server notes in their own window. Loads nothing into the game and reads nothing from the server.")
                         .font(.system(size: 12)).foregroundStyle(Vana.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
-                Button("Open") { Guide.openCompanion(world: store.selected?.name ?? "", worlds: store.ordered.map(\.name)) }
-                    .disabled(Guide.companionURL == nil)
-                    .help(Guide.companionSupported ? "" : "Needs macOS 14 or later.")
+                VStack(alignment: .trailing, spacing: 4) {
+                    Button("Open") { Guide.openCompanion(world: store.selected?.name ?? "", worlds: store.ordered.map(\.name)) }
+                    Toggle("Open with Play", isOn: $guideWithPlay)
+                        .toggleStyle(.checkbox).font(.system(size: 11))
+                        .help("Open VanaGuide Server-Safe behind the game every time you press Play.")
+                }
+                .disabled(Guide.companionURL == nil)
+                .help(Guide.companionSupported ? "" : "Needs macOS 14 or later.")
             }
             .padding(8)
             .background(RoundedRectangle(cornerRadius: 6).fill(Vana.panel.opacity(0.6)))
@@ -2900,7 +2906,11 @@ struct ContentView: View {
         localServerSlowing = false
         updateChecked = false
         Credentials.setUsername(user, forWorld: store.selected?.name ?? "")
-        Guide.shareSession(world: store.selected?.name ?? "", worlds: store.ordered.map(\.name))
+        if guideWithPlay, Guide.companionURL != nil {
+            Guide.openCompanion(world: store.selected?.name ?? "", worlds: store.ordered.map(\.name), activate: false)
+        } else {
+            Guide.shareSession(world: store.selected?.name ?? "", worlds: store.ordered.map(\.name))
+        }
         Credentials.remember = remember
         if remember { Credentials.savePassword(pass, for: user, world: store.selected?.name ?? "") }
         else { Credentials.savePassword("", for: user, world: store.selected?.name ?? "") }

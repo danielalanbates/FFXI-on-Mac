@@ -47,17 +47,24 @@ enum Guide {
         try? data.write(to: url, options: .atomic)
     }
 
-    static func openCompanion(world: String = "", worlds: [String]? = nil) {
+    /// "Open with Play" checkbox: Server-Safe opens alongside the game.
+    static let autoOpenKey = "guide.autoOpenWithPlay"
+
+    /// `activate: false` (Play) opens Server-Safe behind the game instead of in front of it, and
+    /// leaves an already running copy where it is.
+    static func openCompanion(world: String = "", worlds: [String]? = nil, activate: Bool = true) {
         shareSession(world: world, worlds: worlds)
         let identifier = "org.batesai.vanaguide-companion"
         if let existing = NSWorkspace.shared.runningApplications.first(where: {
             $0.bundleIdentifier == identifier
         }) {
-            existing.activate()
+            if activate { existing.activate() }
             return
         }
         guard let url = companionURL else { return }
-        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = activate
+        NSWorkspace.shared.openApplication(at: url, configuration: config)
     }
 
     static let loadLine = "/addon load vanaguide"

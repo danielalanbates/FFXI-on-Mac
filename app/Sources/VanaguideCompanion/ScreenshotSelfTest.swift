@@ -155,6 +155,65 @@ extension CompanionSelfTest {
         try? FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
         let sessionFile = sessionDir.appendingPathComponent("session.json")
         try? Data(#"{"updated":"x","world":"Local server"}"#.utf8).write(to: sessionFile)
+        let walkDir = FileManager.default.temporaryDirectory.appendingPathComponent("vg-walk-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: walkDir.appendingPathComponent("data"), withIntermediateDirectories: true)
+        try? Data("""
+        local T = {}
+        T.quests = { sandoria = { [0] = { scripted = 'full', steps = { 'Talk to Glenne.', 'Trade the Dose of Ointment to Aaveleon.' } } } }
+        T.missions = { cop = { [840] = { scripted = 'stub', steps = { 'Not scripted.' } } } }
+        return T
+        """.utf8).write(to: walkDir.appendingPathComponent("data/quest_steps.lua"))
+        let walks = QuestCatalogue.walkthroughs(at: walkDir)
+        try? FileManager.default.removeItem(at: walkDir)
+        let linkGuides = [Guide(name: "Aht Urhgan Quests", desc: "", levels: "", steps: [
+            GuideStep(kind: "Q", title: "Luck of the Draw", tags: ["Q": "x"]),
+            GuideStep(kind: "Q", title: "No Strings Attached", tags: ["Q": "y"])], isReference: true)]
+        checks.append(("a quest named on a gear page finds its guide step",
+                       CompanionState.questStep(in: linkGuides, named: "Quest: No Strings Attached (Aht Urhgan)").map { [$0.guide, $0.step] } == [0, 1]
+                           && CompanionState.questStep(in: linkGuides, named: "Treasure coffer, opened during the quest No Strings Attached (Jeuno)").map { $0.step } == 1
+                           && CompanionState.questStep(in: linkGuides, named: "Dropped by a goblin") == nil))
+        // Skills tab picks.
+        let recipesFixture = [
+            CraftRecipe(level: 12, name: "Cheap", crystal: "Fire", parts: [], cost: 100, sell: 50, needsKeyItem: false, other: []),
+            CraftRecipe(level: 13, name: "Spot On", crystal: "Fire", parts: [], cost: 300, sell: 200, needsKeyItem: false, other: []),
+            CraftRecipe(level: 14, name: "Earner", crystal: "Fire", parts: [], cost: 100, sell: 900, needsKeyItem: false, other: []),
+            CraftRecipe(level: 13, name: "Needs Smithing", crystal: "Fire", parts: [], cost: 1, sell: 9999, needsKeyItem: false, other: ["Smithing 8"]),
+            CraftRecipe(level: 30, name: "Too High", crystal: "Fire", parts: [], cost: 1, sell: 9999, needsKeyItem: false, other: []),
+        ]
+        checks.append(("craft pick: about 3 above your level, made with this craft alone",
+                       SkillPicks.forSkill(recipesFixture, level: 10)?.name == "Spot On"))
+        checks.append(("craft gil pick: most NPC gil in the same window",
+                       SkillPicks.forGil(recipesFixture, level: 10)?.name == "Earner"))
+        checks.append(("craft pick widens when nothing is close", SkillPicks.forSkill(recipesFixture, level: 22)?.name == "Too High"))
+        let mobsFixture = [
+            SkillTarget(name: "Aggro", zone: 1, min: 11, max: 12, spawns: 50, aggro: true, links: false),
+            SkillTarget(name: "Linker", zone: 1, min: 11, max: 12, spawns: 50, aggro: false, links: true),
+            SkillTarget(name: "Calm", zone: 1, min: 11, max: 12, spawns: 10, aggro: false, links: false),
+            SkillTarget(name: "Too Weak", zone: 1, min: 3, max: 5, spawns: 99, aggro: false, links: false),
+        ]
+        checks.append(("monster pick: not aggressive, not linking, not too weak",
+                       SkillPicks.monster(mobsFixture, level: 10)?.name == "Calm"))
+        // Content order and achievement links.
+        let refsFixture = [Guide(name: "Bastok Quests", desc: "", levels: "", steps: [
+                               GuideStep(kind: "Q", title: "The Doorman", tags: ["Q": "a"]),
+                               GuideStep(kind: "Q", title: "Blade of Darkness", tags: ["Q": "b"])], isReference: true),
+                           Guide(name: "Windurst Missions", desc: "", levels: "", steps: [
+                               GuideStep(kind: "M", title: "The Horutoto Ruins Experiment", tags: ["M": "c"])], isReference: true)]
+        let ordered = QuestCatalogue.contentOrder([Guide(name: "Bastok Quests", desc: "", levels: "", steps: []),
+                                                   Guide(name: "Bastok Missions", desc: "", levels: "", steps: []),
+                                                   Guide(name: "Support Jobs", desc: "", levels: "", steps: []),
+                                                   Guide(name: "Starting Out", desc: "", levels: "", steps: [])]).map(\.name)
+        checks.append(("content order: start, jobs, missions, quests",
+                       ordered == ["Starting Out", "Support Jobs", "Bastok Missions", "Bastok Quests"]))
+        checks.append(("job unlocks list each advanced job's quest",
+                       QuestCatalogue.jobUnlockGuide(from: refsFixture)?.steps.first?.tags["JOB"] == "Dark Knight"))
+        checks.append(("an achievement opens the quest it quotes",
+                       CompanionState.achievementStep(in: refsFixture, description: "Complete 'The Doorman' and obtain the Razor Axe.").map { [$0.guide, $0.step] } == [0, 0]))
+        checks.append(("a nation rank achievement opens that nation's missions",
+                       CompanionState.achievementStep(in: refsFixture, description: "Achieve Rank 7 in Windurst.").map { $0.guide } == 1
+                           && CompanionState.achievementStep(in: refsFixture, description: "Reach level 55 as a Warrior.") == nil))
+        checks.append(("quest walkthroughs are read per quest and mission",
+                       walks["Q:sandoria,0"]?.steps.count == 2 && walks["M:cop,840"]?.scripted == "stub"))
         checks.append(("a server's own Gear and Skills folder is keyed by its name",
                        WikiState.serverKey(for: "CatsEyeXI") == "catseyexi" && WikiState.serverKey(for: "PegasusXI") == "pegasusxi"
                            && WikiState.serverKey(for: "Local server") == "localserver" && WikiState.serverKey(for: "") == ""))
@@ -221,6 +280,30 @@ extension CompanionSelfTest {
         if let path = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"] {
             let real = QuestCatalogue.entries(at: URL(fileURLWithPath: path))
             checks.append(("real quest and mission catalogues load over 500 named entries", real.count > 500))
+            // How many of the player's RetroAchievements open a guide (read-only, if present).
+            if let snap = ProgressSnapshot.read(FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support/VanaGuide Server-Safe/retroachievements.json")) {
+                let refs = QuestCatalogue.referenceGuides(real)
+                let all = snap.games.flatMap { $0.achievements.values.compactMap(\.description) }
+                let linked = all.filter { CompanionState.achievementStep(in: refs, description: $0) != nil }
+                print("  info: \(linked.count)/\(all.count) achievements open a quest or mission guide")
+                all.filter { CompanionState.achievementStep(in: refs, description: $0) == nil && $0.contains("'") }
+                    .prefix(12).forEach { print("  unlinked: \($0)") }
+            }
+            // Every quest/mission source on a gear page should open a guide step.
+            if let gear = WikiData.gear(URL(fileURLWithPath: path).appendingPathComponent("data/gear_guide.lua")) {
+                let refs = QuestCatalogue.referenceGuides(real)
+                // Lines that name a quest ("Quest: …", "during the quest …"); notes like "Not handed
+                // out by this server's scripts yet" name none and stay plain text.
+                let lines = gear.items.flatMap(\.how).filter { ($0.kind == "quest" || $0.kind == "mission")
+                    && $0.text.range(of: #"(?i)(quest|mission):|the (quest|mission) "#, options: .regularExpression) != nil }
+                let missed = lines.filter { CompanionState.questStep(in: refs, named: $0.text) == nil }
+                missed.prefix(8).forEach { print("  unlinked: \($0.text)") }
+                checks.append(("gear quest sources link to guides (\(lines.count - missed.count)/\(lines.count))",
+                               // 2026-10-28: 203/221; the 18 left (Borghertz hands quests, A Candlelight
+                               // Vigil, Guest of Hauteur) have no entry in data/quests.lua to open.
+                               !lines.isEmpty && missed.count * 10 <= lines.count))
+            }
             checks.append(("real database produces manual reference sections",
                            QuestCatalogue.referenceGuides(real).flatMap(\.steps).count == real.count
                                && QuestCatalogue.referenceGuides(real).flatMap(\.steps).allSatisfy(\.fixed)))

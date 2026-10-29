@@ -92,8 +92,15 @@ struct Install: Identifiable, Hashable {
     // and the SquareEnix folder (FINAL FANTASY XI + PlayOnlineViewer, what the registry must
     // name). Both searches are shallow (3 levels), skip the huge ROM trees, and are cached.
 
-    private static var ashitaCache: [String: URL] = [:]
-    private static var seCache: [String: URL] = [:]
+    // Read and written from the main thread and from Sessions.refreshElsewhere's detached task:
+    // unguarded, two writers corrupted the dictionary (b95 launch crash, 2026-10-28).
+    private static let cacheLock = NSLock()
+    private static var _ashitaCache: [String: URL] = [:]
+    private static var _seCache: [String: URL] = [:]
+    private static func cachedAshita(_ k: String) -> URL? { cacheLock.withLock { _ashitaCache[k] } }
+    private static func cacheAshita(_ k: String, _ v: URL) { cacheLock.withLock { _ashitaCache[k] = v } }
+    private static func cachedSE(_ k: String) -> URL? { cacheLock.withLock { _seCache[k] } }
+    private static func cacheSE(_ k: String, _ v: URL) { cacheLock.withLock { _seCache[k] = v } }
     private static let heavyDirs: Set<String> = ["SquareEnix", "ROM", "ROM2", "ROM3", "ROM4", "ROM5", "ROM6", "ROM7", "ROM8", "ROM9", "addons", "plugins", "polplugins", "resources", "sound", "sound2", "sound3", "sound4", "sound5", "sound6", "sound7", "sound8", "sound9", "docs", "logs", "screenshots", "downloads", "updates", "backups", "builds", "deps"]
 
     /// First folder at or under `root` (depth ≤ 3) that holds Ashita-cli.exe. Falls back to
@@ -108,11 +115,11 @@ struct Install: Identifiable, Hashable {
     static func resolveAshitaDir(_ root: URL, world: String? = nil) -> URL {
         if Self.isAshitaDir(root) { return root }
         let key = root.path + "#" + (world ?? "")
-        if let c = ashitaCache[key], Self.isAshitaDir(c) { return c }
+        if let c = cachedAshita(key), Self.isAshitaDir(c) { return c }
         let hits = ashitaCandidates(under: root)
         guard !hits.isEmpty else { return root }
         let pick = world.flatMap { w in hits.first { matches(world: w, path: $0, under: root) } } ?? hits[0]
-        ashitaCache[key] = pick
+        cacheAshita(key, pick)
         return pick
     }
 
@@ -166,20 +173,20 @@ struct Install: Identifiable, Hashable {
         func ok(_ u: URL) -> Bool { fm.fileExists(atPath: u.appendingPathComponent("FINAL FANTASY XI").path) }
         let direct = gameDir.appendingPathComponent("SquareEnix")
         if ok(direct) { return direct }
-        if let c = seCache[gameDir.path], ok(c) { return c }
+        if let c = cachedSE(gameDir.path), ok(c) { return c }
         guard let root else { return direct }
         // Nearest first: the Ashita folder's own parents (within the root), then anything under
         // the root up to four levels down.
         var p = gameDir
         while p.path.hasPrefix(root.path), p.path != root.deletingLastPathComponent().path {
             for c in [p, p.appendingPathComponent("SquareEnix"), p.appendingPathComponent("Game"), p.appendingPathComponent("Game/SquareEnix")] where ok(c) {
-                seCache[gameDir.path] = c; return c
+                cacheSE(gameDir.path, c); return c
             }
             if p.path == root.path { break }
             p = p.deletingLastPathComponent()
         }
         if let hit = find(under: root, depth: 4, where: ok, descendIntoHeavy: ["SquareEnix"]) {
-            seCache[gameDir.path] = hit; return hit
+            cacheSE(gameDir.path, hit); return hit
         }
         return direct
     }

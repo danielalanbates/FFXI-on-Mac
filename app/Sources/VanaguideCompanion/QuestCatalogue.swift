@@ -45,7 +45,89 @@ enum QuestCatalogue {
 
     /// One reference section per log area. These provide recorded targets, not an invented
     /// walkthrough. Authored routes remain at the front of the guide list.
-    static func referenceGuides(_ entries: [CatalogueEntry]) -> [Guide] {
+    /// What to do for each quest and mission, written from the server's scripts
+    /// (data/quest_steps.lua, built by the addon repository's tools/gen_quest_steps.py).
+    /// Keyed like CatalogueEntry.key: "Q:sandoria,0". `scripted` is full, partial or stub.
+    struct Walkthrough: Equatable { var steps: [String]; var scripted: String }
+
+    static func walkthroughs(at root: URL) -> [String: Walkthrough] {
+        guard let text = try? String(contentsOf: root.appendingPathComponent("data/quest_steps.lua"), encoding: .utf8)
+        else { return [:] }
+        var out: [String: Walkthrough] = [:]
+        // T.quests then T.missions: { area = { [id] = { scripted = '…', steps = { '…' } } } }
+        for (n, table) in LuaDataReader.tables(in: text).filter({ !$0.keys.isEmpty }).prefix(2).enumerated() {
+            for area in table.keys {
+                guard let ids = table[area]?.table else { continue }
+                for key in ids.keys {
+                    guard let id = Int(key), let e = ids[key]?.table else { continue }
+                    let steps = (e["steps"]?.table?.array ?? []).compactMap(\.string)
+                    guard !steps.isEmpty else { continue }
+                    out["\(n == 0 ? "Q" : "M"):\(area),\(id)"] = Walkthrough(steps: steps, scripted: e["scripted"]?.string ?? "full")
+                }
+            }
+        }
+        return out
+    }
+
+    /// Quests that unlock a job (their scripts call player:unlockJob), in the game's job order.
+    /// Dragoon (The Holy Crest) and Rune Fencer are added when the quest data has them.
+    static let jobUnlocks: [(job: String, quest: String)] = [
+        ("Paladin", "A Knight's Test"), ("Dark Knight", "Blade of Darkness"),
+        ("Beastmaster", "Path of the Beastmaster"), ("Bard", "Path of the Bard"),
+        ("Ranger", "The Fanged One"), ("Samurai", "Forge Your Destiny"), ("Ninja", "Ayame and Kaede"),
+        ("Dragoon", "The Holy Crest"), ("Summoner", "I Can Hear a Rainbow"),
+        ("Blue Mage", "An Empty Vessel"), ("Corsair", "Luck of the Draw"), ("Puppetmaster", "No Strings Attached"),
+        ("Dancer", "Lakeside Minuet"), ("Scholar", "A Little Knowledge"), ("Geomancer", "Dances with Luopans"),
+        ("Rune Fencer", "Children of the Rune"),
+    ]
+
+    /// "Job Unlocks": one step per advanced job, copied from the quest's own reference step so
+    /// it carries the same location and What to do.
+    static func jobUnlockGuide(from references: [Guide]) -> Guide? {
+        let steps: [GuideStep] = jobUnlocks.compactMap { job, quest in
+            guard let hit = CompanionState.questStep(in: references, named: "Quest: " + quest) else { return nil }
+            var st = references[hit.guide].steps[hit.step]
+            st.tags["JOB"] = job
+            return st
+        }
+        guard !steps.isEmpty else { return nil }
+        return Guide(name: "Job Unlocks", desc: "The quest that unlocks each advanced job. Reach level 30 on any job first; most start in a nation city or Jeuno.",
+                     levels: "", steps: steps, isReference: true)
+    }
+
+    /// Content order (Daniel, 2026-10-28): jobs, then missions, then quests. Starting Out and
+    /// other authored routes stay at the very top; Job Unlocks and Support Jobs make up Jobs.
+    static func section(of g: Guide) -> String {
+        if g.name.hasSuffix(" Missions") { return "Missions" }
+        if g.name.hasSuffix(" Quests") { return "Quests" }
+        if g.name == "Job Unlocks" || g.name.localizedCaseInsensitiveContains("job") { return "Jobs" }
+        return "Start Here"
+    }
+    static let sectionOrder = ["Start Here", "Jobs", "Missions", "Quests"]
+
+    /// Within Missions and Quests: the three nations, then the expansions in release order.
+    static let storyOrder = ["San d'Oria", "Bastok", "Windurst", "Jeuno", "Rise of the Zilart", "Other Areas",
+                             "Outlands", "Chains of Promathia", "Treasures of Aht Urhgan", "Aht Urhgan",
+                             "Wings of the Goddess", "Crystal War", "A Crystalline Prophecy", "A Moogle Kupo d'Etat",
+                             "A Shantotto Ascension", "Abyssea", "Seekers of Adoulin", "Adoulin", "Coalition",
+                             "Rhapsodies of Vana'diel", "The Voracious Resurgence"]
+
+    static func storyRank(_ g: Guide) -> Int {
+        let area = g.name.replacingOccurrences(of: #" (Missions|Quests)$"#, with: "", options: .regularExpression)
+        return storyOrder.firstIndex(of: area) ?? storyOrder.count
+    }
+
+    static func contentOrder(_ guides: [Guide]) -> [Guide] {
+        guides.enumerated().sorted { a, b in
+            let sa = sectionOrder.firstIndex(of: section(of: a.element)) ?? 0
+            let sb = sectionOrder.firstIndex(of: section(of: b.element)) ?? 0
+            if sa != sb { return sa < sb }
+            let ra = storyRank(a.element), rb = storyRank(b.element)
+            return ra != rb ? ra < rb : a.offset < b.offset
+        }.map(\.element)
+    }
+
+    static func referenceGuides(_ entries: [CatalogueEntry], walkthroughs: [String: Walkthrough] = [:]) -> [Guide] {
         let groups = Dictionary(grouping: entries) { "\(areaName($0.area, mission: $0.mission)) \($0.mission ? "Missions" : "Quests")" }
         // Quests before missions, each alphabetical.
         let titles = groups.keys.sorted { a, b in
@@ -58,8 +140,10 @@ enum QuestCatalogue {
                 var tags = [entry.mission ? "M" : "Q": entry.tag]
                 if let npc = d["npc"]?.string { tags["NPC"] = npc }
                 if let level = d["level"]?.int { tags["LV"] = String(level) }
+                let walk = walkthroughs[entry.key]
+                if let walk { tags["WALK"] = walk.scripted }
                 return GuideStep(kind: entry.mission ? "M" : "Q", title: entry.name, zone: d["zone"]?.int,
-                                 posX: number(d["x"]), posZ: number(d["z"]), note: nil,
+                                 posX: number(d["x"]), posZ: number(d["z"]), note: walk?.steps.joined(separator: "\n"),
                                  fixed: true, tags: tags)
             }
             return Guide(name: title, desc: "Every quest or mission in this log. Work down the list; Next Unfinished skips ones you have done.",

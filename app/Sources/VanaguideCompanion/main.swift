@@ -42,7 +42,9 @@ struct CompanionApp: App {
                 .preferredColorScheme(.dark)
                 .tint(Theme.crystal)
         }
-        .windowResizability(.contentSize)
+        // Resizable (Daniel, 2026-10-28); never smaller than the layout's design size.
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: CompanionView.width, height: CompanionView.height)
     }
 }
 
@@ -320,6 +322,46 @@ final class CompanionState: ObservableObject {
         devNote = "Opened GitHub: review the file there and press Commit/Propose to send it."
     }
 
+    /// The guide step for a quest or mission a gear source names: "Quest: No Strings Attached
+    /// (Aht Urhgan)", "… during the quest Scattered Into Shadow (Jeuno)". The full per-log
+    /// guides win over authored routes, so the step always has its What to do.
+    func questStep(named text: String) -> (guide: Int, step: Int)? { Self.questStep(in: guides, named: text) }
+
+    static func questStep(in guides: [Guide], named text: String) -> (guide: Int, step: Int)? {
+        let norm = ScreenshotGuideMatcher.normalized
+        // Titles built from script constants lose or change small words ("Scattered Into Shadow"
+        // for "Scattered into the Shadow", "Guest Of Hauteur" for "A Guest of Hauteur").
+        let small: Set<String> = ["a", "an", "the", "of", "and", "into", "in", "to", "for", "on", "at", "s"]
+        func core(_ t: String) -> String {
+            norm(t.replacingOccurrences(of: "'", with: "")).split(separator: " ")
+                .filter { !small.contains(String($0)) }.joined(separator: " ")
+        }
+        var byTitle: [String: (Int, Int)] = [:], byCore: [String: (Int, Int)] = [:]
+        for (g, guide) in guides.enumerated() {
+            for (i, st) in guide.steps.enumerated() where st.tags["Q"] != nil || st.tags["M"] != nil {
+                // Also without a bracketed suffix: "Quelling the Storm (WOTG Nation Quests - Bastok 7)".
+                let bare = st.title.replacingOccurrences(of: #"\s*\([^)]*\)\s*$"#, with: "", options: .regularExpression)
+                for t in Set([st.title, bare]) {
+                    let k = norm(t), c = core(t)
+                    if byTitle[k] == nil || guide.isReference { byTitle[k] = (g, i) }
+                    if byCore[c] == nil || guide.isReference { byCore[c] = (g, i) }
+                }
+            }
+        }
+        // The title sits after "Quest:", "Mission:" or "the quest", before " (Area)" or ",".
+        let pattern = #"(?i)(?:quest|mission)s?:?\s+(.+?)(?:\s+\([^)]*\))?(?:[,.]|$)"#
+        if let r = try? NSRegularExpression(pattern: pattern),
+           let m = r.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+           let range = Range(m.range(at: 1), in: text) {
+            let name = String(text[range])
+            if let hit = byTitle[norm(name)] ?? byCore[core(name)] { return hit }
+        }
+        // Otherwise the longest known title inside the line (8+ characters, so "Dawn" can't match chatter).
+        let line = " " + norm(text) + " "
+        return byTitle.filter { $0.key.count >= 8 && line.contains(" " + $0.key + " ") }
+            .max { $0.key.count < $1.key.count }.map { $0.value }
+    }
+
     func status(of step: GuideStep) -> LogRecord? {
         Self.key(for: step).flatMap { progress.entries[$0] }
     }
@@ -399,7 +441,9 @@ final class CompanionState: ObservableObject {
                 zones = WorldMap.load(root: root)
                 guides = (Features.screenReading ? [LogSurvey.guide] : []) + loaded.map { var g = $0; g.name = QuestCatalogue.displayName(g.name); return g }
                 catalogue = entries
-                guides += QuestCatalogue.referenceGuides(catalogue)
+                let references = QuestCatalogue.referenceGuides(catalogue, walkthroughs: QuestCatalogue.walkthroughs(at: root))
+                guides += (QuestCatalogue.jobUnlockGuide(from: references).map { [$0] } ?? []) + references
+                guides = QuestCatalogue.contentOrder(guides)
                 sourceNote = root.path.contains("/Resources/") ? "bundled guides" : "development checkout"
                 break
             }
@@ -529,10 +573,34 @@ final class CompanionState: ObservableObject {
 
     /// The first guide step that reaches one of this achievement's targets.
     func guideLink(for a: AchievementInfo) -> (guide: Int, step: Int)? {
-        guard !a.targets.isEmpty else { return nil }
         for (gi, g) in guides.enumerated() {
             for (si, s) in g.steps.enumerated() where a.targets.contains(where: { $0.matches(s) }) {
                 return (gi, si)
+            }
+        }
+        return Self.achievementStep(in: guides, description: a.description)
+    }
+
+    /// Where an achievement's description points: a quoted quest or mission ("Complete 'The
+    /// Doorman' and obtain the Razor Axe"), or a nation rank ("Achieve Rank 7 in Windurst") ->
+    /// that nation's missions.
+    static func achievementStep(in guides: [Guide], description d: String) -> (guide: Int, step: Int)? {
+        // 'Name' in straight or curly quotes; the apostrophe inside "Silence of the Ram's" is
+        // kept by requiring the closing quote to be followed by a non-letter.
+        if let r = try? NSRegularExpression(pattern: #"['‘“"](.+?)['’”"](?![A-Za-z])"#) {
+            for m in r.matches(in: d, range: NSRange(d.startIndex..., in: d)) {
+                guard let range = Range(m.range(at: 1), in: d) else { continue }
+                if let hit = questStep(in: guides, named: "Quest: " + d[range]) { return hit }
+            }
+        }
+        // Nation rank -> that nation's missions; fame -> its quests (quests are what raise fame).
+        for (pattern, kind) in [(#"(?i)rank \d+ in (San d'Oria|Bastok|Windurst)"#, "Missions"),
+                                (#"(?i)fame level of \d+ in (San d'Oria|Bastok|Windurst|Jeuno)"#, "Quests")] {
+            if let r = try? NSRegularExpression(pattern: pattern),
+               let m = r.firstMatch(in: d, range: NSRange(d.startIndex..., in: d)),
+               let range = Range(m.range(at: 1), in: d),
+               let g = guides.firstIndex(where: { $0.name.caseInsensitiveCompare("\(d[range]) \(kind)") == .orderedSame }) {
+                return (g, 0)
             }
         }
         return nil
@@ -543,8 +611,8 @@ struct CompanionView: View {
     @StateObject var state = CompanionState()
     @StateObject private var capture = ScreenGuideCapture()
     @StateObject var wiki = WikiState()
-    // --tab <n> (test hook) opens on another tab, 1 Gear, 2 Skills, 3 Achievements, for --snapshot.
-    @State private var tab = CommandLine.arguments.firstIndex(of: "--tab")
+    // --tab <n> (test hook) opens on another tab, 1 Gear, 2 Skills, 3 Achievements, 4 Server, for --snapshot.
+    @State var tab = CommandLine.arguments.firstIndex(of: "--tab")
         .flatMap { CommandLine.arguments.indices.contains($0 + 1) ? Int(CommandLine.arguments[$0 + 1]) : nil } ?? 0
     @State private var showReading = false
     @State private var addingCharacter = false
@@ -562,13 +630,15 @@ struct CompanionView: View {
                 case 1: gearPane
                 case 2: skillsPane
                 case 3: achievementsPane
+                case 4: serverPane
                 default: guidesPane
                 }
             }
                 .frame(maxHeight: .infinity)
         }
         .padding(10)
-        .frame(width: Self.width, height: Self.height)
+        .frame(minWidth: Self.width, idealWidth: Self.width, maxWidth: .infinity,
+               minHeight: Self.height, idealHeight: Self.height, maxHeight: .infinity)
         .foregroundStyle(Theme.text)
         .background(Theme.backdrop)
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
@@ -634,9 +704,10 @@ struct CompanionView: View {
                     Text("Guides").tag(0)
                     Text("Gear").tag(1)
                     Text("Skills").tag(2)
+                    Text("Server").tag(4)
                     Text("Achievements").tag(3)
                 }
-                .pickerStyle(.segmented).labelsHidden().frame(width: 320)
+                .pickerStyle(.segmented).labelsHidden().frame(width: 390)
                 Spacer()
                 if Features.screenReading { readingStatus }
             }
@@ -768,14 +839,27 @@ struct CompanionView: View {
     var guidesPane: some View {
         HStack(spacing: 8) {
             Card {
-                List(state.guides.indices, id: \.self, selection: Binding(
-                    get: { state.selected },
-                    set: { state.selected = $0 ?? 0; state.stepIndex = 0 }
-                )) { i in
-                    Text(state.guides[i].name).font(.callout).lineLimit(2)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Content").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.gold)
+                        .padding(.leading, 4)
+                    List(selection: Binding<Int?>(
+                        get: { state.selected },
+                        set: { state.selected = $0 ?? 0; state.stepIndex = 0 }
+                    )) {
+                        ForEach(QuestCatalogue.sectionOrder, id: \.self) { section in
+                            let rows = state.guides.indices.filter { QuestCatalogue.section(of: state.guides[$0]) == section }
+                            if !rows.isEmpty {
+                                Section(section) {
+                                    ForEach(rows, id: \.self) { i in
+                                        Text(state.guides[i].name).font(.callout).lineLimit(2).tag(Optional(i))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .scrollContentBackground(.hidden)
+                    .listStyle(.sidebar)
                 }
-                .scrollContentBackground(.hidden)
-                .listStyle(.sidebar)
             }
             .frame(width: 190)
 
@@ -852,13 +936,31 @@ struct CompanionView: View {
         if s.tags["LEARNED"] != nil {
             Text("Location recorded in Developer Mode").font(.caption2).foregroundStyle(Theme.gold)
         }
+        if let job = s.tags["JOB"] {
+            Label("Unlocks \(job)", systemImage: "person.badge.plus").font(.callout).foregroundStyle(Theme.gold)
+        }
         if let lv = s.tags["LV"] {
             Label("Recommended level \(lv)", systemImage: "chart.bar").font(.caption).foregroundStyle(Theme.muted)
         }
-        if let n = s.note {
-            Text(n).font(.callout).fixedSize(horizontal: false, vertical: true)
+        if let n = s.note, let scripted = s.tags["WALK"] {
+            // Walkthrough from the server's own quest script: numbered, after where to go.
+            howToGetThere(s, npc: npc)
+            SectionLabel(text: "What to do").padding(.top, 4)
+            ForEach(Array(n.components(separatedBy: "\n").enumerated()), id: \.offset) { i, line in
+                Text("\(i + 1). \(line)").font(.callout).fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            if scripted != "full" {
+                Text(scripted == "stub" ? "This server has not scripted this one yet; it may not be completable."
+                                        : "Only part of this one is scripted on the server; some steps may not work.")
+                    .font(.caption).foregroundStyle(Theme.ember).fixedSize(horizontal: false, vertical: true)
+            }
+        } else {
+            if let n = s.note {
+                Text(n).font(.callout).fixedSize(horizontal: false, vertical: true)
+            }
+            howToGetThere(s, npc: npc)
         }
-        howToGetThere(s, npc: npc)
     }
 
     @ViewBuilder
@@ -1031,8 +1133,38 @@ struct CompanionView: View {
         }
     }
 
+    /// The whole achievement is a link (Daniel, 2026-10-28): to the quest or mission it names in
+    /// Guides, else to an item it names on the Gear tab.
     @ViewBuilder
     func row(_ r: AchievementRow) -> some View {
+        if let link = state.guideLink(for: r.info) {
+            Button { state.selected = link.guide; state.stepIndex = link.step; tab = 0 } label: { linkedRow(r, to: "Open in Guides") }
+                .buttonStyle(.plain).help("Open the guide for this achievement")
+        } else if let item = achievementItem(r.info) {
+            Button { wiki.openItem = item.id; wiki.category = nil; tab = 1 } label: { linkedRow(r, to: "Open \(item.name) in Gear") }
+                .buttonStyle(.plain).help("Open how to get \(item.name)")
+        } else {
+            rowContent(r)
+        }
+    }
+
+    func linkedRow(_ r: AchievementRow, to label: String) -> some View {
+        HStack(alignment: .center, spacing: 6) {
+            rowContent(r)
+            Image(systemName: "chevron.right").font(.caption).foregroundStyle(Theme.crystal)
+        }
+        .contentShape(Rectangle())
+        .accessibilityHint(label)
+    }
+
+    /// The longest gear name an achievement's description mentions ("obtain a Reverend Mail").
+    func achievementItem(_ a: AchievementInfo) -> GearItem? {
+        let text = " " + ScreenshotGuideMatcher.normalized(a.description) + " "
+        return wiki.items.filter { $0.name.count >= 6 && text.contains(" " + ScreenshotGuideMatcher.normalized($0.name) + " ") }
+            .max { $0.name.count < $1.name.count }
+    }
+
+    func rowContent(_ r: AchievementRow) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline) {
                 Text(r.info.title).font(.callout).bold()
@@ -1055,14 +1187,7 @@ struct CompanionView: View {
                     Text("Guide target: " + r.info.targets.map(\.label).joined(separator: "; ")
                          + (r.info.confidence.map { " (\($0) confidence)" } ?? ""))
                         .font(.caption2).foregroundStyle(Theme.muted)
-                    if let link = state.guideLink(for: r.info) {
-                        Button("Open in Guide") {
-                            state.selected = link.guide
-                            state.stepIndex = link.step
-                            tab = 0
-                        }
-                        .font(.caption2)
-                    }
+
                 }
             }
         }
