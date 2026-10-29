@@ -1,5 +1,10 @@
 # What to do next
 
+**Resize continuation (2026-10-28, beta 98):** [BETA-98.md](BETA-98.md) records the newer
+source/installed-build distinction, hidden resize verification, and the macOS 27.2 dependency
+check. Do not use the older beta 82 installation status below as the current inventory.
+Recheck running apps before installation; the playable launcher must stay intact during a game.
+
 **Current priorities (2026-10-27, beta 82)**
 
 1. Read [BETA-82.md](BETA-82.md) for the current checkout, validation record and remaining

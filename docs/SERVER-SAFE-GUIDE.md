@@ -18,6 +18,9 @@ read client memory, read packets, contact a game server, or send game input.
 
 ## Usage
 
+The window expands by dragging an edge or corner. Its minimum content size is 620 × 460;
+larger windows give the guide, gear, skills, server and achievement panels more space.
+
 1. Open **VanaGuide Server-Safe**. Screenshot mode starts off on every launch.
 2. Open **Screen Reading…**, then **Find Game Window**. macOS may ask for Screen Recording
    permission for this app. No permission prompt runs at startup.
@@ -79,6 +82,12 @@ does not request Screen Recording permission, enumerate game windows, capture sc
 the game, send input, or connect to hosted servers. Live capture and in-game recognition still
 need a beta check on the owner's **local LSB server**, using a synthetic test account/chat log.
 Do not call offline fixtures evidence of a live character walkthrough or a server approval.
+
+For a hidden resize check, run `VanaguideCompanion --selftest-layout`. It checks every tab at
+620 × 460 and 1000 × 720, then shrinks each window back. Add `--layout-output <directory>`
+to save synthetic preview PNGs. It opens no visible window, uses no game input or screen
+capture, and skips character/session loading and progress writes. It exercises view layout;
+it does not simulate dragging the installed window or prove live game behavior.
 
 Apple API references: [window-only content filter](https://developer.apple.com/documentation/screencapturekit/sccontentfilter/init(desktopindependentwindow:)),
 [ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit),
