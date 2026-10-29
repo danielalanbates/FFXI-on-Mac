@@ -164,7 +164,10 @@ enum LiveAddons {
     ///   thirdparty or addons, `/unloadall` (every plugin, Thirdparty among them, from inside its
     ///   own callback: a crash), `/addon unloadall`, and the commands that run other commands or
     ///   Lua nothing here can see (`/exec`, `/execstr`, `/alias`, `/bind`, `/addon exec`).
-    /// - On a hosted world (`hosted`), only addon and plugin management is sent: `/load`,
+    /// - Plain `/shutdown` is permitted for a normal user-requested logout. It accepts no
+    ///   arguments or command chaining, and still uses the verified world/prefix resolver.
+    ///   This is an explicit CLI action, never an updater/test preparation step during play.
+    /// - On a hosted world (`hosted`), otherwise only addon and plugin management is sent: `/load`,
     ///   `/unload`, `/reload`, `/addon load|unload|reload|list`. Anything else can act in the
     ///   game (`/ma`, `/say`, an addon's own commands), which from a script is automation, so it
     ///   is typed in the game instead. Anything that loads must be on the world's published
@@ -193,6 +196,8 @@ enum LiveAddons {
         }
         let hostedOnly = "on a hosted world only addon and plugin loads and unloads are sent from here; type /\(verb) in the game"
         switch verb {
+        case "shutdown":
+            return words.count == 1 ? nil : "/shutdown accepts no arguments"
         case "unload", "reload":
             let target = word(1)
             if target.isEmpty { return "/\(verb) needs a plugin name" }
