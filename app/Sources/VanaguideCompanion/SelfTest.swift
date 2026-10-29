@@ -3,7 +3,7 @@
 import Foundation
 
 enum CompanionSelfTest {
-    static func run() -> Never {
+    @MainActor static func run() -> Never {
         var checks: [(String, Bool)] = []
 
         let fixture = """
@@ -63,6 +63,7 @@ enum CompanionSelfTest {
 
         checks += achievementChecks(guides: guides)
         checks += screenshotChecks()
+        checks += artifactJobChecks()
 
         var failures = 0
         for (name, passed) in checks {
