@@ -21,6 +21,9 @@ read client memory, read packets, contact a game server, or send game input.
 The window expands by dragging an edge or corner. Its minimum content size is 620 × 460;
 larger windows give the guide, gear, skills, server and achievement panels more space.
 
+In Gear, **Artifact Armor** opens a job menu. Choose a job to see its pieces; **Jobs** returns
+to the menu. Jobs and counts come from the selected server's loaded gear data.
+
 1. Open **VanaGuide Server-Safe**. Screenshot mode starts off on every launch.
 2. Open **Screen Reading…**, then **Find Game Window**. macOS may ask for Screen Recording
    permission for this app. No permission prompt runs at startup.

@@ -19,9 +19,24 @@ enum CompanionLayoutSelfTest {
         }
         let sizes = [NSSize(width: CompanionView.width, height: CompanionView.height),
                      NSSize(width: 1000, height: 720)]
-        for tab in 0...4 {
+        let gear = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"].flatMap {
+            WikiData.gear(URL(fileURLWithPath: $0).appendingPathComponent("data/gear_guide.lua"))
+        }
+        let scenarios: [(name: String, tab: Int, job: String?)] = [
+            ("tab-0", 0, nil), ("tab-1", 1, nil), ("artifact-war", 1, "WAR"),
+            ("tab-2", 2, nil), ("tab-3", 3, nil), ("tab-4", 4, nil)
+        ]
+        for scenario in scenarios {
             autoreleasepool {
-                let view = NSHostingView(rootView: CompanionView(layoutTest: true, tab: tab)
+                let wiki = WikiState()
+                wiki.categories = gear?.categories ?? [GearCategory(id: "artifact", name: "Artifact Armor", desc: "", count: 2)]
+                wiki.items = gear?.items ?? ["WAR", "BLM"].enumerated().map { index, job in
+                    GearItem(id: index, name: "\(job) fixture armor", level: 60, slot: "body", jobs: job,
+                             rare: true, ex: true, categories: ["artifact"], how: [])
+                }
+                wiki.note = ""
+                if let job = scenario.job { wiki.selectArtifactJob(job) }
+                let view = NSHostingView(rootView: CompanionView(layoutTest: true, tab: scenario.tab, wiki: wiki)
                     .preferredColorScheme(.dark).tint(Theme.crystal))
                 let window = NSWindow(contentRect: NSRect(origin: .zero, size: sizes[0]),
                                       styleMask: [.titled, .closable, .resizable],
@@ -38,27 +53,27 @@ enum CompanionLayoutSelfTest {
                         && abs(view.bounds.height - size.height) < 1
                         && view.fittingSize.width <= size.width + 1
                         && view.fittingSize.height <= size.height + 1
-                    print("\(fits ? "ok" : "FAIL") tab \(tab), \(Int(size.width))×\(Int(size.height)); "
+                    print("\(fits ? "ok" : "FAIL") \(scenario.name), \(Int(size.width))×\(Int(size.height)); "
                           + "content \(view.bounds.size), minimum \(view.fittingSize)")
                     if !fits { failures += 1 }
                     if let output {
                         guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
-                            print("FAIL: cannot render tab \(tab)"); failures += 1; continue
+                            print("FAIL: cannot render \(scenario.name)"); failures += 1; continue
                         }
                         view.cacheDisplay(in: view.bounds, to: rep)
                         do {
                             guard let data = rep.representation(using: .png, properties: [:]) else {
-                                print("FAIL: cannot encode tab \(tab)"); failures += 1; continue
+                                print("FAIL: cannot encode \(scenario.name)"); failures += 1; continue
                             }
-                            try data.write(to: output.appendingPathComponent("tab-\(tab)-\(Int(size.width)).png"))
-                        } catch { print("FAIL: cannot write tab \(tab): \(error)"); failures += 1 }
+                            try data.write(to: output.appendingPathComponent("\(scenario.name)-\(Int(size.width)).png"))
+                        } catch { print("FAIL: cannot write \(scenario.name): \(error)"); failures += 1 }
                     }
                 }
                 // Shrinking after expansion catches a layout that keeps the enlarged minimum.
                 window.setContentSize(sizes[0])
                 view.layoutSubtreeIfNeeded()
                 if abs(view.bounds.width - sizes[0].width) >= 1 || abs(view.bounds.height - sizes[0].height) >= 1 {
-                    print("FAIL: tab \(tab) cannot shrink after expanding"); failures += 1
+                    print("FAIL: \(scenario.name) cannot shrink after expanding"); failures += 1
                 }
                 window.close()
             }

@@ -631,7 +631,7 @@ final class CompanionState: ObservableObject {
 struct CompanionView: View {
     @StateObject var state: CompanionState
     @StateObject private var capture = ScreenGuideCapture()
-    @StateObject var wiki = WikiState()
+    @StateObject var wiki: WikiState
     // --tab <n> (test hook) opens on another tab, 1 Gear, 2 Skills, 3 Achievements, 4 Server, for --snapshot.
     @State var tab = CommandLine.arguments.firstIndex(of: "--tab")
         .flatMap { CommandLine.arguments.indices.contains($0 + 1) ? Int(CommandLine.arguments[$0 + 1]) : nil } ?? 0
@@ -640,9 +640,10 @@ struct CompanionView: View {
     @State private var newCharacter = ""
     private let layoutTest: Bool
 
-    init(layoutTest: Bool = false, tab: Int? = nil) {
+    init(layoutTest: Bool = false, tab: Int? = nil, wiki: WikiState? = nil) {
         self.layoutTest = layoutTest
         _state = StateObject(wrappedValue: CompanionState(loadData: !layoutTest))
+        _wiki = StateObject(wrappedValue: wiki ?? WikiState())
         if let tab { _tab = State(initialValue: tab) }
     }
     static let addCharacterTag = "\u{1}add"

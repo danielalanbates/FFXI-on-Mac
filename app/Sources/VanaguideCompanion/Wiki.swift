@@ -33,6 +33,12 @@ struct GearItem: Identifiable, Equatable {
     var how: [GearSource]
 }
 
+struct ArtifactJob: Identifiable, Equatable {
+    var id: String
+    var name: String
+    var count: Int
+}
+
 struct SkillGuide: Identifiable, Equatable {
     var id: String { name }
     var name: String
@@ -93,6 +99,7 @@ final class WikiState: ObservableObject {
     @Published var category: String? = "artifact"
     @Published var search = ""
     @Published var job = "All"
+    @Published var artifactJob: String?
     // --gear-item <id> (test hook) opens an item's page, for --snapshot.
     @Published var openItem: Int? = CommandLine.arguments.firstIndex(of: "--gear-item")
         .flatMap { CommandLine.arguments.indices.contains($0 + 1) ? Int(CommandLine.arguments[$0 + 1]) : nil }
@@ -110,6 +117,38 @@ final class WikiState: ObservableObject {
 
     static let jobs = ["All", "WAR", "MNK", "WHM", "BLM", "RDM", "THF", "PLD", "DRK", "BST", "BRD", "RNG", "SAM",
                        "NIN", "DRG", "SMN", "BLU", "COR", "PUP", "DNC", "SCH", "GEO", "RUN"]
+    static let jobNames = ["WAR": "Warrior", "MNK": "Monk", "WHM": "White Mage", "BLM": "Black Mage",
+                           "RDM": "Red Mage", "THF": "Thief", "PLD": "Paladin", "DRK": "Dark Knight",
+                           "BST": "Beastmaster", "BRD": "Bard", "RNG": "Ranger", "SAM": "Samurai",
+                           "NIN": "Ninja", "DRG": "Dragoon", "SMN": "Summoner", "BLU": "Blue Mage",
+                           "COR": "Corsair", "PUP": "Puppetmaster", "DNC": "Dancer", "SCH": "Scholar",
+                           "GEO": "Geomancer", "RUN": "Rune Fencer"]
+
+    private static func fits(_ item: GearItem, job: String) -> Bool {
+        item.jobs == "All jobs" || item.jobs.split(separator: " ").contains(Substring(job))
+    }
+
+    /// Artifact Armor opens a second menu, listing only jobs present in this server's data.
+    var artifactJobs: [ArtifactJob] {
+        let armor = items.filter { $0.categories.contains("artifact") }
+        return Self.jobs.dropFirst().compactMap { job in
+            let count = armor.filter { Self.fits($0, job: job) }.count
+            return count == 0 ? nil : ArtifactJob(id: job, name: Self.jobNames[job] ?? job, count: count)
+        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    func selectGearCategory(_ id: String?) {
+        category = id
+        openItem = nil
+        if id == "artifact" { artifactJob = nil }
+    }
+
+    func selectArtifactJob(_ job: String) {
+        guard artifactJobs.contains(where: { $0.id == job }) else { return }
+        artifactJob = job
+        openItem = nil
+        search = ""
+    }
 
     /// The server whose data is shown: a key under data/servers/, or "" for standard LandSandBoat.
     @Published private(set) var serverKey = ""
@@ -161,6 +200,10 @@ final class WikiState: ObservableObject {
                 self.serverKey = (gear?.1 ?? false) || (skills?.1 ?? false) || !notes.isEmpty ? key : ""
                 self.categories = gear?.0.categories ?? []
                 self.items = gear?.0.items ?? []
+                if let job = self.artifactJob, !self.artifactJobs.contains(where: { $0.id == job }) {
+                    self.artifactJob = nil
+                    self.openItem = nil
+                }
                 self.skills = skills?.0 ?? []
                 self.crafts = crafts?.0 ?? [:]
                 self.targets = targets?.0 ?? []
@@ -192,9 +235,10 @@ final class WikiState: ObservableObject {
 
     var shown: [GearItem] {
         let needle = search.trimmingCharacters(in: .whitespaces).lowercased()
+        let selectedJob = category == "artifact" ? artifactJob : (job == "All" ? nil : job)
         return items.filter { i in
             (category.map { i.categories.contains($0) } ?? true)
-                && (job == "All" || i.jobs == "All jobs" || i.jobs.split(separator: " ").contains(Substring(job)))
+                && (selectedJob.map { Self.fits(i, job: $0) } ?? true)
                 && (needle.isEmpty || i.name.lowercased().contains(needle))
         }
     }
@@ -204,7 +248,7 @@ extension CompanionView {
     var gearPane: some View {
         HStack(spacing: 8) {
             Card { VStack(alignment: .leading, spacing: 6) {
-                List(wiki.categories, selection: Binding(get: { wiki.category }, set: { wiki.category = $0; wiki.openItem = nil })) { c in
+                List(wiki.categories, selection: Binding(get: { wiki.category }, set: { wiki.selectGearCategory($0) })) { c in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(c.name).font(.callout)
                         Text("\(c.count) pieces").font(.caption2).foregroundStyle(Theme.muted)
@@ -221,6 +265,8 @@ extension CompanionView {
             Card {
                 if let id = wiki.openItem, let item = wiki.items.first(where: { $0.id == id }) {
                     gearDetail(item)
+                } else if wiki.category == "artifact", wiki.artifactJob == nil {
+                    artifactJobMenu
                 } else {
                     gearList
                 }
@@ -228,16 +274,51 @@ extension CompanionView {
         }
     }
 
+    var artifactJobMenu: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Artifact Armor").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.gold)
+            List(wiki.artifactJobs) { job in
+                Button { wiki.selectArtifactJob(job.id) } label: {
+                    HStack {
+                        Text(job.name).font(.callout)
+                        Text(job.id).font(.caption).foregroundStyle(Theme.muted)
+                        Spacer()
+                        Text("\(job.count)").font(.caption).foregroundStyle(Theme.muted)
+                        Image(systemName: "chevron.right").font(.caption2).foregroundStyle(Theme.crystal)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .scrollContentBackground(.hidden)
+            .listStyle(.plain)
+            if wiki.artifactJobs.isEmpty {
+                Text(wiki.note.isEmpty ? "No artifact armor in this server's gear data." : wiki.note)
+                    .font(.caption).foregroundStyle(Theme.muted)
+            }
+        }
+    }
+
     var gearList: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if wiki.category == "artifact", let job = wiki.artifactJob {
+                Button { wiki.artifactJob = nil } label: { Label("Jobs", systemImage: "chevron.left") }
+                    .buttonStyle(.plain).foregroundStyle(Theme.crystal)
+                Text("\(WikiState.jobNames[job] ?? job) Artifact Armor")
+                    .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.gold)
+            }
             if let c = wiki.categories.first(where: { $0.id == wiki.category }) {
-                Text(c.name).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.gold)
+                if c.id != "artifact" {
+                    Text(c.name).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.gold)
+                }
                 Text(c.desc).font(.caption).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 6) {
                 TextField("Search", text: $wiki.search).textFieldStyle(.roundedBorder)
-                Picker("Job", selection: $wiki.job) { ForEach(WikiState.jobs, id: \.self) { Text($0).tag($0) } }
-                    .frame(width: 110)
+                if wiki.category != "artifact" {
+                    Picker("Job", selection: $wiki.job) { ForEach(WikiState.jobs, id: \.self) { Text($0).tag($0) } }
+                        .frame(width: 110)
+                }
             }
             .controlSize(.small)
             if !wiki.note.isEmpty { Text(wiki.note).font(.caption).foregroundStyle(Theme.ember) }
