@@ -22,3 +22,9 @@ outside this change; only the standalone guide may be refreshed in the backgroun
 
 Build commands and evidence remain under Downloads. Source publication does not authorize
 a public binary release or close the live local gameplay/performance gates.
+
+Installed the signed standalone `/Applications/VanaGuide Server-Safe.app` as build 100 after
+its candidate signature and packaged self-test passed. The preceding guide accepted a normal
+quit, its bundle was archived, and the new guide was opened once in the background on Gear.
+Read-only inventory confirms one standalone guide, the original game process still present,
+and an unchanged installed launcher binary. No game command was sent for this update.
