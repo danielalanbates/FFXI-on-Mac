@@ -38,6 +38,7 @@ enum Headless {
             || a.contains("--selftest-updater")
             || a.contains("--selftest-perf")
             || a.contains("--selftest-ui-text")
+            || a.contains("--selftest-server-catalog")
             || a.contains("--selftest-primary-action")
             || a.contains("--selftest-install-location")
             || a.contains("--selftest-install-selection")
@@ -128,6 +129,7 @@ enum Headless {
         if args.contains("--selftest-ui-text") {
             runUITextSelfTest()
         }
+        if args.contains("--selftest-server-catalog") { runServerCatalogSelfTest() }
         if args.contains("--selftest-primary-action") {
             runPrimaryActionSelfTest()
         }

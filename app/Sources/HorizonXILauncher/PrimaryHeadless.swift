@@ -38,6 +38,7 @@ extension Headless {
         var x = PrimaryInputs()
         x.world = server.name
         x.isLocal = server.local
+        x.launchUnavailableReason = server.launchUnavailableReason
         x.canDownload = server.local || server.installKind != .none
         x.hostEmpty = !server.local && server.host.trimmingCharacters(in: .whitespaces).isEmpty
         x.allowsMultipleClients = server.allowsMultipleClients

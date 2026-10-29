@@ -248,6 +248,9 @@ enum AddonPolicies {
         if let live = fetched[server.name] { return live }
         switch server.name {
         case "HorizonXI": return horizon
+        case "Phoenix XI":
+            // Approval covers exact versions. No Phoenix snapshot has been reviewed here yet.
+            return .allowlist(published: [], source: "phoenix-xi.com/approved-addons; integration pending")
         case "CatsEyeXI": return catseye
         case "FFEra": return ffera
         case "Gaia XI": return gaia

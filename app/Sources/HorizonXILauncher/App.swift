@@ -400,6 +400,7 @@ struct ContentView: View {
         let s = store.selected
         x.world = s?.name ?? "The game"
         x.isLocal = s?.local == true
+        x.launchUnavailableReason = s?.launchUnavailableReason
         x.canDownload = x.isLocal || (s?.installKind ?? Server.InstallKind.none) != .none
         x.hostEmpty = s.map { !$0.local && $0.host.trimmingCharacters(in: .whitespaces).isEmpty } ?? false
         x.allowsMultipleClients = s?.allowsMultipleClients == true
@@ -473,7 +474,7 @@ struct ContentView: View {
         }.frame(width: 0, height: 0))
         .onAppear {
             // Server-Safe's Server list is this launcher's list.
-            Guide.shareSession(worlds: store.ordered.map(\.name))
+            Guide.shareSession(worlds: orderedServers.map(\.name))
             // What builds up to b63 stored for the graphics panel, in Ashita's keys (b64).
             for line in GraphicsSettings.migrateStored() { runner.logFileOnly("==> " + line) }
             if store.selected?.local == true { local.refresh() }
@@ -759,10 +760,9 @@ struct ContentView: View {
         return items
     }
 
-    /// One dropdown for every server, kept next to the account fields since choosing a world and
-    /// typing the account that logs into it are one decision, not two. HorizonXI is pinned to the
-    /// top; the rest are ordered by community size, which is metadata the user never has to see
-    /// or maintain. Sized for the 372pt sidebar column rather than the wide hero pane.
+    private var orderedServers: [Server] { store.ordered(populations: feeds.populations) }
+
+    /// Worlds by online population, with dated estimates offline and the local world last.
     private var serverPicker: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -784,7 +784,7 @@ struct ContentView: View {
             // no hover), which is why the world name never looked clickable. A plain-styled
             // button menu draws the label exactly as declared.
             Menu {
-                ForEach(store.ordered) { s in
+                ForEach(orderedServers) { s in
                     Button { store.select(s) } label: {
                         if s.era.isEmpty { Text(s.name) }
                         else { Text("\(s.name)  ·  \(s.era)") }
@@ -1038,7 +1038,7 @@ struct ContentView: View {
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 4) {
-                    Button("Open") { Guide.openCompanion(world: store.selected?.name ?? "", worlds: store.ordered.map(\.name)) }
+                    Button("Open") { Guide.openCompanion(world: store.selected?.name ?? "", worlds: orderedServers.map(\.name)) }
                     Toggle("Open with Play", isOn: $guideWithPlay)
                         .toggleStyle(.checkbox).font(.system(size: 11))
                         .help("Open VanaGuide Server-Safe behind the game every time you press Play.")
@@ -1856,6 +1856,7 @@ struct ContentView: View {
     /// Get the world's client the way that world distributes it. Nothing here redistributes
     /// Square Enix data: each route runs or opens the server's own installer.
     private func downloadGameData(for s: Server, install i: Install) {
+        if let why = s.launchUnavailableReason { notice = why; return }
         if s.dataPath.isEmpty && s.name != "HorizonXI" {
             // Into the "FFXI on Mac" folder the user chose; asked for here only when there is none.
             guard placeWorldData(for: s),
@@ -1988,6 +1989,8 @@ struct ContentView: View {
         guard now.action == a, now.enabled else { return }
         guard let s = store.selected else { return }
         switch a {
+        case .serverInfo:
+            if let url = URL(string: s.installURL) { NSWorkspace.shared.open(url) }
         case .setup(.localServer(lowSpace: true)):
             // Below the disk floor: say the numbers and set it up only on a yes ("Set up anyway").
             let alert = NSAlert()
@@ -2170,6 +2173,7 @@ struct ContentView: View {
     /// what is missing.
     private func runSetup() async {
         guard !setupRunning else { return }
+        if let why = store.selected?.launchUnavailableReason { notice = why; return }
         let world = store.selectedID
         setupRunning = true
         // The whole chain as one figure, planned from where it starts (SetupMeter).
@@ -2888,6 +2892,7 @@ struct ContentView: View {
     }
 
     private func play() {
+        if let why = store.selected?.launchUnavailableReason { notice = why; return }
         guard let i = active else { return }
         // Only a handed-over --play gets here (the button says "Updating…"); the launcher is about to quit.
         if updateInstalling {
@@ -2907,9 +2912,9 @@ struct ContentView: View {
         updateChecked = false
         Credentials.setUsername(user, forWorld: store.selected?.name ?? "")
         if guideWithPlay, Guide.companionURL != nil {
-            Guide.openCompanion(world: store.selected?.name ?? "", worlds: store.ordered.map(\.name), activate: false)
+            Guide.openCompanion(world: store.selected?.name ?? "", worlds: orderedServers.map(\.name), activate: false)
         } else {
-            Guide.shareSession(world: store.selected?.name ?? "", worlds: store.ordered.map(\.name))
+            Guide.shareSession(world: store.selected?.name ?? "", worlds: orderedServers.map(\.name))
         }
         Credentials.remember = remember
         if remember { Credentials.savePassword(pass, for: user, world: store.selected?.name ?? "") }
@@ -2959,6 +2964,7 @@ struct ContentView: View {
     }
 
     private func launchClient(_ i: Install, server: Server, runner r: Runner, synced: Bool = false) {
+        if let why = server.launchUnavailableReason { notice = why; return }
         // Restart was pressed while the local server was starting for this launch.
         if updateInstalling {
             r.logFileOnly("!! not playing: the launcher is restarting to update")

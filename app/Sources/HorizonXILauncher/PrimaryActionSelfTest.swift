@@ -32,6 +32,9 @@ extension Headless {
 
         expect("ready -> Play, no reason line", base, .play, enabled: true, reason: .some(nil))
 
+        var pending = base; pending.launchUnavailableReason = "Mac login pending."
+        expect("catalogued world with pending Mac support -> official information", pending, .serverInfo, enabled: true)
+
         // Drives. Daniel's Mac on 2026-10-15: SquareEnix links into a ghost-mounted 'Games'.
         var x = base; x.checks = [bad("squareenix", drive: "Games"), bad("reg32")]; x.driveStates = ["Games": .ghost]
         expect("ghost 'Games' (Daniel 2026-10-15) -> Setup, never Repair or restart", x, .setup(.dataDrive("Games")),
@@ -308,6 +311,8 @@ extension Headless {
             if (d.label == "Play" || d.label == "Play Another"), !d.enabled { greyPlay.append(name) }
             switch d.action {
             case .play, .playAnother, .stop, .enterAccount: break
+            case .serverInfo:
+                if !d.enabled || d.label != "Server Info" { notActionable.append(name) }
             case .working:
                 if d.enabled || !isProgress(d.label) { notActionable.append("\(name): \(d.label)") }
             case .setup, .update, .repair:
@@ -316,7 +321,7 @@ extension Headless {
         }
         results.append(("label Play / Play Another => enabled, in every state"
                         + (greyPlay.isEmpty ? "" : " -- " + greyPlay.joined(separator: "; ")), greyPlay.isEmpty))
-        results.append(("every state that is not Play is an enabled Setup / Update / Repair or a progress label"
+        results.append(("every state that is not Play offers an enabled next action or a progress label"
                         + (notActionable.isEmpty ? "" : " -- " + notActionable.joined(separator: "; ")), notActionable.isEmpty))
         results.append(("Play shows only where the click starts the game, or (no account) goes to the fields",
                         seen.allSatisfy { !$0.1.label.hasPrefix("Play") || ([.play, .playAnother, .enterAccount] as [PrimaryAction]).contains($0.1.action) }))
