@@ -28,7 +28,7 @@ Settings live under Setup & Diagnostics › RETROACHIEVEMENTS.
 
 ## Set coverage and primary sources (checked 2026-10-27)
 
-The official [HorizonXI sets hub](https://retroachievements.org/hub/25633) lists 26 sets: twelve populated sets with **637 achievements**, and fourteen empty sets. Counts are a research checkpoint, not a fixed limit; each refresh imports every achievement returned by the API for every configured set.
+The official [HorizonXI sets hub](https://retroachievements.org/hub/25633) lists 26 sets: twelve populated sets with **537 achievements**, and fourteen empty sets. Counts are a research checkpoint, not a fixed limit; each refresh imports every achievement returned by the API for every configured set.
 
 | Set | Legacy API game id | Achievements at check |
 | --- | ---: | ---: |
@@ -108,3 +108,9 @@ The Achievements tab shows each set with its earned/total count, a to-do list (d
 - `VanaguideCompanion --selftest-parser` adds the Lua reader, `achievements.lua` in nested and flat shapes, snapshot reading, staleness and registry choice, the merge rules, and guide links.
 
 Not verified by this beta: a live request with a real key, private-server addon approval, or routes for every imported achievement. Tests use fake transports and synthetic progress; they do not contact RA or a hosted FFXI server. Keychain tests use their own disposable service, never the player's stored key.
+
+## Runtime checkpoint — October29,2026
+
+The running launcher’s fresh registered snapshot carried12 unique populated sets and537 records, matching each public hub count. Every record had a title, description and both earned-state fields. The previously stated637 was an arithmetic error; individual table counts were correct. No key, username, earned history or private snapshot is committed. The public hub was rechecked directly.
+
+This is catalogue/progress-file evidence, not proof of a walkthrough for every achievement or of UI rendering. Guide links are best-effort target/description matches; unmatched achievements remain list items without authored routes. The API count is dynamic, not a hardcoded ceiling.
