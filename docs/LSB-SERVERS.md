@@ -19,7 +19,14 @@ HorizonXI, CatsEyeXI, Gaia XI, Supernova, OmicronXI, the local world, **Ascensio
 **LevelDown 99** and **Scythe** (b76), **Olympus XI** and **Legendary Relaunch** (b77).
 Cut for their codebase: Eden, FFEra, ValhallaXI (DarkStar lineage). Stopped: Tabula Rasa XI.
 
-## LandSandBoat worlds not yet in the launcher
+## Phoenix catalog update (2026-10-28)
+
+Build 101 adds Phoenix XI as **Mac support pending**, ordered by its online-player snapshot.
+It opens official information and cannot start a client. Authentication/client integration and
+an approved-tool ruling remain outstanding: see [PHOENIX.md](PHOENIX.md). The survey below records
+October 24 findings and must not be read as proof of a working Phoenix Mac login.
+
+## LandSandBoat worlds requiring integration work
 
 | World | Login host | Population (2026-10-24) | How a player gets the client | Rules that matter here | Verdict |
 | --- | --- | --- | --- | --- | --- |

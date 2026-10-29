@@ -17,11 +17,10 @@ struct Server: Codable, Identifiable, Hashable {
     var note: String
     /// Era / level cap, shown as a subtitle in the dropdown.
     var era: String = ""
-    /// Rough community size, used **only** for ordering the dropdown. Never shown as a number:
-    /// these are estimates from public trackers and would be stale within a month. Ordering by
-    /// them is useful; publishing them as fact is not.
+    /// Dated online-player estimate, used when no live public counter is available.
+    /// Zero means unknown. Discord membership and monthly accounts are not player counts.
     var population: Int = 0
-    /// Pinned entries sort above everything else regardless of population.
+    /// Legacy persistence field. Population ordering deliberately ignores pins.
     var pinned: Bool = false
     /// A server that runs on this Mac. Selecting it turns the launcher into an installer for
     /// LandSandBoat as well: see `LocalServer` and `scripts/lsb-server.sh`. Optional in the
@@ -147,6 +146,23 @@ struct Server: Codable, Identifiable, Hashable {
     var newsURL: String = ""
     var newsPageURL: String = ""
 
+    var launchUnavailableReason: String? {
+        name == "Phoenix XI" ? "Mac login support and Phoenix tool approval are pending." : nil
+    }
+
+    /// A pure sort shared by the picker, companion world list and offline checks.
+    static func ordered(_ servers: [Server], populations: [String: Int]) -> [Server] {
+        func count(_ s: Server) -> Int {
+            if let live = populations[s.name], (0...1_000_000).contains(live) { return live }
+            return max(0, s.population)
+        }
+        return servers.sorted {
+            if $0.local != $1.local { return !$0.local }
+            if count($0) != count($1) { return count($0) > count($1) }
+            return $0.name < $1.name
+        }
+    }
+
     /// How a world's client is obtained.
     /// - `clientZip`: a plain archive of the finished client, unpacked straight into `dataPath`.
     ///   No Windows installer runs at all. Several worlds ship their "installer" as a small
@@ -271,7 +287,7 @@ struct Server: Codable, Identifiable, Hashable {
         }
     }
 
-    /// Ranking and population from nostalgic.gg's live-tracked FFXI private-server list
+    /// Historical survey: ranking and population from nostalgic.gg's live-tracked FFXI private-server list
     /// (checked 2026-08-13; it tracks nine servers despite its "Top 10" title, hence Local
     /// server standing in as the round tenth). Login hosts below are copied verbatim from each
     /// server's own connect/setup page or wiki — real values, not guesses — but `verified` is
@@ -308,7 +324,7 @@ struct Server: Codable, Identifiable, Hashable {
                note: "The server this project was built and tested against.",
                // horizonxi.com, 2026-10-14: "Treasures of Aht Urhgan is live on HorizonXI"
                // (launched 2026-08-07); contributor PR #24 said the same.
-               era: "Treasures of Aht Urhgan · 75 cap", population: 9495, pinned: true, codebase: .landSandBoat,
+               era: "Treasures of Aht Urhgan · 75 cap", population: 1496, codebase: .landSandBoat,
                installURL: "https://horizonxi.com/play", installKind: .horizonTorrent,
                installNote: "HorizonXI's own client, fetched the way their launcher does it: a 9.4 GB torrent, then their updates. Needs aria2 (brew install aria2).",
                accountURL: "https://horizonxi.com/register",
@@ -321,10 +337,21 @@ struct Server: Codable, Identifiable, Hashable {
                loader: "horizon-loader.exe", bootTemplate: BootProfile.horizonTemplate,
                newsURL: "https://api.horizonxi.com/api/v1/news",
                newsPageURL: "https://horizonxi.com/news/{slug}"),
+        // Catalogued 2026-10-28. Native Mac authentication is pending; never send a normal
+        // account/password to its custom launch-token loader. See docs/PHOENIX.md.
+        Server(name: "Phoenix XI", host: "play.phoenix-xi.com", bootProfile: "phoenix.ini",
+               verified: false, note: "Mac login support pending.",
+               era: "Treasures of Aht Urhgan · 75 cap · Mac support pending", population: 1110,
+               codebase: .landSandBoat,
+               installURL: "https://phoenix-xi.com/getting-started", installKind: .website,
+               installNote: "Phoenix's official launcher supports Windows and Linux. Mac login support is pending.",
+               accountURL: "https://phoenix-xi.com/register",
+               accountHow: "Create a Phoenix account on their website. Mac login support is pending.",
+               discordURL: "https://discord.gg/phoenix-xi", maxClients: 1),
         Server(name: "Local server", host: "127.0.0.1", bootProfile: "lsb.ini",
                verified: true,
                note: "LandSandBoat, built and run on this Mac. Nobody else can reach it.",
-               era: "LandSandBoat · your own world", population: 9494, pinned: true, codebase: .landSandBoat,
+               era: "LandSandBoat · your own world", population: 0, codebase: .landSandBoat,
                local: true,
                accountHow: "Your own world: the loader window offers to create the account the "
                      + "first time you connect. No signup site, and nobody to ask.",
@@ -333,7 +360,7 @@ struct Server: Codable, Identifiable, Hashable {
         Server(name: "CatsEyeXI", host: "server.catseyexi.com", bootProfile: "catseyexi.ini",
                verified: false,
                note: "Login host from CatsEyeXI's own connect page. Untested by this project.",
-               era: "Custom content · 75 cap", population: 2722, codebase: .landSandBoat,
+               era: "Custom content · 75 cap", population: 657, codebase: .landSandBoat,
                // CatsEyeXI's server settings are public; CLIENT_VER there is what its login
                // server enforces (VER_LOCK = 2, "this version or newer"). 30251204_1 as of
                // 2026-08-15. HorizonXI's client was at 30251101_2 that day, which is exactly
@@ -361,7 +388,7 @@ struct Server: Codable, Identifiable, Hashable {
                      + "DATs come from their own update server.",
                // ascensionffxi.com, 2026-10-24: "a Final Fantasy XI private server, level 75 era,
                // Ironman". Their Discord had 65 members (26 online) that day: ordering only.
-               era: "Level 75 era · Ironman", population: 65, codebase: .landSandBoat,
+               era: "Level 75 era · Ironman", population: 0, codebase: .landSandBoat,
                installURL: "https://www.ascensionffxi.com/download", installKind: .ascensionChannel,
                installNote: "AscensionXI's client (about 14 GB) from their update server, file by file and "
                      + "checked, reusing identical files from other FFXI clients on this Mac; then their "
@@ -382,7 +409,7 @@ struct Server: Codable, Identifiable, Hashable {
                bootProfile: VanadreamsChannel.bootProfile, verified: false,
                note: "Level 99, every expansion, custom content. Boxing, mules and your own addons are welcome.",
                // Their status API, 2026-10-24: 22 online, 161 characters, 82 players this week.
-               era: "99 cap · every expansion · custom", population: 82, codebase: .landSandBoat,
+               era: "99 cap · every expansion · custom", population: 21, codebase: .landSandBoat,
                installURL: "https://fairywitch.ca/", installKind: .vanadreamsPackage,
                installNote: "Vanadreams' own client package (about 9 GB of downloads, 17 GB installed) with Ashita "
                      + "and the loader their server takes, put together as their launcher does it.",
@@ -400,7 +427,7 @@ struct Server: Codable, Identifiable, Hashable {
                note: "Level 99 with no limit-break quests, custom systems (arena, merits, politics, a player market). "
                      + "Retail FFXI plus their own Ashita and addons.",
                // xi.driftwoodgaming.com/api/players, 2026-10-24: {"playersOnline":44}.
-               era: "99 cap · custom systems", population: 44, codebase: .landSandBoat,
+               era: "99 cap · custom systems", population: 42, codebase: .landSandBoat,
                installURL: DriftwoodChannel.site + "/download", installKind: .driftwoodContent,
                installNote: "No game files come from DriftwoodXI: their client is retail FFXI (build "
                      + DriftwoodChannel.clientBuild + "), put together from the identical files of another world's client on "
@@ -419,7 +446,7 @@ struct Server: Codable, Identifiable, Hashable {
                note: "Retail-like level 99 world, playable through Chains of Promathia; later expansions in development.",
                // pegasusxi.com/server-info.html, 2026-10-24: "Level cap 99", "Playable through Chains of
                // Promathia". Discord 50 members that day: ordering only.
-               era: "99 cap · through Chains of Promathia", population: 50, codebase: .landSandBoat,
+               era: "99 cap · through Chains of Promathia", population: 0, codebase: .landSandBoat,
                installURL: "https://pegasusxi.com/files/", installKind: .pegasusPack,
                installNote: "PegasusXI's own client (Ashita, LandSandBoat's loader, the game and their HD textures: "
                      + "about 14 GB of downloads, 28 GB installed), read straight out of their release zip, file by file and checked.",
@@ -441,7 +468,7 @@ struct Server: Codable, Identifiable, Hashable {
                note: "Era-focused 75 cap through Wings of the Goddess, 3x EXP and 1.5x movement speed.",
                // mistxi.com/server-info, 2026-10-24: "Level cap: 75 (Main)", "Content: Supported up to Wings
                // of the Goddess". Discord 52 members that day: ordering only.
-               era: "Wings of the Goddess · 75 cap", population: 52, codebase: .landSandBoat,
+               era: "Wings of the Goddess · 75 cap", population: 0, codebase: .landSandBoat,
                // api.mistxi.com/status.php, 2026-10-24: "clientVersion":"30260805_0" (JSON; ServerFeeds reads
                // only Lua CLIENT_VER, so this snapshot is the check). The client here is newer (30260904_1).
                requiredClient: "30260805_0",
@@ -560,7 +587,7 @@ struct Server: Codable, Identifiable, Hashable {
         // standard xiloader TLS/JSON login (bad-credential probe returned LOGIN_ERROR).
         Server(name: "Gaia XI", host: "play.gaiaxi.com", bootProfile: "GaiaXI.ini", verified: false,
                note: "Accounts are registered on gaiaxi.com.",
-               era: "75 cap", population: 276, codebase: .landSandBoat,
+               era: "75 cap", population: 0, codebase: .landSandBoat,
                installURL: "https://gaiaxi.com/account/index.xi?return=downloadzip", installKind: .website,
                installNote: "Gaia XI's launcher zip is behind their site login (register there first). Save it, then Run installer… — their launcher.exe downloads the whole game into C:\\Games\\Gaia XI.",
                accountURL: "https://gaiaxi.com/account/index.xi",
@@ -597,7 +624,7 @@ struct Server: Codable, Identifiable, Hashable {
                verified: false,
                note: "Login host from Supernova's own Ashita setup guide. Untested by this "
                      + "project.",
-               era: "75 cap", population: 155, codebase: .landSandBoat,
+               era: "75 cap", population: 0, codebase: .landSandBoat,
                installURL: "https://supernovaffxi.wordpress.com/get-started-on-supernova/client-installation/", installKind: .retail,
                installNote: "Bring-your-own retail FFXI: Square Enix's free client (7.7 GB, five parts) installs inside the wrapper, then PlayOnline updates it, then Supernova's patch and DATs go on top. Slow (hours) but every step is automated.",
                accountHow: "No signup page: the account is made at their login server. Type the account name and "
@@ -611,7 +638,7 @@ struct Server: Codable, Identifiable, Hashable {
                verified: false,
                note: "Heavily customized. Login host from Omicron's own wiki. Untested by this "
                      + "project.",
-               era: "99 cap", population: 105, codebase: .landSandBoat,
+               era: "99 cap", population: 0, codebase: .landSandBoat,
                installURL: "https://omicronxi.fandom.com/wiki/Connecting_to_OmicronXI", installKind: .retail,
                installNote: "Bring-your-own retail FFXI: Square Enix's free client (7.7 GB, five parts) installs inside the wrapper, then PlayOnline updates it, then Ashita + xiloader are added. Slow (hours) but every step is automated.",
                // omicronffxi.com sits behind a Cloudflare challenge this project cannot read,
@@ -660,7 +687,7 @@ final class ServerStore: ObservableObject {
     }
 
     /// Keep the user's edited hosts, but pick up servers added to `builtins` in later releases.
-    private static func merge(saved: [Server]) -> [Server] {
+    static func merge(saved: [Server]) -> [Server] {
         // A servers.json written before the LSB-only cut still lists the retired worlds. Drop
         // those by name -- but only ones this project shipped and has since retired, never a
         // server the user added themselves.
@@ -697,16 +724,12 @@ final class ServerStore: ObservableObject {
         return out
     }
 
-    /// HorizonXI first because Daniel asked for it; everything else by community size, largest
-    /// first — except the local server, which Daniel wants last: it is a tool, not a community,
-    /// and its pinned fake population was floating it to second place. Numbers stay out of the UI.
-    var ordered: [Server] {
-        servers.sorted {
-            if $0.local != $1.local { return $1.local }
-            if $0.pinned != $1.pinned { return $0.pinned }
-            if $0.population != $1.population { return $0.population > $1.population }
-            return $0.name < $1.name
-        }
+    /// Live online count first, then a dated online estimate; unknown worlds alphabetically.
+    /// The local development server stays last. A population refresh never changes selection.
+    var ordered: [Server] { ordered(populations: [:]) }
+
+    func ordered(populations: [String: Int]) -> [Server] {
+        Server.ordered(servers, populations: populations)
     }
 
     var selected: Server? { servers.first { $0.name == selectedID } }

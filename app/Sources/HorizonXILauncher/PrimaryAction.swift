@@ -40,6 +40,8 @@ enum PrimaryAction: Equatable {
     /// No account typed, and the world's loader cannot ask for one (HorizonXI). PLAY, enabled:
     /// the click puts the cursor in the account fields.
     case enterAccount
+    /// Catalogued world whose Mac login is not implemented yet. Opens official setup info.
+    case serverInfo
 
     enum Work: String {
         case settingUp, updating, repairing, checking, starting, stopping, moving
@@ -122,6 +124,7 @@ enum PrimaryAction: Equatable {
         case .play: return "play"
         case .playAnother: return "play-another"
         case .enterAccount: return "account"
+        case .serverInfo: return "server-info"
         }
     }
 
@@ -171,6 +174,7 @@ struct PrimaryInputs {
     var world = "HorizonXI"
     var isLocal = false
     var canDownload = true          // the world has a download route (installKind != .none)
+    var launchUnavailableReason: String? = nil
     var hostEmpty = false
     var allowsMultipleClients = false
     /// The world's loader window asks for (or creates) the account, so Play needs none typed.
@@ -236,7 +240,7 @@ enum Primary {
 
     /// Every label the button may show when nothing is running. The progress labels are
     /// `Work.label`, with " 42%" when the job reports how far it is.
-    static let verbs: Set<String> = ["Setup", "Update", "Repair", "Play", "Stop", "Force Stop", "Play Another"]
+    static let verbs: Set<String> = ["Setup", "Update", "Repair", "Play", "Stop", "Force Stop", "Play Another", "Server Info"]
 
     static func decide(_ x: PrimaryInputs) -> PrimaryDecision {
         if x.restartingLauncher { return make(.working(.updating, progress: nil), x) }
@@ -253,6 +257,8 @@ enum Primary {
             return make(.working(.runningElsewhere, progress: nil), x)
         }
         if x.otherJob != nil { return make(.working(.waiting, progress: nil), x) }
+
+        if x.launchUnavailableReason != nil { return make(.serverInfo, x) }
 
         guard x.hasInstall else {
             if x.scanning { return make(.working(.checking, progress: nil), x) }
@@ -393,6 +399,8 @@ enum Primary {
         case .stop:
             return .init(action: a, label: x.serverLost ? "Force Stop" : "Stop", enabled: true,
                          reason: x.serverLost ? nil : x.renderStuckAt.map(renderStuckReason), destructive: true)
+        case .serverInfo:
+            return .init(action: a, label: "Server Info", enabled: true, reason: x.launchUnavailableReason)
         case .enterAccount:
             return .init(action: a, label: "Play", enabled: true, reason: "Type your account name and password above.")
         case .play:

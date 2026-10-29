@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 /// Refreshes what the launcher knows about each server from that server's own published pages,
 /// on startup, in the background.
@@ -131,7 +132,24 @@ final class ServerFeeds: ObservableObject {
         discordCounts[s.name] = count
     }
 
-    /// Fetch every published online counter. Cheap (three tiny GETs), silent on failure, and a
+    /// Strict public-counter parser. A JSON bool, fractional/negative value or error page is
+    /// not a player count. Zero is a valid live count and must override the offline estimate.
+    nonisolated static func parsePopulation(_ data: Data, key: String?) -> Int? {
+        let count: Int?
+        if let key {
+            var node: Any? = try? JSONSerialization.jsonObject(with: data)
+            for part in key.split(separator: ".") { node = (node as? [String: Any])?[String(part)] }
+            guard let number = node as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  number.doubleValue.rounded(.towardZero) == number.doubleValue else { return nil }
+            count = Int(exactly: number.doubleValue)
+        } else {
+            count = Int(String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        guard let count, (0...1_000_000).contains(count) else { return nil }
+        return count
+    }
+
+    /// Fetch every published online counter, silently on failure. A
     /// stale number is worse than none: a failed fetch removes the entry rather than keeping it.
     func refreshPopulations() async {
         for src in Self.populationSources {
@@ -139,15 +157,7 @@ final class ServerFeeds: ObservableObject {
             if let url = URL(string: src.url),
                let (data, resp) = try? await URLSession.shared.data(from: url),
                (resp as? HTTPURLResponse)?.statusCode == 200 {
-                if let key = src.jsonKey {
-                    // A dotted key walks into nested objects ("stats.online").
-                    var node: Any? = try? JSONSerialization.jsonObject(with: data)
-                    for part in key.split(separator: ".") { node = (node as? [String: Any])?[String(part)] }
-                    count = node as? Int
-                } else {
-                    count = Int(String(decoding: data, as: UTF8.self)
-                        .trimmingCharacters(in: .whitespacesAndNewlines))
-                }
+                count = Self.parsePopulation(data, key: src.jsonKey)
             }
             populations[src.server] = count
         }
