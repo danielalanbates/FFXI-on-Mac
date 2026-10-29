@@ -84,6 +84,12 @@ extension Headless {
         func refused(_ c: String, _ p: AddonPolicy = horizon, hosted: Bool = true) -> Bool {
             LiveAddons.refusal(c, policy: p, hosted: hosted) != nil
         }
+        checks.append(("normal logout: plain /shutdown is allowed on hosted and local worlds",
+                       !refused("/shutdown") && !refused("/shutdown", unknown)
+                           && !refused("/shutdown", local, hosted: false)))
+        checks.append(("normal logout cannot carry arguments or a second command",
+                       ["/shutdown now", "/shutdown;/say hi", "/shutdown\n/say hi", "/shutdown\t"]
+                           .allSatisfy { refused($0) && refused($0, local, hosted: false) }))
         let never = ["/unload thirdparty", "/reload thirdparty", "/unload addons", "/reload addons",
                      "  //unload  ThirdParty.dll", "/unload \"addons\"", "/unload", "/reload"]
         checks.append(("never, on any world: /unload or /reload of thirdparty or addons, or of nothing",
