@@ -257,7 +257,40 @@ extension CompanionView {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(Array(item.how.enumerated()), id: \.offset) { _, h in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(h.text).font(.callout).fixedSize(horizontal: false, vertical: true)
+                            if h.kind == "quest" || h.kind == "mission", let target = state.questStep(named: h.text) {
+                                // Opens that quest's step in Guides, with its What to do.
+                                Button {
+                                    state.selected = target.guide
+                                    state.stepIndex = target.step
+                                    tab = 0
+                                } label: {
+                                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                                        Text(h.text).underline().multilineTextAlignment(.leading)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                        Image(systemName: "arrow.right.circle")
+                                    }
+                                    .font(.callout).foregroundStyle(Theme.crystal)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Open this quest's guide")
+                            } else if let q = (h.kind == "quest" || h.kind == "mission") ? wiki.quests.first(where: { h.text.localizedCaseInsensitiveContains($0.name) }) : nil {
+                                // A quest only this server's wiki knows: its walkthrough on the Server tab.
+                                Button {
+                                    wiki.serverPick = WikiState.tag(q)
+                                    tab = 4
+                                } label: {
+                                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                                        Text(h.text).underline().multilineTextAlignment(.leading)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                        Image(systemName: "arrow.right.circle")
+                                    }
+                                    .font(.callout).foregroundStyle(Theme.crystal)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Open this quest's walkthrough")
+                            } else {
+                                Text(h.text).font(.callout).fixedSize(horizontal: false, vertical: true)
+                            }
                             let place = [h.npc.map { $0 == "???" ? "the ??? marker" : $0.npcDisplay },
                                          h.zone.map { state.zones.name($0) }].compactMap { $0 }
                             if !place.isEmpty {

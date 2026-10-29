@@ -320,6 +320,46 @@ final class CompanionState: ObservableObject {
         devNote = "Opened GitHub: review the file there and press Commit/Propose to send it."
     }
 
+    /// The guide step for a quest or mission a gear source names: "Quest: No Strings Attached
+    /// (Aht Urhgan)", "… during the quest Scattered Into Shadow (Jeuno)". The full per-log
+    /// guides win over authored routes, so the step always has its What to do.
+    func questStep(named text: String) -> (guide: Int, step: Int)? { Self.questStep(in: guides, named: text) }
+
+    static func questStep(in guides: [Guide], named text: String) -> (guide: Int, step: Int)? {
+        let norm = ScreenshotGuideMatcher.normalized
+        // Titles built from script constants lose or change small words ("Scattered Into Shadow"
+        // for "Scattered into the Shadow", "Guest Of Hauteur" for "A Guest of Hauteur").
+        let small: Set<String> = ["a", "an", "the", "of", "and", "into", "in", "to", "for", "on", "at", "s"]
+        func core(_ t: String) -> String {
+            norm(t.replacingOccurrences(of: "'", with: "")).split(separator: " ")
+                .filter { !small.contains(String($0)) }.joined(separator: " ")
+        }
+        var byTitle: [String: (Int, Int)] = [:], byCore: [String: (Int, Int)] = [:]
+        for (g, guide) in guides.enumerated() {
+            for (i, st) in guide.steps.enumerated() where st.tags["Q"] != nil || st.tags["M"] != nil {
+                // Also without a bracketed suffix: "Quelling the Storm (WOTG Nation Quests - Bastok 7)".
+                let bare = st.title.replacingOccurrences(of: #"\s*\([^)]*\)\s*$"#, with: "", options: .regularExpression)
+                for t in Set([st.title, bare]) {
+                    let k = norm(t), c = core(t)
+                    if byTitle[k] == nil || guide.isReference { byTitle[k] = (g, i) }
+                    if byCore[c] == nil || guide.isReference { byCore[c] = (g, i) }
+                }
+            }
+        }
+        // The title sits after "Quest:", "Mission:" or "the quest", before " (Area)" or ",".
+        let pattern = #"(?i)(?:quest|mission)s?:?\s+(.+?)(?:\s+\([^)]*\))?(?:[,.]|$)"#
+        if let r = try? NSRegularExpression(pattern: pattern),
+           let m = r.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+           let range = Range(m.range(at: 1), in: text) {
+            let name = String(text[range])
+            if let hit = byTitle[norm(name)] ?? byCore[core(name)] { return hit }
+        }
+        // Otherwise the longest known title inside the line (8+ characters, so "Dawn" can't match chatter).
+        let line = " " + norm(text) + " "
+        return byTitle.filter { $0.key.count >= 8 && line.contains(" " + $0.key + " ") }
+            .max { $0.key.count < $1.key.count }.map { $0.value }
+    }
+
     func status(of step: GuideStep) -> LogRecord? {
         Self.key(for: step).flatMap { progress.entries[$0] }
     }
@@ -544,7 +584,7 @@ struct CompanionView: View {
     @StateObject private var capture = ScreenGuideCapture()
     @StateObject var wiki = WikiState()
     // --tab <n> (test hook) opens on another tab, 1 Gear, 2 Skills, 3 Achievements, 4 Server, for --snapshot.
-    @State private var tab = CommandLine.arguments.firstIndex(of: "--tab")
+    @State var tab = CommandLine.arguments.firstIndex(of: "--tab")
         .flatMap { CommandLine.arguments.indices.contains($0 + 1) ? Int(CommandLine.arguments[$0 + 1]) : nil } ?? 0
     @State private var showReading = false
     @State private var addingCharacter = false

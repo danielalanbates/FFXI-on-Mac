@@ -165,6 +165,13 @@ extension CompanionSelfTest {
         """.utf8).write(to: walkDir.appendingPathComponent("data/quest_steps.lua"))
         let walks = QuestCatalogue.walkthroughs(at: walkDir)
         try? FileManager.default.removeItem(at: walkDir)
+        let linkGuides = [Guide(name: "Aht Urhgan Quests", desc: "", levels: "", steps: [
+            GuideStep(kind: "Q", title: "Luck of the Draw", tags: ["Q": "x"]),
+            GuideStep(kind: "Q", title: "No Strings Attached", tags: ["Q": "y"])], isReference: true)]
+        checks.append(("a quest named on a gear page finds its guide step",
+                       CompanionState.questStep(in: linkGuides, named: "Quest: No Strings Attached (Aht Urhgan)").map { [$0.guide, $0.step] } == [0, 1]
+                           && CompanionState.questStep(in: linkGuides, named: "Treasure coffer, opened during the quest No Strings Attached (Jeuno)").map { $0.step } == 1
+                           && CompanionState.questStep(in: linkGuides, named: "Dropped by a goblin") == nil))
         checks.append(("quest walkthroughs are read per quest and mission",
                        walks["Q:sandoria,0"]?.steps.count == 2 && walks["M:cop,840"]?.scripted == "stub"))
         checks.append(("a server's own Gear and Skills folder is keyed by its name",
@@ -233,6 +240,20 @@ extension CompanionSelfTest {
         if let path = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"] {
             let real = QuestCatalogue.entries(at: URL(fileURLWithPath: path))
             checks.append(("real quest and mission catalogues load over 500 named entries", real.count > 500))
+            // Every quest/mission source on a gear page should open a guide step.
+            if let gear = WikiData.gear(URL(fileURLWithPath: path).appendingPathComponent("data/gear_guide.lua")) {
+                let refs = QuestCatalogue.referenceGuides(real)
+                // Lines that name a quest ("Quest: …", "during the quest …"); notes like "Not handed
+                // out by this server's scripts yet" name none and stay plain text.
+                let lines = gear.items.flatMap(\.how).filter { ($0.kind == "quest" || $0.kind == "mission")
+                    && $0.text.range(of: #"(?i)(quest|mission):|the (quest|mission) "#, options: .regularExpression) != nil }
+                let missed = lines.filter { CompanionState.questStep(in: refs, named: $0.text) == nil }
+                missed.prefix(8).forEach { print("  unlinked: \($0.text)") }
+                checks.append(("gear quest sources link to guides (\(lines.count - missed.count)/\(lines.count))",
+                               // 2026-10-28: 203/221; the 18 left (Borghertz hands quests, A Candlelight
+                               // Vigil, Guest of Hauteur) have no entry in data/quests.lua to open.
+                               !lines.isEmpty && missed.count * 10 <= lines.count))
+            }
             checks.append(("real database produces manual reference sections",
                            QuestCatalogue.referenceGuides(real).flatMap(\.steps).count == real.count
                                && QuestCatalogue.referenceGuides(real).flatMap(\.steps).allSatisfy(\.fixed)))
