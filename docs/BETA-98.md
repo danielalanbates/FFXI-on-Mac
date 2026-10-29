@@ -15,6 +15,9 @@ hidden verifier so it can be checked while the owner plays.
 | Parser/catalogue with current local guide source | 110 checks passed |
 | Installed b96 updater rules | Passed; this is an offline rule test, not a release download/restart |
 | Installed b96 performance rules | Passed; this does not establish maximum FPS |
+| Updated launcher release compilation | Passed |
+| Companion selection fixtures | Seven passed, including replacement at the same path |
+| Updated launcher guide-disabled, updater and UI-text suites | Passed |
 
 Run `VanaguideCompanion --selftest-layout [--layout-output <directory>]` for the new check.
 It creates hidden windows only, uses a synthetic guide/character, disables the normal
@@ -53,6 +56,13 @@ Never kill a logged-in client; use `/shutdown` if logout becomes necessary.
 The build 96 launcher prefers its embedded copy when no guide is already running. Keep the
 standalone guide open, or open it directly from Applications, until the launcher is updated
 after play. Replacing or re-signing its embedded bundle during play is unsafe.
+
+The updated launcher source selects the newest compatible embedded/standalone guide by
+version and build, keeping embedded priority only on a tie. It checks the app identity,
+executable and minimum macOS version, and reads the plist directly so a standalone replacement
+is not hidden by cached bundle metadata. `--selftest-guide-companion` checks these decisions
+using disposable app fixtures; it never opens them. A running guide is still reused without
+opening another instance. This launcher change remains pending installation after play.
 
 Source publication is separate from a stable public binary release. Keep the public release
 gates in [RELEASE-WHEN-STABLE.md](../RELEASE-WHEN-STABLE.md).
