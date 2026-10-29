@@ -18,6 +18,7 @@ hidden verifier so it can be checked while the owner plays.
 | Updated launcher release compilation | Passed |
 | Companion selection fixtures | Seven passed, including replacement at the same path |
 | Updated launcher guide-disabled, updater and UI-text suites | Passed |
+| Packaged launcher deep signature and companion selection suite | Passed |
 
 Run `VanaguideCompanion --selftest-layout [--layout-output <directory>]` for the new check.
 It creates hidden windows only, uses a synthetic guide/character, disables the normal
@@ -52,6 +53,12 @@ The launcher and a game client remain running. The launcher's binary SHA-256 is 
 and the same client PID remains present; no game commands or hosted addon tests were sent.
 The launcher update remains pending until its game/runtime and launcher have exited normally.
 Never kill a logged-in client; use `/shutdown` if logout becomes necessary.
+
+A signed launcher candidate is ready at
+`~/Downloads/ffxi-guide-resize-build/candidate-launcher/FFXI-on-Mac.app`, with its matching
+nested build 98 guide. Its recorded source revision is `05f2fe4`; it passed strict deep
+signature verification and the packaged companion-selection suite. This is a local beta
+candidate, not a notarized public release. No automatic installer or relaunch watcher was left.
 
 The build 96 launcher prefers its embedded copy when no guide is already running. Keep the
 standalone guide open, or open it directly from Applications, until the launcher is updated
