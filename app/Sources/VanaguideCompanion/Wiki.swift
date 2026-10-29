@@ -97,6 +97,12 @@ final class WikiState: ObservableObject {
     @Published var openItem: Int? = CommandLine.arguments.firstIndex(of: "--gear-item")
         .flatMap { CommandLine.arguments.indices.contains($0 + 1) ? Int(CommandLine.arguments[$0 + 1]) : nil }
     @Published var skill: String?
+    /// Server tab: notes (rates, rules, commands) and quest walkthroughs from the chosen server's
+    /// own wiki or site, data/servers/<key>/server_notes.lua and quest_guides.lua.
+    @Published var notes: [SkillGuide] = []
+    @Published var quests: [SkillGuide] = []
+    @Published var serverPick: String?
+    @Published var serverSearch = ""
 
     static let jobs = ["All", "WAR", "MNK", "WHM", "BLM", "RDM", "THF", "PLD", "DRK", "BST", "BRD", "RNG", "SAM",
                        "NIN", "DRG", "SMN", "BLU", "COR", "PUP", "DNC", "SCH", "GEO", "RUN"]
@@ -126,8 +132,19 @@ final class WikiState: ObservableObject {
             }
             let gear = pick("gear_guide.lua", WikiData.gear)
             let skills = pick("skill_guides.lua", WikiData.skills)
+            func own(_ file: String) -> [SkillGuide] {
+                guard !key.isEmpty else { return [] }
+                for root in roots {
+                    if let g = WikiData.skills(root.appendingPathComponent("data/servers/\(key)/\(file)")) { return g }
+                }
+                return []
+            }
+            let notes = own("server_notes.lua"), quests = own("quest_guides.lua")
             await MainActor.run {
-                self.serverKey = (gear?.1 ?? false) || (skills?.1 ?? false) ? key : ""
+                self.notes = notes
+                self.quests = quests
+                self.serverPick = notes.first.map { Self.tag($0) } ?? quests.first.map { Self.tag($0) }
+                self.serverKey = (gear?.1 ?? false) || (skills?.1 ?? false) || !notes.isEmpty ? key : ""
                 self.categories = gear?.0.categories ?? []
                 self.items = gear?.0.items ?? []
                 self.skills = skills?.0 ?? []
@@ -137,9 +154,23 @@ final class WikiState: ObservableObject {
         }
     }
 
+    /// Selection tag for the Server tab: quest names repeat across logs, so group + name.
+    static func tag(_ g: SkillGuide) -> String { g.group + "\u{1}" + g.name }
+
+    /// Quest areas in file order, filtered by the search box.
+    var questGroups: [(String, [SkillGuide])] {
+        let needle = serverSearch.trimmingCharacters(in: .whitespaces).lowercased()
+        var order: [String] = [], byGroup: [String: [SkillGuide]] = [:]
+        for q in quests where needle.isEmpty || q.name.lowercased().contains(needle) || q.desc.lowercased().contains(needle) {
+            if byGroup[q.group] == nil { order.append(q.group) }
+            byGroup[q.group, default: []].append(q)
+        }
+        return order.map { ($0, byGroup[$0]!) }
+    }
+
     /// Where the Gear and Skills tabs' data comes from, for the player.
     func sourceLine(world: String) -> String {
-        if !serverKey.isEmpty { return "From \(world)'s own server code." }
+        if !serverKey.isEmpty { return "From \(world)'s own server code or wiki." }
         return world.isEmpty ? "Standard LandSandBoat data." : "Standard LandSandBoat data; \(world) may differ."
     }
 
@@ -261,8 +292,43 @@ extension CompanionView {
                     .fixedSize(horizontal: false, vertical: true)
             } }
             .frame(width: 190)
-            Card {
-                if let s = wiki.skills.first(where: { $0.name == wiki.skill }) {
+            Card { guideDetail(wiki.skills.first(where: { $0.name == wiki.skill }),
+                               empty: wiki.skills.isEmpty ? "Skill guides not installed (Vanaguide/data/skill_guides.lua)." : "Pick a skill.") }
+        }
+    }
+
+    var serverPane: some View {
+        HStack(spacing: 8) {
+            Card { VStack(alignment: .leading, spacing: 6) {
+                if !wiki.quests.isEmpty {
+                    TextField("Search quests", text: $wiki.serverSearch).textFieldStyle(.roundedBorder)
+                }
+                List(selection: $wiki.serverPick) {
+                    if !wiki.notes.isEmpty {
+                        Section(state.world.isEmpty ? "Server" : state.world) {
+                            ForEach(wiki.notes) { g in Text(g.name).font(.callout).tag(Optional(WikiState.tag(g))) }
+                        }
+                    }
+                    ForEach(wiki.questGroups, id: \.0) { group, list in
+                        Section(group) {
+                            ForEach(list, id: \.self.name) { g in Text(g.name).font(.callout).tag(Optional(WikiState.tag(g))) }
+                        }
+                    }
+                }
+                .scrollContentBackground(.hidden)
+                .listStyle(.sidebar)
+            } }
+            .frame(width: 210)
+            Card { guideDetail((wiki.notes + wiki.quests).first(where: { WikiState.tag($0) == wiki.serverPick }),
+                               empty: wiki.notes.isEmpty
+                                   ? (state.world.isEmpty ? "Choose your server above." : "No notes for \(state.world) yet; Gear and Skills show standard LandSandBoat data.")
+                                   : "Pick a topic.") }
+        }
+    }
+
+    @ViewBuilder
+    func guideDetail(_ guide: SkillGuide?, empty: String) -> some View {
+                if let s = guide {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(s.name).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.gold)
                         Text(s.desc).font(.caption).foregroundStyle(Theme.muted)
@@ -280,10 +346,7 @@ extension CompanionView {
                         }
                     }
                 } else {
-                    Text(wiki.skills.isEmpty ? "Skill guides not installed (Vanaguide/data/skill_guides.lua)." : "Pick a skill.")
-                        .font(.caption).foregroundStyle(Theme.muted)
+                    Text(empty).font(.caption).foregroundStyle(Theme.muted)
                 }
-            }
-        }
     }
 }

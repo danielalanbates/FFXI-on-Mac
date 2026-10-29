@@ -56,7 +56,13 @@ for dir in "$SOURCE/data/servers/"*(N/); do
 done
 cp "$REPO/LICENSE" "$STAGE/Contents/Resources/LICENSE"
 [[ ! -f "${SOURCE:h}/LICENSE" ]] || cp "${SOURCE:h}/LICENSE" "$STAGE/Contents/Resources/Vanaguide/LICENSE"
-[[ ! -f "$HERE/AppIcon.icns" ]] || cp "$HERE/AppIcon.icns" "$STAGE/Contents/Resources/AppIcon.icns"
+# Its own icon, so the Dock and Cmd-Tab tell it apart from the launcher
+# (tools/make-server-safe-icon.swift draws it).
+if [[ -f "$HERE/ServerSafeIcon.icns" ]]; then
+  cp "$HERE/ServerSafeIcon.icns" "$STAGE/Contents/Resources/AppIcon.icns"
+elif [[ -f "$HERE/AppIcon.icns" ]]; then
+  cp "$HERE/AppIcon.icns" "$STAGE/Contents/Resources/AppIcon.icns"
+fi
 VERSION="$(sed -n 's/^SHORT=//p' "$HERE/VERSION")"
 BUILD="$(sed -n 's/^BUILD=//p' "$HERE/VERSION")"
 cat > "$STAGE/Contents/Info.plist" <<PLIST

@@ -155,6 +155,18 @@ extension CompanionSelfTest {
         try? FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
         let sessionFile = sessionDir.appendingPathComponent("session.json")
         try? Data(#"{"updated":"x","world":"Local server"}"#.utf8).write(to: sessionFile)
+        let walkDir = FileManager.default.temporaryDirectory.appendingPathComponent("vg-walk-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: walkDir.appendingPathComponent("data"), withIntermediateDirectories: true)
+        try? Data("""
+        local T = {}
+        T.quests = { sandoria = { [0] = { scripted = 'full', steps = { 'Talk to Glenne.', 'Trade the Dose of Ointment to Aaveleon.' } } } }
+        T.missions = { cop = { [840] = { scripted = 'stub', steps = { 'Not scripted.' } } } }
+        return T
+        """.utf8).write(to: walkDir.appendingPathComponent("data/quest_steps.lua"))
+        let walks = QuestCatalogue.walkthroughs(at: walkDir)
+        try? FileManager.default.removeItem(at: walkDir)
+        checks.append(("quest walkthroughs are read per quest and mission",
+                       walks["Q:sandoria,0"]?.steps.count == 2 && walks["M:cop,840"]?.scripted == "stub"))
         checks.append(("a server's own Gear and Skills folder is keyed by its name",
                        WikiState.serverKey(for: "CatsEyeXI") == "catseyexi" && WikiState.serverKey(for: "PegasusXI") == "pegasusxi"
                            && WikiState.serverKey(for: "Local server") == "localserver" && WikiState.serverKey(for: "") == ""))

@@ -45,7 +45,31 @@ enum QuestCatalogue {
 
     /// One reference section per log area. These provide recorded targets, not an invented
     /// walkthrough. Authored routes remain at the front of the guide list.
-    static func referenceGuides(_ entries: [CatalogueEntry]) -> [Guide] {
+    /// What to do for each quest and mission, written from the server's scripts
+    /// (data/quest_steps.lua, built by the addon repository's tools/gen_quest_steps.py).
+    /// Keyed like CatalogueEntry.key: "Q:sandoria,0". `scripted` is full, partial or stub.
+    struct Walkthrough: Equatable { var steps: [String]; var scripted: String }
+
+    static func walkthroughs(at root: URL) -> [String: Walkthrough] {
+        guard let text = try? String(contentsOf: root.appendingPathComponent("data/quest_steps.lua"), encoding: .utf8)
+        else { return [:] }
+        var out: [String: Walkthrough] = [:]
+        // T.quests then T.missions: { area = { [id] = { scripted = '…', steps = { '…' } } } }
+        for (n, table) in LuaDataReader.tables(in: text).filter({ !$0.keys.isEmpty }).prefix(2).enumerated() {
+            for area in table.keys {
+                guard let ids = table[area]?.table else { continue }
+                for key in ids.keys {
+                    guard let id = Int(key), let e = ids[key]?.table else { continue }
+                    let steps = (e["steps"]?.table?.array ?? []).compactMap(\.string)
+                    guard !steps.isEmpty else { continue }
+                    out["\(n == 0 ? "Q" : "M"):\(area),\(id)"] = Walkthrough(steps: steps, scripted: e["scripted"]?.string ?? "full")
+                }
+            }
+        }
+        return out
+    }
+
+    static func referenceGuides(_ entries: [CatalogueEntry], walkthroughs: [String: Walkthrough] = [:]) -> [Guide] {
         let groups = Dictionary(grouping: entries) { "\(areaName($0.area, mission: $0.mission)) \($0.mission ? "Missions" : "Quests")" }
         // Quests before missions, each alphabetical.
         let titles = groups.keys.sorted { a, b in
@@ -58,8 +82,10 @@ enum QuestCatalogue {
                 var tags = [entry.mission ? "M" : "Q": entry.tag]
                 if let npc = d["npc"]?.string { tags["NPC"] = npc }
                 if let level = d["level"]?.int { tags["LV"] = String(level) }
+                let walk = walkthroughs[entry.key]
+                if let walk { tags["WALK"] = walk.scripted }
                 return GuideStep(kind: entry.mission ? "M" : "Q", title: entry.name, zone: d["zone"]?.int,
-                                 posX: number(d["x"]), posZ: number(d["z"]), note: nil,
+                                 posX: number(d["x"]), posZ: number(d["z"]), note: walk?.steps.joined(separator: "\n"),
                                  fixed: true, tags: tags)
             }
             return Guide(name: title, desc: "Every quest or mission in this log. Work down the list; Next Unfinished skips ones you have done.",

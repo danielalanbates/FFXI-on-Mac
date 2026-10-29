@@ -399,7 +399,7 @@ final class CompanionState: ObservableObject {
                 zones = WorldMap.load(root: root)
                 guides = (Features.screenReading ? [LogSurvey.guide] : []) + loaded.map { var g = $0; g.name = QuestCatalogue.displayName(g.name); return g }
                 catalogue = entries
-                guides += QuestCatalogue.referenceGuides(catalogue)
+                guides += QuestCatalogue.referenceGuides(catalogue, walkthroughs: QuestCatalogue.walkthroughs(at: root))
                 sourceNote = root.path.contains("/Resources/") ? "bundled guides" : "development checkout"
                 break
             }
@@ -543,7 +543,7 @@ struct CompanionView: View {
     @StateObject var state = CompanionState()
     @StateObject private var capture = ScreenGuideCapture()
     @StateObject var wiki = WikiState()
-    // --tab <n> (test hook) opens on another tab, 1 Gear, 2 Skills, 3 Achievements, for --snapshot.
+    // --tab <n> (test hook) opens on another tab, 1 Gear, 2 Skills, 3 Achievements, 4 Server, for --snapshot.
     @State private var tab = CommandLine.arguments.firstIndex(of: "--tab")
         .flatMap { CommandLine.arguments.indices.contains($0 + 1) ? Int(CommandLine.arguments[$0 + 1]) : nil } ?? 0
     @State private var showReading = false
@@ -562,6 +562,7 @@ struct CompanionView: View {
                 case 1: gearPane
                 case 2: skillsPane
                 case 3: achievementsPane
+                case 4: serverPane
                 default: guidesPane
                 }
             }
@@ -634,9 +635,10 @@ struct CompanionView: View {
                     Text("Guides").tag(0)
                     Text("Gear").tag(1)
                     Text("Skills").tag(2)
+                    Text("Server").tag(4)
                     Text("Achievements").tag(3)
                 }
-                .pickerStyle(.segmented).labelsHidden().frame(width: 320)
+                .pickerStyle(.segmented).labelsHidden().frame(width: 390)
                 Spacer()
                 if Features.screenReading { readingStatus }
             }
@@ -855,10 +857,25 @@ struct CompanionView: View {
         if let lv = s.tags["LV"] {
             Label("Recommended level \(lv)", systemImage: "chart.bar").font(.caption).foregroundStyle(Theme.muted)
         }
-        if let n = s.note {
-            Text(n).font(.callout).fixedSize(horizontal: false, vertical: true)
+        if let n = s.note, let scripted = s.tags["WALK"] {
+            // Walkthrough from the server's own quest script: numbered, after where to go.
+            howToGetThere(s, npc: npc)
+            SectionLabel(text: "What to do").padding(.top, 4)
+            ForEach(Array(n.components(separatedBy: "\n").enumerated()), id: \.offset) { i, line in
+                Text("\(i + 1). \(line)").font(.callout).fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            if scripted != "full" {
+                Text(scripted == "stub" ? "This server has not scripted this one yet; it may not be completable."
+                                        : "Only part of this one is scripted on the server; some steps may not work.")
+                    .font(.caption).foregroundStyle(Theme.ember).fixedSize(horizontal: false, vertical: true)
+            }
+        } else {
+            if let n = s.note {
+                Text(n).font(.callout).fixedSize(horizontal: false, vertical: true)
+            }
+            howToGetThere(s, npc: npc)
         }
-        howToGetThere(s, npc: npc)
     }
 
     @ViewBuilder
