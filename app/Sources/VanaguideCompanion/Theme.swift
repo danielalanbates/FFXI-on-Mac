@@ -12,6 +12,8 @@ enum Theme {
     static let crystal    = Color(red: 0.55, green: 0.83, blue: 0.95)
     static let gold       = Color(red: 0.93, green: 0.79, blue: 0.44)
     static let ember      = Color(red: 0.90, green: 0.45, blue: 0.35)
+    /// Developer Mode: red, so nobody mistakes recording for normal play.
+    static let alert      = Color(red: 0.92, green: 0.26, blue: 0.26)
     static let jade       = Color(red: 0.50, green: 0.85, blue: 0.62)
     static let panel      = Color(red: 0.08, green: 0.08, blue: 0.17).opacity(0.85)
     static let stroke     = Color.white.opacity(0.14)

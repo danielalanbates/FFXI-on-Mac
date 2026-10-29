@@ -139,7 +139,9 @@ extension CompanionSelfTest {
         let registry = dir.appendingPathComponent("registry.json")
         try? JSONEncoder().encode([oldURL.path, dir.appendingPathComponent("gone.json").path, freshURL.path])
             .write(to: registry)
-        let paths = ProgressSnapshot.candidatePaths(registry: registry, chosen: nil)
+        let paths = ProgressSnapshot.candidatePaths(registry: registry, chosen: nil, ownCopy: nil)
+        check("snapshot: Server-Safe's own copy is always a candidate",
+              ProgressSnapshot.candidatePaths(registry: registry, chosen: nil).contains(ProgressSnapshot.ownCopyPath))
         check("snapshot: registry read, newest fetch wins over list order",
               paths.count == 3 && ProgressSnapshot.newest(paths)?.0 == freshURL)
 

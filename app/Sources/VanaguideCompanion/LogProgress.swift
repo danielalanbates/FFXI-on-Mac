@@ -119,7 +119,7 @@ enum LogSurvey {
                      desc: "Show the guide your in-game logs once, so it knows what you have done. Nothing is read from the server.",
                      levels: "", steps: [
             step("Choose Your Character and Start Reading",
-                 "Enter your character and world above and press Load. Then open Screen Reading…, press Find Game Window, choose the game and press Start Reading. On these steps the whole game window is read, so the chat area does not matter.",
+                 "Above, choose your server, then your character (Add Character… for a new one). Then open Screen Reading…, press Find Game Window, choose the game and press Start Reading. On these steps the whole game window is read, so the chat area does not matter.",
                  list: "none"),
             step("Open the Main Menu",
                  "Log in and stand somewhere safe. Press the minus key (−) to open the Main Menu (on a gamepad, the menu button). Keep the game window visible next to this one.",

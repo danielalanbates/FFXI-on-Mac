@@ -28,21 +28,27 @@ enum Guide {
         return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
     }
 
-    /// Tells Server-Safe which world is being played, so it can fill in World by itself.
-    /// A tiny JSON file in Server-Safe's own Application Support folder; no credentials.
-    static func shareSession(world: String) {
-        guard !world.isEmpty,
-              let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+    /// Tells Server-Safe which world is being played and which worlds the launcher offers, so
+    /// its Server list matches this one and World fills in by itself. A tiny JSON file in
+    /// Server-Safe's own Application Support folder; no accounts or credentials.
+    static func shareSession(world: String = "", worlds: [String]? = nil) {
+        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
         else { return }
         let dir = base.appendingPathComponent("VanaGuide Server-Safe", isDirectory: true)
-        let body: [String: String] = ["world": world, "updated": ISO8601DateFormatter().string(from: Date())]
+        let url = dir.appendingPathComponent("session.json")
+        var body = (try? Data(contentsOf: url))
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        if !world.isEmpty { body["world"] = world }
+        if let worlds { body["worlds"] = worlds }
+        guard body["world"] != nil || body["worlds"] != nil else { return }
+        body["updated"] = ISO8601DateFormatter().string(from: Date())
         guard let data = try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]) else { return }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try? data.write(to: dir.appendingPathComponent("session.json"), options: .atomic)
+        try? data.write(to: url, options: .atomic)
     }
 
-    static func openCompanion(world: String = "") {
-        shareSession(world: world)
+    static func openCompanion(world: String = "", worlds: [String]? = nil) {
+        shareSession(world: world, worlds: worlds)
         let identifier = "org.batesai.vanaguide-companion"
         if let existing = NSWorkspace.shared.runningApplications.first(where: {
             $0.bundleIdentifier == identifier

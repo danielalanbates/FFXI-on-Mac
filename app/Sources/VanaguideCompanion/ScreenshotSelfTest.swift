@@ -157,6 +157,12 @@ extension CompanionSelfTest {
         try? Data(#"{"updated":"x","world":"Local server"}"#.utf8).write(to: sessionFile)
         checks.append(("the launcher's world fills in World",
                        CharacterDiscovery.launcherWorld(at: sessionFile) == "Local server"))
+        checks.append(("before the launcher shares its list, Server lists the shipped worlds",
+                       CharacterDiscovery.launcherWorlds(at: sessionFile).contains("HorizonXI")))
+        try? Data(#"{"world":"CatsEyeXI","worlds":["CatsEyeXI","Local server"]}"#.utf8).write(to: sessionFile)
+        checks.append(("Server lists exactly the launcher's servers, in its order",
+                       CharacterDiscovery.launcherWorlds(at: sessionFile) == ["CatsEyeXI", "Local server"]
+                       && CharacterDiscovery.launcherWorld(at: sessionFile) == "CatsEyeXI"))
         try? FileManager.default.removeItem(at: sessionDir)
         let rows = OCRPiece.rows([
             OCRPiece(text: "It's been twenty years", x: 0.2, midY: 0.50, height: 0.04, width: 0.5),
