@@ -21,6 +21,9 @@ struct CompanionApp: App {
         if CommandLine.arguments.contains("--selftest-parser") {
             CompanionSelfTest.run()
         }
+        if CommandLine.arguments.contains("--selftest-layout") {
+            CompanionLayoutSelfTest.run()
+        }
         // A second user-launched copy exits quietly. It must never create another capture
         // timer, re-open the game or move focus away from an existing play session.
         if let identifier = Bundle.main.bundleIdentifier,
@@ -166,7 +169,25 @@ final class CompanionState: ObservableObject {
         set { UserDefaults.standard.set(newValue, forKey: "ra.chosenSnapshot") }
     }
 
-    init() {
+    init(loadData: Bool = true) {
+        // The hidden layout verifier uses synthetic state and never loads/saves a character,
+        // discovers a game, warms OCR, or reads the launcher's session.
+        guard loadData else {
+            character = "Layout"
+            world = "Local fixture"
+            learned = LearnedData()
+            worldOptions = [world]
+            characterOptions = [character]
+            guides = [Guide(name: "Layout fixture: a journey through Vana'diel",
+                            desc: "Synthetic guide for checking readable text and controls while resizing.",
+                            levels: "1+", steps: [GuideStep(kind: "t",
+                                title: "Talk to the guide keeper at the city gates.",
+                                zone: nil, posX: nil, posZ: nil,
+                                note: "Follow the numbered directions, read the dialogue, then choose Next. "
+                                    + "This longer paragraph checks wrapping in both compact and expanded windows.",
+                                fixed: true)])]
+            return
+        }
         // Someone who has used Screen Reading will again: load the recognizer now, not at Start.
         if !Features.screenReading { devMode = false }
         if Features.screenReading, UserDefaults.standard.bool(forKey: "reading.used") { ScreenGuideCapture.warmUp() }
@@ -608,7 +629,7 @@ final class CompanionState: ObservableObject {
 }
 
 struct CompanionView: View {
-    @StateObject var state = CompanionState()
+    @StateObject var state: CompanionState
     @StateObject private var capture = ScreenGuideCapture()
     @StateObject var wiki = WikiState()
     // --tab <n> (test hook) opens on another tab, 1 Gear, 2 Skills, 3 Achievements, 4 Server, for --snapshot.
@@ -617,6 +638,13 @@ struct CompanionView: View {
     @State private var showReading = false
     @State private var addingCharacter = false
     @State private var newCharacter = ""
+    private let layoutTest: Bool
+
+    init(layoutTest: Bool = false, tab: Int? = nil) {
+        self.layoutTest = layoutTest
+        _state = StateObject(wrappedValue: CompanionState(loadData: !layoutTest))
+        if let tab { _tab = State(initialValue: tab) }
+    }
     static let addCharacterTag = "\u{1}add"
 
     static let width: CGFloat = 620
@@ -642,10 +670,12 @@ struct CompanionView: View {
         .foregroundStyle(Theme.text)
         .background(Theme.backdrop)
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
+            guard !layoutTest else { return }
             state.reloadProgress()
             state.applyLauncherWorld()
         }
         .onAppear {
+            guard !layoutTest else { return }
             wiki.load(roots: CompanionState.vanaguideRoots, world: state.world)
             capture.receivedText = { state.readScreenshotText($0) }
             capture.receivedStatus = { state.readStatusText($0) }
@@ -665,7 +695,7 @@ struct CompanionView: View {
             }
         }
         .onChange(of: state.isSurveying) { capture.fullWindow = $0 }
-        .onChange(of: state.world) { wiki.load(roots: CompanionState.vanaguideRoots, world: $0) }
+        .onChange(of: state.world) { if !layoutTest { wiki.load(roots: CompanionState.vanaguideRoots, world: $0) } }
         .onDisappear { capture.stop() }
     }
 

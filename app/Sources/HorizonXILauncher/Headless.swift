@@ -28,6 +28,7 @@ enum Headless {
             || a.contains("--selftest-addon-install")
             || a.contains("--selftest-cursor-fix")
             || a.contains("--selftest-guide-disabled")
+            || a.contains("--selftest-guide-companion")
             || a.contains("--selftest-narration-disabled")
             || a.contains("--selftest-multiworld")
             || a.contains("--selftest-world-prefix")
@@ -102,6 +103,9 @@ enum Headless {
         }
         if args.contains("--selftest-guide-disabled") {
             runGuideDisabledSelfTest()
+        }
+        if args.contains("--selftest-guide-companion") {
+            GuideCompanionSelfTest.run()
         }
         if args.contains("--selftest-narration-disabled") {
             runNarrationDisabledSelfTest()

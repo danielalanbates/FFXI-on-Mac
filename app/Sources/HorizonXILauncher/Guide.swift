@@ -25,7 +25,34 @@ enum Guide {
             Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/VanaGuide Server-Safe.app"),
             URL(fileURLWithPath: "/Applications/VanaGuide Server-Safe.app"),
         ]
-        return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        return companionURL(in: candidates, osVersion: "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)")
+    }
+
+    /// A standalone beta may be updated while the playable launcher stays open. Prefer the
+    /// newest compatible copy, preserving candidate order (embedded first) on equal builds.
+    /// Read the plist directly: Bundle caches can retain metadata from before a bundle swap.
+    static func companionURL(in candidates: [URL], osVersion: String) -> URL? {
+        var selected: (url: URL, build: UpdateRules.Build)?
+        for url in candidates {
+            guard let data = try? Data(contentsOf: url.appendingPathComponent("Contents/Info.plist")),
+                  let info = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
+                  info["CFBundleIdentifier"] as? String == "org.batesai.vanaguide-companion",
+                  info["CFBundleExecutable"] as? String == "VanaguideCompanion",
+                  let version = info["CFBundleShortVersionString"] as? String,
+                  version.range(of: #"\A[0-9]+(?:\.[0-9]+){1,2}\z"#, options: .regularExpression) != nil,
+                  let buildText = info["CFBundleVersion"] as? String, let number = Int(buildText), number > 0,
+                  let minimumOS = info["LSMinimumSystemVersion"] as? String,
+                  minimumOS.range(of: #"\A[0-9]+(?:\.[0-9]+){0,2}\z"#, options: .regularExpression) != nil,
+                  UpdateRules.compare(osVersion, minimumOS) >= 0,
+                  FileManager.default.isExecutableFile(atPath: url.appendingPathComponent("Contents/MacOS/VanaguideCompanion").path)
+            else { continue }
+            let build = UpdateRules.Build(version: version, build: number)
+            if selected == nil || UpdateRules.isOffered(build, over: selected!.build) {
+                selected = (url, build)
+            }
+        }
+        return selected?.url
     }
 
     /// Tells Server-Safe which world is being played and which worlds the launcher offers, so
