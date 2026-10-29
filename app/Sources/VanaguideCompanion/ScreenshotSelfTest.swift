@@ -172,6 +172,46 @@ extension CompanionSelfTest {
                        CompanionState.questStep(in: linkGuides, named: "Quest: No Strings Attached (Aht Urhgan)").map { [$0.guide, $0.step] } == [0, 1]
                            && CompanionState.questStep(in: linkGuides, named: "Treasure coffer, opened during the quest No Strings Attached (Jeuno)").map { $0.step } == 1
                            && CompanionState.questStep(in: linkGuides, named: "Dropped by a goblin") == nil))
+        // Skills tab picks.
+        let recipesFixture = [
+            CraftRecipe(level: 12, name: "Cheap", crystal: "Fire", parts: [], cost: 100, sell: 50, needsKeyItem: false, other: []),
+            CraftRecipe(level: 13, name: "Spot On", crystal: "Fire", parts: [], cost: 300, sell: 200, needsKeyItem: false, other: []),
+            CraftRecipe(level: 14, name: "Earner", crystal: "Fire", parts: [], cost: 100, sell: 900, needsKeyItem: false, other: []),
+            CraftRecipe(level: 13, name: "Needs Smithing", crystal: "Fire", parts: [], cost: 1, sell: 9999, needsKeyItem: false, other: ["Smithing 8"]),
+            CraftRecipe(level: 30, name: "Too High", crystal: "Fire", parts: [], cost: 1, sell: 9999, needsKeyItem: false, other: []),
+        ]
+        checks.append(("craft pick: about 3 above your level, made with this craft alone",
+                       SkillPicks.forSkill(recipesFixture, level: 10)?.name == "Spot On"))
+        checks.append(("craft gil pick: most NPC gil in the same window",
+                       SkillPicks.forGil(recipesFixture, level: 10)?.name == "Earner"))
+        checks.append(("craft pick widens when nothing is close", SkillPicks.forSkill(recipesFixture, level: 22)?.name == "Too High"))
+        let mobsFixture = [
+            SkillTarget(name: "Aggro", zone: 1, min: 11, max: 12, spawns: 50, aggro: true, links: false),
+            SkillTarget(name: "Linker", zone: 1, min: 11, max: 12, spawns: 50, aggro: false, links: true),
+            SkillTarget(name: "Calm", zone: 1, min: 11, max: 12, spawns: 10, aggro: false, links: false),
+            SkillTarget(name: "Too Weak", zone: 1, min: 3, max: 5, spawns: 99, aggro: false, links: false),
+        ]
+        checks.append(("monster pick: not aggressive, not linking, not too weak",
+                       SkillPicks.monster(mobsFixture, level: 10)?.name == "Calm"))
+        // Content order and achievement links.
+        let refsFixture = [Guide(name: "Bastok Quests", desc: "", levels: "", steps: [
+                               GuideStep(kind: "Q", title: "The Doorman", tags: ["Q": "a"]),
+                               GuideStep(kind: "Q", title: "Blade of Darkness", tags: ["Q": "b"])], isReference: true),
+                           Guide(name: "Windurst Missions", desc: "", levels: "", steps: [
+                               GuideStep(kind: "M", title: "The Horutoto Ruins Experiment", tags: ["M": "c"])], isReference: true)]
+        let ordered = QuestCatalogue.contentOrder([Guide(name: "Bastok Quests", desc: "", levels: "", steps: []),
+                                                   Guide(name: "Bastok Missions", desc: "", levels: "", steps: []),
+                                                   Guide(name: "Support Jobs", desc: "", levels: "", steps: []),
+                                                   Guide(name: "Starting Out", desc: "", levels: "", steps: [])]).map(\.name)
+        checks.append(("content order: start, jobs, missions, quests",
+                       ordered == ["Starting Out", "Support Jobs", "Bastok Missions", "Bastok Quests"]))
+        checks.append(("job unlocks list each advanced job's quest",
+                       QuestCatalogue.jobUnlockGuide(from: refsFixture)?.steps.first?.tags["JOB"] == "Dark Knight"))
+        checks.append(("an achievement opens the quest it quotes",
+                       CompanionState.achievementStep(in: refsFixture, description: "Complete 'The Doorman' and obtain the Razor Axe.").map { [$0.guide, $0.step] } == [0, 0]))
+        checks.append(("a nation rank achievement opens that nation's missions",
+                       CompanionState.achievementStep(in: refsFixture, description: "Achieve Rank 7 in Windurst.").map { $0.guide } == 1
+                           && CompanionState.achievementStep(in: refsFixture, description: "Reach level 55 as a Warrior.") == nil))
         checks.append(("quest walkthroughs are read per quest and mission",
                        walks["Q:sandoria,0"]?.steps.count == 2 && walks["M:cop,840"]?.scripted == "stub"))
         checks.append(("a server's own Gear and Skills folder is keyed by its name",
@@ -240,6 +280,16 @@ extension CompanionSelfTest {
         if let path = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"] {
             let real = QuestCatalogue.entries(at: URL(fileURLWithPath: path))
             checks.append(("real quest and mission catalogues load over 500 named entries", real.count > 500))
+            // How many of the player's RetroAchievements open a guide (read-only, if present).
+            if let snap = ProgressSnapshot.read(FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support/VanaGuide Server-Safe/retroachievements.json")) {
+                let refs = QuestCatalogue.referenceGuides(real)
+                let all = snap.games.flatMap { $0.achievements.values.compactMap(\.description) }
+                let linked = all.filter { CompanionState.achievementStep(in: refs, description: $0) != nil }
+                print("  info: \(linked.count)/\(all.count) achievements open a quest or mission guide")
+                all.filter { CompanionState.achievementStep(in: refs, description: $0) == nil && $0.contains("'") }
+                    .prefix(12).forEach { print("  unlinked: \($0)") }
+            }
             // Every quest/mission source on a gear page should open a guide step.
             if let gear = WikiData.gear(URL(fileURLWithPath: path).appendingPathComponent("data/gear_guide.lua")) {
                 let refs = QuestCatalogue.referenceGuides(real)

@@ -42,7 +42,9 @@ struct CompanionApp: App {
                 .preferredColorScheme(.dark)
                 .tint(Theme.crystal)
         }
-        .windowResizability(.contentSize)
+        // Resizable (Daniel, 2026-10-28); never smaller than the layout's design size.
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: CompanionView.width, height: CompanionView.height)
     }
 }
 
@@ -439,7 +441,9 @@ final class CompanionState: ObservableObject {
                 zones = WorldMap.load(root: root)
                 guides = (Features.screenReading ? [LogSurvey.guide] : []) + loaded.map { var g = $0; g.name = QuestCatalogue.displayName(g.name); return g }
                 catalogue = entries
-                guides += QuestCatalogue.referenceGuides(catalogue, walkthroughs: QuestCatalogue.walkthroughs(at: root))
+                let references = QuestCatalogue.referenceGuides(catalogue, walkthroughs: QuestCatalogue.walkthroughs(at: root))
+                guides += (QuestCatalogue.jobUnlockGuide(from: references).map { [$0] } ?? []) + references
+                guides = QuestCatalogue.contentOrder(guides)
                 sourceNote = root.path.contains("/Resources/") ? "bundled guides" : "development checkout"
                 break
             }
@@ -569,10 +573,34 @@ final class CompanionState: ObservableObject {
 
     /// The first guide step that reaches one of this achievement's targets.
     func guideLink(for a: AchievementInfo) -> (guide: Int, step: Int)? {
-        guard !a.targets.isEmpty else { return nil }
         for (gi, g) in guides.enumerated() {
             for (si, s) in g.steps.enumerated() where a.targets.contains(where: { $0.matches(s) }) {
                 return (gi, si)
+            }
+        }
+        return Self.achievementStep(in: guides, description: a.description)
+    }
+
+    /// Where an achievement's description points: a quoted quest or mission ("Complete 'The
+    /// Doorman' and obtain the Razor Axe"), or a nation rank ("Achieve Rank 7 in Windurst") ->
+    /// that nation's missions.
+    static func achievementStep(in guides: [Guide], description d: String) -> (guide: Int, step: Int)? {
+        // 'Name' in straight or curly quotes; the apostrophe inside "Silence of the Ram's" is
+        // kept by requiring the closing quote to be followed by a non-letter.
+        if let r = try? NSRegularExpression(pattern: #"['‘“"](.+?)['’”"](?![A-Za-z])"#) {
+            for m in r.matches(in: d, range: NSRange(d.startIndex..., in: d)) {
+                guard let range = Range(m.range(at: 1), in: d) else { continue }
+                if let hit = questStep(in: guides, named: "Quest: " + d[range]) { return hit }
+            }
+        }
+        // Nation rank -> that nation's missions; fame -> its quests (quests are what raise fame).
+        for (pattern, kind) in [(#"(?i)rank \d+ in (San d'Oria|Bastok|Windurst)"#, "Missions"),
+                                (#"(?i)fame level of \d+ in (San d'Oria|Bastok|Windurst|Jeuno)"#, "Quests")] {
+            if let r = try? NSRegularExpression(pattern: pattern),
+               let m = r.firstMatch(in: d, range: NSRange(d.startIndex..., in: d)),
+               let range = Range(m.range(at: 1), in: d),
+               let g = guides.firstIndex(where: { $0.name.caseInsensitiveCompare("\(d[range]) \(kind)") == .orderedSame }) {
+                return (g, 0)
             }
         }
         return nil
@@ -609,7 +637,8 @@ struct CompanionView: View {
                 .frame(maxHeight: .infinity)
         }
         .padding(10)
-        .frame(width: Self.width, height: Self.height)
+        .frame(minWidth: Self.width, idealWidth: Self.width, maxWidth: .infinity,
+               minHeight: Self.height, idealHeight: Self.height, maxHeight: .infinity)
         .foregroundStyle(Theme.text)
         .background(Theme.backdrop)
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
@@ -810,14 +839,27 @@ struct CompanionView: View {
     var guidesPane: some View {
         HStack(spacing: 8) {
             Card {
-                List(state.guides.indices, id: \.self, selection: Binding(
-                    get: { state.selected },
-                    set: { state.selected = $0 ?? 0; state.stepIndex = 0 }
-                )) { i in
-                    Text(state.guides[i].name).font(.callout).lineLimit(2)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Content").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.gold)
+                        .padding(.leading, 4)
+                    List(selection: Binding<Int?>(
+                        get: { state.selected },
+                        set: { state.selected = $0 ?? 0; state.stepIndex = 0 }
+                    )) {
+                        ForEach(QuestCatalogue.sectionOrder, id: \.self) { section in
+                            let rows = state.guides.indices.filter { QuestCatalogue.section(of: state.guides[$0]) == section }
+                            if !rows.isEmpty {
+                                Section(section) {
+                                    ForEach(rows, id: \.self) { i in
+                                        Text(state.guides[i].name).font(.callout).lineLimit(2).tag(Optional(i))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .scrollContentBackground(.hidden)
+                    .listStyle(.sidebar)
                 }
-                .scrollContentBackground(.hidden)
-                .listStyle(.sidebar)
             }
             .frame(width: 190)
 
@@ -893,6 +935,9 @@ struct CompanionView: View {
         }
         if s.tags["LEARNED"] != nil {
             Text("Location recorded in Developer Mode").font(.caption2).foregroundStyle(Theme.gold)
+        }
+        if let job = s.tags["JOB"] {
+            Label("Unlocks \(job)", systemImage: "person.badge.plus").font(.callout).foregroundStyle(Theme.gold)
         }
         if let lv = s.tags["LV"] {
             Label("Recommended level \(lv)", systemImage: "chart.bar").font(.caption).foregroundStyle(Theme.muted)
@@ -1088,8 +1133,38 @@ struct CompanionView: View {
         }
     }
 
+    /// The whole achievement is a link (Daniel, 2026-10-28): to the quest or mission it names in
+    /// Guides, else to an item it names on the Gear tab.
     @ViewBuilder
     func row(_ r: AchievementRow) -> some View {
+        if let link = state.guideLink(for: r.info) {
+            Button { state.selected = link.guide; state.stepIndex = link.step; tab = 0 } label: { linkedRow(r, to: "Open in Guides") }
+                .buttonStyle(.plain).help("Open the guide for this achievement")
+        } else if let item = achievementItem(r.info) {
+            Button { wiki.openItem = item.id; wiki.category = nil; tab = 1 } label: { linkedRow(r, to: "Open \(item.name) in Gear") }
+                .buttonStyle(.plain).help("Open how to get \(item.name)")
+        } else {
+            rowContent(r)
+        }
+    }
+
+    func linkedRow(_ r: AchievementRow, to label: String) -> some View {
+        HStack(alignment: .center, spacing: 6) {
+            rowContent(r)
+            Image(systemName: "chevron.right").font(.caption).foregroundStyle(Theme.crystal)
+        }
+        .contentShape(Rectangle())
+        .accessibilityHint(label)
+    }
+
+    /// The longest gear name an achievement's description mentions ("obtain a Reverend Mail").
+    func achievementItem(_ a: AchievementInfo) -> GearItem? {
+        let text = " " + ScreenshotGuideMatcher.normalized(a.description) + " "
+        return wiki.items.filter { $0.name.count >= 6 && text.contains(" " + ScreenshotGuideMatcher.normalized($0.name) + " ") }
+            .max { $0.name.count < $1.name.count }
+    }
+
+    func rowContent(_ r: AchievementRow) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline) {
                 Text(r.info.title).font(.callout).bold()
@@ -1112,14 +1187,7 @@ struct CompanionView: View {
                     Text("Guide target: " + r.info.targets.map(\.label).joined(separator: "; ")
                          + (r.info.confidence.map { " (\($0) confidence)" } ?? ""))
                         .font(.caption2).foregroundStyle(Theme.muted)
-                    if let link = state.guideLink(for: r.info) {
-                        Button("Open in Guide") {
-                            state.selected = link.guide
-                            state.stepIndex = link.step
-                            tab = 0
-                        }
-                        .font(.caption2)
-                    }
+
                 }
             }
         }

@@ -96,9 +96,13 @@ final class WikiState: ObservableObject {
     // --gear-item <id> (test hook) opens an item's page, for --snapshot.
     @Published var openItem: Int? = CommandLine.arguments.firstIndex(of: "--gear-item")
         .flatMap { CommandLine.arguments.indices.contains($0 + 1) ? Int(CommandLine.arguments[$0 + 1]) : nil }
-    @Published var skill: String?
+    // --skill <name> (test hook) opens that skill, for --snapshot.
+    @Published var skill: String? = CommandLine.arguments.firstIndex(of: "--skill")
+        .flatMap { CommandLine.arguments.indices.contains($0 + 1) ? CommandLine.arguments[$0 + 1] : nil }
     /// Server tab: notes (rates, rules, commands) and quest walkthroughs from the chosen server's
     /// own wiki or site, data/servers/<key>/server_notes.lua and quest_guides.lua.
+    @Published var crafts: [String: [CraftRecipe]] = [:]
+    @Published var targets: [SkillTarget] = []
     @Published var notes: [SkillGuide] = []
     @Published var quests: [SkillGuide] = []
     @Published var serverPick: String?
@@ -131,7 +135,17 @@ final class WikiState: ObservableObject {
                 return nil
             }
             let gear = pick("gear_guide.lua", WikiData.gear)
-            let skills = pick("skill_guides.lua", WikiData.skills)
+            // A server's own skill file may cover only crafts (wiki sources): keep the standard
+            // combat and magic guides for the groups it lacks.
+            let skills: ([SkillGuide], Bool)? = {
+                guard let own = pick("skill_guides.lua", WikiData.skills) else { return nil }
+                guard own.1, let stock = roots.lazy.compactMap({ WikiData.skills($0.appendingPathComponent("data/skill_guides.lua")) }).first
+                else { return own }
+                let have = Set(own.0.map(\.group))
+                return (own.0 + stock.filter { !have.contains($0.group) }, true)
+            }()
+            let crafts = pick("craft_recipes.lua", WikiData.crafts)
+            let targets = pick("skill_targets.lua", WikiData.targets)
             func own(_ file: String) -> [SkillGuide] {
                 guard !key.isEmpty else { return [] }
                 for root in roots {
@@ -148,6 +162,8 @@ final class WikiState: ObservableObject {
                 self.categories = gear?.0.categories ?? []
                 self.items = gear?.0.items ?? []
                 self.skills = skills?.0 ?? []
+                self.crafts = crafts?.0 ?? [:]
+                self.targets = targets?.0 ?? []
                 if self.skill.map({ s in !self.skills.contains { $0.name == s } }) ?? true { self.skill = self.skills.first?.name }
                 self.note = gear == nil ? "Gear list not installed (Vanaguide/data/gear_guide.lua)." : ""
             }
@@ -325,8 +341,15 @@ extension CompanionView {
                     .fixedSize(horizontal: false, vertical: true)
             } }
             .frame(width: 190)
-            Card { guideDetail(wiki.skills.first(where: { $0.name == wiki.skill }),
-                               empty: wiki.skills.isEmpty ? "Skill guides not installed (Vanaguide/data/skill_guides.lua)." : "Pick a skill.") }
+            Card {
+                if let s = wiki.skills.first(where: { $0.name == wiki.skill }),
+                   wiki.crafts[s.name] != nil || (s.group != "Crafting" && !wiki.targets.isEmpty) {
+                    skillPicker(s)
+                } else {
+                    guideDetail(wiki.skills.first(where: { $0.name == wiki.skill }),
+                                empty: wiki.skills.isEmpty ? "Skill guides not installed (Vanaguide/data/skill_guides.lua)." : "Pick a skill.")
+                }
+            }
         }
     }
 
@@ -359,6 +382,106 @@ extension CompanionView {
         }
     }
 
+    /// The player's level in a skill, remembered per server, character and skill.
+    func skillLevel(_ skill: String) -> Binding<Int> {
+        let key = "skill.level.\(state.world).\(state.character).\(skill)"
+        return Binding(get: { UserDefaults.standard.integer(forKey: key) },
+                       set: { UserDefaults.standard.set(min(max($0, 0), 110), forKey: key); wiki.objectWillChange.send() })
+    }
+
+    @ViewBuilder
+    func skillPicker(_ s: SkillGuide) -> some View {
+        let craft = wiki.crafts[s.name]
+        let level = skillLevel(s.name)
+        VStack(alignment: .leading, spacing: 8) {
+            Text(s.name).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.gold)
+            HStack(spacing: 6) {
+                Text(craft != nil ? "Your \(s.name) level" : "Your job level").font(.callout)
+                TextField("", value: level, format: .number)
+                    .frame(width: 52).textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing)
+                    .modifier(ArrowKeys(value: level))
+                Stepper("", value: level, in: 0...110).labelsHidden()
+                Text("Type it, or use ↑ ↓").font(.caption).foregroundStyle(Theme.muted)
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if let craft {
+                        recipeCard("Best for skill-ups", SkillPicks.forSkill(craft, level: level.wrappedValue), gil: false)
+                        recipeCard("Skill-ups while making gil", SkillPicks.forGil(craft, level: level.wrappedValue), gil: true)
+                        Text("Recipes a little above your level give skill-ups; about 3 levels above balances skill-ups against failed synths. Prices are what NPCs charge; gil is what the result sells to an NPC for (the auction house often pays more).")
+                            .font(.caption).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        monsterCard(SkillPicks.monster(wiki.targets, level: level.wrappedValue))
+                        Text("Skill rises when you use it on monsters that aren't too weak for you. This one is at or a little above your level, doesn't attack on sight, and has many spawns.")
+                            .font(.caption).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+                    }
+                    if !s.steps.isEmpty {
+                        DisclosureGroup("Full \(s.name) guide") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(Array(s.steps.enumerated()), id: \.offset) { _, st in
+                                    SectionLabel(text: st.title)
+                                    Text(st.note).font(.caption).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                                }
+                            }
+                        }
+                        .font(.caption).tint(Theme.crystal)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    @ViewBuilder
+    func recipeCard(_ title: String, _ r: CraftRecipe?, gil: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            SectionLabel(text: title)
+            if let r {
+                Text("\(r.name)").font(.system(size: 14, weight: .semibold))
+                Text("Recipe level \(r.level)" + (r.other.isEmpty ? "" : " · also needs \(r.other.joined(separator: ", "))"))
+                    .font(.caption).foregroundStyle(Theme.muted)
+                Text("\(r.crystal) + " + r.parts.joined(separator: ", ")).font(.callout)
+                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                HStack(spacing: 10) {
+                    Text(r.cost.map { "Costs \($0) gil" } ?? "Some ingredients aren't sold by NPCs")
+                    Text("Sells for \(r.sell) gil")
+                    if gil, let p = r.profit {
+                        Text(p >= 0 ? "+\(p) gil each" : "\(p) gil each").foregroundStyle(p >= 0 ? Theme.jade : Theme.ember)
+                    }
+                }
+                .font(.caption)
+                if gil, let p = r.profit, p < 0 {
+                    Text("Nothing in this range makes gil selling to NPCs; this one loses the least.")
+                        .font(.caption).foregroundStyle(Theme.muted)
+                }
+            } else {
+                Text(gil ? "No recipe in this range has NPC-sold ingredients to price." : "No recipe above this level.")
+                    .font(.caption).foregroundStyle(Theme.muted)
+            }
+        }
+        .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.05)))
+    }
+
+    @ViewBuilder
+    func monsterCard(_ m: SkillTarget?) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            SectionLabel(text: "Fight this")
+            if let m {
+                Text(m.name).font(.system(size: 14, weight: .semibold))
+                Label("in \(state.zones.name(m.zone))", systemImage: "mappin.and.ellipse")
+                    .font(.callout).foregroundStyle(Theme.crystal)
+                Text("Level \(m.min == m.max ? "\(m.min)" : "\(m.min)–\(m.max)") · \(m.spawns) spawns"
+                     + (m.links ? " · calls for help from its kind" : ""))
+                    .font(.caption).foregroundStyle(Theme.muted)
+            } else {
+                Text("No suitable monster found for this level.").font(.caption).foregroundStyle(Theme.muted)
+            }
+        }
+        .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.05)))
+    }
+
     @ViewBuilder
     func guideDetail(_ guide: SkillGuide?, empty: String) -> some View {
                 if let s = guide {
@@ -381,5 +504,19 @@ extension CompanionView {
                 } else {
                     Text(empty).font(.caption).foregroundStyle(Theme.muted)
                 }
+    }
+}
+
+/// ↑ and ↓ in the level box step the level (macOS 14; Server-Safe requires 14, the package 13).
+struct ArrowKeys: ViewModifier {
+    var value: Binding<Int>
+    func body(content: Content) -> some View {
+        if #available(macOS 14.0, *) {
+            content
+                .onKeyPress(.upArrow) { value.wrappedValue += 1; return .handled }
+                .onKeyPress(.downArrow) { value.wrappedValue -= 1; return .handled }
+        } else {
+            content
+        }
     }
 }

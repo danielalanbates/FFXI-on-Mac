@@ -69,6 +69,64 @@ enum QuestCatalogue {
         return out
     }
 
+    /// Quests that unlock a job (their scripts call player:unlockJob), in the game's job order.
+    /// Dragoon (The Holy Crest) and Rune Fencer are added when the quest data has them.
+    static let jobUnlocks: [(job: String, quest: String)] = [
+        ("Paladin", "A Knight's Test"), ("Dark Knight", "Blade of Darkness"),
+        ("Beastmaster", "Path of the Beastmaster"), ("Bard", "Path of the Bard"),
+        ("Ranger", "The Fanged One"), ("Samurai", "Forge Your Destiny"), ("Ninja", "Ayame and Kaede"),
+        ("Dragoon", "The Holy Crest"), ("Summoner", "I Can Hear a Rainbow"),
+        ("Blue Mage", "An Empty Vessel"), ("Corsair", "Luck of the Draw"), ("Puppetmaster", "No Strings Attached"),
+        ("Dancer", "Lakeside Minuet"), ("Scholar", "A Little Knowledge"), ("Geomancer", "Dances with Luopans"),
+        ("Rune Fencer", "Children of the Rune"),
+    ]
+
+    /// "Job Unlocks": one step per advanced job, copied from the quest's own reference step so
+    /// it carries the same location and What to do.
+    static func jobUnlockGuide(from references: [Guide]) -> Guide? {
+        let steps: [GuideStep] = jobUnlocks.compactMap { job, quest in
+            guard let hit = CompanionState.questStep(in: references, named: "Quest: " + quest) else { return nil }
+            var st = references[hit.guide].steps[hit.step]
+            st.tags["JOB"] = job
+            return st
+        }
+        guard !steps.isEmpty else { return nil }
+        return Guide(name: "Job Unlocks", desc: "The quest that unlocks each advanced job. Reach level 30 on any job first; most start in a nation city or Jeuno.",
+                     levels: "", steps: steps, isReference: true)
+    }
+
+    /// Content order (Daniel, 2026-10-28): jobs, then missions, then quests. Starting Out and
+    /// other authored routes stay at the very top; Job Unlocks and Support Jobs make up Jobs.
+    static func section(of g: Guide) -> String {
+        if g.name.hasSuffix(" Missions") { return "Missions" }
+        if g.name.hasSuffix(" Quests") { return "Quests" }
+        if g.name == "Job Unlocks" || g.name.localizedCaseInsensitiveContains("job") { return "Jobs" }
+        return "Start Here"
+    }
+    static let sectionOrder = ["Start Here", "Jobs", "Missions", "Quests"]
+
+    /// Within Missions and Quests: the three nations, then the expansions in release order.
+    static let storyOrder = ["San d'Oria", "Bastok", "Windurst", "Jeuno", "Rise of the Zilart", "Other Areas",
+                             "Outlands", "Chains of Promathia", "Treasures of Aht Urhgan", "Aht Urhgan",
+                             "Wings of the Goddess", "Crystal War", "A Crystalline Prophecy", "A Moogle Kupo d'Etat",
+                             "A Shantotto Ascension", "Abyssea", "Seekers of Adoulin", "Adoulin", "Coalition",
+                             "Rhapsodies of Vana'diel", "The Voracious Resurgence"]
+
+    static func storyRank(_ g: Guide) -> Int {
+        let area = g.name.replacingOccurrences(of: #" (Missions|Quests)$"#, with: "", options: .regularExpression)
+        return storyOrder.firstIndex(of: area) ?? storyOrder.count
+    }
+
+    static func contentOrder(_ guides: [Guide]) -> [Guide] {
+        guides.enumerated().sorted { a, b in
+            let sa = sectionOrder.firstIndex(of: section(of: a.element)) ?? 0
+            let sb = sectionOrder.firstIndex(of: section(of: b.element)) ?? 0
+            if sa != sb { return sa < sb }
+            let ra = storyRank(a.element), rb = storyRank(b.element)
+            return ra != rb ? ra < rb : a.offset < b.offset
+        }.map(\.element)
+    }
+
     static func referenceGuides(_ entries: [CatalogueEntry], walkthroughs: [String: Walkthrough] = [:]) -> [Guide] {
         let groups = Dictionary(grouping: entries) { "\(areaName($0.area, mission: $0.mission)) \($0.mission ? "Missions" : "Quests")" }
         // Quests before missions, each alphabetical.
