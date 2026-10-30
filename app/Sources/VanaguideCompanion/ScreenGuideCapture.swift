@@ -252,16 +252,15 @@ final class ScreenGuideCapture: ObservableObject {
     struct RecognitionTimeout: Error {}
     /// The recognizer's first request in a process loads its model: about 65 s on this Mac
     /// (2026-10-28), then 0.1 s per read. Warm it up before reading starts.
-    nonisolated(unsafe) static var warm = false
+    nonisolated private static let recognition = OCRRecognitionGate()
+    nonisolated static var warm: Bool { recognition.isWarm }
 
     nonisolated static func warmUp() {
-        guard !warm, !pending else { return }
-        pending = true
+        guard let token = recognition.claim(warmUp: true) else { return }
         DispatchQueue.global(qos: .utility).async {
             let t = Date()
-            _ = try? recognize(sampleImage())
-            warm = true
-            pending = false
+            let result = Result { try recognize(sampleImage()) }
+            recognition.finish(token, succeeded: (try? result.get()) != nil)
             DevTrace.log("warm", ["seconds": Date().timeIntervalSince(t)])
         }
     }
@@ -277,15 +276,11 @@ final class ScreenGuideCapture: ObservableObject {
         image.unlockFocus()
         return image.cgImage(forProposedRect: nil, context: nil, hints: nil)!
     }
-    /// A recognition still running from an earlier timeout; no second one starts beside it.
-    nonisolated(unsafe) private static var pending = false
-
     /// Gives up after `seconds`; a hung request is left to finish on its own, never stacked.
     /// (A task group would wait for the hung child, so the first result resumes a continuation.)
     nonisolated static func recognizeWithTimeout(_ image: CGImage, seconds: Double = 8) async throws -> String {
-        let lock = NSLock()
-        if (lock.withLock { pending }) { throw RecognitionTimeout() }
-        pending = true
+        guard let token = recognition.claim() else { throw RecognitionTimeout() }
+        let lock = NSLock() // This request's reply arbitration, separate from worker ownership.
         return try await withCheckedThrowingContinuation { (done: CheckedContinuation<String, Error>) in
             var resumed = false
             func finish(_ result: Result<String, Error>) {
@@ -296,8 +291,7 @@ final class ScreenGuideCapture: ObservableObject {
             }
             DispatchQueue.global(qos: .utility).async {
                 let result = Result { try recognize(image) }
-                warm = true
-                pending = false
+                recognition.finish(token, succeeded: (try? result.get()) != nil)
                 finish(result)
             }
             DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { finish(.failure(RecognitionTimeout())) }

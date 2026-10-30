@@ -22,10 +22,13 @@ enum CompanionLayoutSelfTest {
         let gear = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"].flatMap {
             WikiData.gear(URL(fileURLWithPath: $0).appendingPathComponent("data/gear_guide.lua"))
         }
+        let monsters = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"].map {
+            MonsterEntry.load(roots: [URL(fileURLWithPath: $0)], world: "HorizonXI")
+        } ?? []
         let scenarios: [(name: String, tab: Int, job: String?)] = [
-            ("tab-0", 0, nil), ("tab-1", 1, nil), ("artifact-war", 1, "WAR"),
-            ("food-melee", 0, "WAR"), ("food-caster", 0, "BLM"),
-            ("tab-2", 2, nil), ("tab-3", 3, nil), ("tab-4", 4, nil)
+            ("fruit-punches", 1, nil), ("tab-0", 0, nil), ("tab-1", 1, nil), ("artifact-war", 1, "WAR"),
+            ("solo-goals", 0, nil), ("guide-completed", 0, nil), ("guide-completed-step", 0, nil), ("search-rabbit", 0, nil), ("monster-jack", 0, nil), ("gil-start", 0, nil), ("food-melee", 0, "WAR"), ("food-caster", 0, "BLM"),
+            ("tab-2", 2, nil), ("tab-3", 3, nil), ("tab-4", 4, nil), ("settings", 5, nil)
         ]
         for scenario in scenarios {
             autoreleasepool {
@@ -35,10 +38,17 @@ enum CompanionLayoutSelfTest {
                     GearItem(id: index, name: "\(job) fixture armor", level: 60, slot: "body", jobs: job,
                              rare: true, ex: true, categories: ["artifact"], how: [])
                 }
+                wiki.monsters = monsters
+                if let root = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"] {
+                    wiki.nmDetails = NMDetails.load(roots: [URL(fileURLWithPath: root)], world: "HorizonXI")
+                }
+                if scenario.name == "fruit-punches" { wiki.openItem = 16443 }
                 wiki.note = ""
                 if let job = scenario.job { wiki.selectArtifactJob(job) }
                 let view = NSHostingView(rootView: CompanionView(layoutTest: true, tab: scenario.tab, wiki: wiki,
-                    foodFixture: scenario.name.hasPrefix("food-") ? scenario.job : nil)
+                    foodFixture: scenario.name.hasPrefix("food-") ? scenario.job : nil, gilFixture: scenario.name == "gil-start",
+                    searchFixture: scenario.name == "search-rabbit" ? "rabbit" : nil,
+                    monsterFixture: scenario.name == "monster-jack" ? monsters.first(where: { $0.name == "Jaggedy-Eared Jack" && $0.zone == 100 })?.id : nil, completedFixture: scenario.name.hasPrefix("guide-completed"), completedStepFixture: scenario.name == "guide-completed-step", goalsFixture: scenario.name == "solo-goals")
                     .preferredColorScheme(.dark).tint(Theme.crystal))
                 let window = NSWindow(contentRect: NSRect(origin: .zero, size: sizes[0]),
                                       styleMask: [.titled, .closable, .resizable],

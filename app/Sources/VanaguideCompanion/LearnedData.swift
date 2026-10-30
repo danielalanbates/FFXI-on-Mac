@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Daniel Bates / Bates LLC. All rights reserved.
 //
-// Developer Mode: quest givers and their zones recorded while playing. Screen Reading supplies
+// Developer Mode: quest givers and their zones recorded while playing. The local reader supplies
 // the zone ("=== Area: … ===") and every speaker line ("Gulemont : …"); the developer assigns
 // a heard speaker to the quest on screen. Saved locally; Export writes guide data to Downloads
 // for merging into the addon's data/quests.lua and data/missions.lua.

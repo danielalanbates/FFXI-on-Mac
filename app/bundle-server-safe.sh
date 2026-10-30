@@ -50,9 +50,16 @@ done
 # Per-server Gear and Skills, generated from each server's public source (data/servers/<key>/).
 for dir in "$SOURCE/data/servers/"*(N/); do
   mkdir -p "$STAGE/Contents/Resources/Vanaguide/data/servers/${dir:t}"
-  for file in "$dir"*.lua(N); do
+  for file in "$dir/"*.lua(N); do
     cp "$file" "$STAGE/Contents/Resources/Vanaguide/data/servers/${dir:t}/"
   done
+done
+# Check server assets through an independent source glob: empty output folders must fail.
+for file in "$SOURCE/data/servers/"*/*.lua(N); do
+  relative="${file#$SOURCE/}"
+  cmp -s "$file" "$STAGE/Contents/Resources/Vanaguide/$relative" || {
+    print -u2 -- "Missing or mismatched guide data: $relative"; exit 1
+  }
 done
 cp "$REPO/LICENSE" "$STAGE/Contents/Resources/LICENSE"
 [[ ! -f "${SOURCE:h}/LICENSE" ]] || cp "${SOURCE:h}/LICENSE" "$STAGE/Contents/Resources/Vanaguide/LICENSE"
@@ -69,8 +76,8 @@ cat > "$STAGE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleName</key><string>ALPHA VanaGuide Server-Safe</string>
-<key>CFBundleDisplayName</key><string>ALPHA VanaGuide Server-Safe</string>
+<key>CFBundleName</key><string>VanaGuide Server-Safe (Beta)</string>
+<key>CFBundleDisplayName</key><string>VanaGuide Server-Safe (Beta)</string>
 <key>CFBundleExecutable</key><string>VanaguideCompanion</string>
 <key>CFBundleIdentifier</key><string>org.batesai.vanaguide-companion</string>
 <key>CFBundlePackageType</key><string>APPL</string>

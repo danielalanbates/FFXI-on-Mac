@@ -40,7 +40,7 @@ struct CompanionApp: App {
     }
 
     var body: some Scene {
-        Window("ALPHA VanaGuide Server-Safe", id: "guide") {
+        Window("VanaGuide Server-Safe (Beta)", id: "guide") {
             CompanionView()
                 .preferredColorScheme(.dark)
                 .tint(Theme.crystal)
@@ -51,16 +51,19 @@ struct CompanionApp: App {
     }
 }
 
-/// Screen Reading is available in the companion's normal UI. Merely exposing the controls
-/// never enumerates windows, requests Screen Recording permission or starts capture.
+/// Automatic window reading is kept off in the public navigation UI.
 enum Features {
-    static let screenReading = true
+    static let screenReading = false
 }
 
 final class CompanionState: ObservableObject {
     @Published var guides: [Guide] = []
     @Published var selected: Int = 0
     @Published var stepIndex: Int = 0
+    @Published var guideSaveError = ""
+    @Published var guideDetailOpen = true
+    var storesGuideProgress = true
+    var guideProgressWriter: (CharacterProgress) -> Bool = { ProgressStore.save($0) }
     @Published var sourceNote = ""
     @Published var screenshotMatchNote = ""
     private var catalogue: [CatalogueEntry] = []
@@ -140,8 +143,7 @@ final class CompanionState: ObservableObject {
         loadCharacter()
         remember()
         restoreZone()
-        stepIndex = 0
-        selected = startGuide
+        openInitialGuide()
     }
     private var screenshotTracker = ScreenshotMatchTracker()
 
@@ -168,6 +170,7 @@ final class CompanionState: ObservableObject {
     }
 
     init(loadData: Bool = true) {
+        storesGuideProgress = loadData
         // The hidden layout verifier uses synthetic state and never loads/saves a character,
         // discovers a game, warms OCR, or reads the launcher's session.
         guard loadData else {
@@ -198,7 +201,7 @@ final class CompanionState: ObservableObject {
         if let w = DevTrace.value("--world") { world = w }
         loadCharacter()
         // A character with nothing recorded starts on Getting started; others on their guides.
-        selected = startGuide
+        openInitialGuide()
         // Developer preview: --open-guide "<name>" [--step <n>] [--zone <id>], for screenshots.
         let args = CommandLine.arguments
         func value(_ flag: String) -> String? {
@@ -234,15 +237,15 @@ final class CompanionState: ObservableObject {
         character = Self.lastCharacter(on: w)
         loadCharacter()
         restoreZone()
-        stepIndex = 0
-        selected = startGuide
+        openInitialGuide()
     }
 
-    /// Getting Started (Screen Reading) for a character with nothing on record; otherwise the
+    /// Getting Started for a character with nothing on record; otherwise the
     /// first real guide.
     var startGuide: Int {
-        guard Features.screenReading else { return 0 }
-        return progress.entries.isEmpty ? 0 : min(1, max(guides.count - 1, 0))
+        let available = guides.indices.filter { guides[$0].available(on: world) }
+        guard Features.screenReading, !progress.entries.isEmpty else { return available.first ?? 0 }
+        return available.first(where: { guides[$0].name != LogSurvey.guide.name }) ?? available.first ?? 0
     }
 
     static func lastCharacter(on world: String) -> String {
@@ -262,8 +265,7 @@ final class CompanionState: ObservableObject {
         loadCharacter()
         remember()
         restoreZone()
-        stepIndex = 0
-        selected = startGuide
+        openInitialGuide()
     }
 
     /// Keeps a chosen or discovered character in this server's list from now on.
@@ -407,10 +409,11 @@ final class CompanionState: ObservableObject {
 
     func nextUnfinished() {
         guard guides.indices.contains(selected) else { return }
-        let steps = guides[selected].steps
-        var i = stepIndex + 1
-        while i < steps.count, status(of: steps[i])?.status == .completed { i += 1 }
-        if i < steps.count { stepIndex = i }
+        let guide = guides[selected]
+        let route = guide.activeStepIndices(startingLocation: progress.guideBookmarks?[guide.progressKey]?.startingLocation)
+        if let next = route.first(where: { $0 > stepIndex && status(of: guide.steps[$0])?.status != .completed }) {
+            moveToStep(next)
+        }
     }
 
     private func readLogPage(_ text: String) {
@@ -554,8 +557,8 @@ final class CompanionState: ObservableObject {
             screenshotMatchNote = "Recognized \(confirmed.title)."
             return
         }
-        selected = confirmed.guide
-        stepIndex = confirmed.step
+        guard guides.indices.contains(confirmed.guide), guides[confirmed.guide].available(on: world) else { return }
+        openGuide(confirmed.guide, at: confirmed.step)
         screenshotMatchNote = "Opened \(confirmed.title)."
         DevTrace.log("opened", ["title": confirmed.title, "key": confirmed.key,
                                 "guide": guides[confirmed.guide].name, "step": confirmed.step + 1])
@@ -639,14 +642,16 @@ struct CompanionView: View {
     // --tab <n> (test hook) opens on another tab, 1 Gear, 2 Skills, 3 Achievements, 4 Server, for --snapshot.
     @State var tab = CommandLine.arguments.firstIndex(of: "--tab")
         .flatMap { CommandLine.arguments.indices.contains($0 + 1) ? Int(CommandLine.arguments[$0 + 1]) : nil } ?? 0
-    @State private var showReading = false
-    @State private var addingCharacter = false
-    @State private var newCharacter = ""
+    @State var expandedContent: Set<String> = ["Start Here"]
+    @State var globalSearch = ""
+    @State var showSearch = false
+    @State var searchPage: GuideSearchTarget?
     private let layoutTest: Bool
 
-    init(layoutTest: Bool = false, tab: Int? = nil, wiki: WikiState? = nil, foodFixture: String? = nil) {
+    init(layoutTest: Bool = false, tab: Int? = nil, wiki: WikiState? = nil, foodFixture: String? = nil, gilFixture: Bool = false, searchFixture: String? = nil, monsterFixture: String? = nil, completedFixture: Bool = false, completedStepFixture: Bool = false, goalsFixture: Bool = false) {
         self.layoutTest = layoutTest
         let initialState = CompanionState(loadData: !layoutTest)
+        if layoutTest && tab == 5 { initialState.characterOptions = ["Layout", "SecondCharacter"] }
         if layoutTest, let foodFixture {
             initialState.guides = [Guide(name: QuestCatalogue.displayName("Starting out"), desc: "Starter food for this character.", levels: "1-10",
                 steps: [GuideStep(kind: "t", title: "Buy a few affordable food portions before fighting.",
@@ -654,9 +659,33 @@ struct CompanionView: View {
             initialState.progress.foodJob = foodFixture
             initialState.progress.homeNation = "San d'Oria"
         }
+        if layoutTest && gilFixture {
+            initialState.guides = [Guide(name: "Solo Gil - HorizonXI", desc: "Choose your starting location.", levels: "Early quests",
+                steps: ["Windurst", "San d'Oria", "Bastok"].map { nation in
+                    GuideStep(kind: "t", title: "Start in \(nation).", note: "Starting location: \(nation). Check requirements and costs before travelling.", tags: ["START": nation])
+                })]
+        }
+        if layoutTest && goalsFixture {
+            initialState.guides = [Guide(name: "Solo Guide - HorizonXI", desc: "Leveling, quests and notorious monsters in one route.", levels: "1-75 ALPHA",
+                steps: [GuideStep(kind: "C", title: "Levels 26-30: Bull Dhalmel.", note: "Starting location: All starting cities. Pull one at a time; these monsters link.", tags: ["EXP": "Bull Dhalmel (20-24) — Buburimu Peninsula.", "GIL": "Carnivorous Crawler for Silk Thread, or Bull Dhalmel for Dhalmel Hide and Dhalmel Meat.", "LV": "30"])])]
+        }
+        if layoutTest && completedFixture {
+            _ = initialState.finishGuideStep()
+            if completedStepFixture { initialState.openGuide(0) }
+            _expandedContent = State(initialValue: ["Start Here", "Completed"])
+        }
+        if layoutTest, let root = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"] {
+            initialState.zones = WorldMap.load(root: URL(fileURLWithPath: root))
+        }
         _state = StateObject(wrappedValue: initialState)
         _wiki = StateObject(wrappedValue: wiki ?? WikiState())
         if let tab { _tab = State(initialValue: tab) }
+        if let searchFixture {
+            _globalSearch = State(initialValue: searchFixture)
+            _showSearch = State(initialValue: true)
+        }
+        if let monsterFixture { _searchPage = State(initialValue: .monster(monsterFixture)) }
+
     }
     static let addCharacterTag = "\u{1}add"
 
@@ -665,14 +694,19 @@ struct CompanionView: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            header
+            header.zIndex(10)
             Group {
+                if let page = searchPage {
+                    searchDetail(page)
+                } else {
                 switch tab {
                 case 1: gearPane
                 case 2: skillsPane
                 case 3: achievementsPane
-                case 4: serverPane
+                case 4: guidesPane
+                case 5: CharacterSettingsView(state: state)
                 default: guidesPane
+                }
                 }
             }
                 .frame(maxHeight: .infinity)
@@ -685,7 +719,7 @@ struct CompanionView: View {
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
             guard !layoutTest else { return }
             state.reloadProgress()
-            state.applyLauncherWorld()
+            if tab != 5 { state.applyLauncherWorld() }
         }
         .onAppear {
             guard !layoutTest else { return }
@@ -708,7 +742,11 @@ struct CompanionView: View {
             }
         }
         .onChange(of: state.isSurveying) { capture.fullWindow = $0 }
-        .onChange(of: state.world) { if !layoutTest { wiki.load(roots: CompanionState.vanaguideRoots, world: $0) } }
+        .onChange(of: state.world) {
+            searchPage = nil; showSearch = false
+            if !layoutTest { wiki.load(roots: CompanionState.vanaguideRoots, world: $0) }
+        }
+        .onChange(of: tab) { _ in searchPage = nil; showSearch = false }
         .onDisappear { capture.stop() }
     }
 
@@ -736,22 +774,23 @@ struct CompanionView: View {
         }
     }
 
-    // MARK: Header — tabs, character, screen reading
+    // MARK: Header — tabs, character, search
 
     var header: some View {
         VStack(spacing: 6) {
             HStack(spacing: 8) {
-                Text("ALPHA VanaGuide").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.gold)
+                Text("VanaGuide (Beta)").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.gold)
                 Text("Server-Safe").font(.system(size: 12)).foregroundStyle(Theme.muted)
                 Spacer()
-                if Features.screenReading { readingStatus }
+                globalSearchBar
             }
+            .zIndex(2)
             Picker("", selection: $tab) {
                 Text("Guides").tag(0)
                 Text("Gear").tag(1)
                 Text("Skills").tag(2)
-                Text("Server").tag(4)
                 Text("Achievements").tag(3)
+                Text("Settings").tag(5)
             }
             .pickerStyle(.segmented).labelsHidden()
             HStack(spacing: 6) {
@@ -760,26 +799,16 @@ struct CompanionView: View {
                     ForEach(state.worldOptions, id: \.self) { Text($0).tag($0) }
                 }
                 .frame(width: 165)
-                if addingCharacter {
-                    TextField("Character name", text: $newCharacter).frame(width: 120)
-                        .onSubmit {
-                            state.selectCharacter(newCharacter.capitalized)
-                            newCharacter = ""
-                            addingCharacter = false
-                        }
-                    Button("Cancel") { newCharacter = ""; addingCharacter = false }
-                } else {
-                    Picker("Character", selection: Binding(get: { state.character }, set: {
-                        if $0 == Self.addCharacterTag { addingCharacter = true } else { state.selectCharacter($0) }
-                    })) {
-                        if state.character.isEmpty { Text("None yet").tag("") }
-                        ForEach(state.characterOptions, id: \.self) { Text($0).tag($0) }
-                        Divider()
-                        Text("Add Character…").tag(Self.addCharacterTag)
-                    }
-                    .frame(width: 150)
-                    .disabled(state.world.isEmpty)
+                Picker("Character", selection: Binding(get: { state.character }, set: {
+                    if $0 == Self.addCharacterTag { tab = 5 } else { state.selectCharacter($0) }
+                })) {
+                    if state.character.isEmpty { Text("None yet").tag("") }
+                    ForEach(state.characterOptions, id: \.self) { Text($0).tag($0) }
+                    Divider()
+                    Text("Manage Characters…").tag(Self.addCharacterTag)
                 }
+                .frame(width: 150)
+                .disabled(state.world.isEmpty)
                 Spacer()
                 if !state.discoveryNote.isEmpty {
                     Text(state.discoveryNote).font(.caption).foregroundStyle(Theme.crystal).lineLimit(1)
@@ -788,95 +817,24 @@ struct CompanionView: View {
                     Text("Developer Mode activated").font(.caption.bold()).foregroundStyle(Theme.alert)
                         .lineLimit(1).fixedSize()
                 }
-                Text("\(state.progress.completedCount) completed · \(state.progress.currentCount) current")
+                let completedGuides = state.guides.filter { $0.available(on: state.world) && state.progress.completed($0) }.count
+                Text("\(completedGuides) \(completedGuides == 1 ? "guide" : "guides") · \(state.progress.completedCount) quests completed")
                     .font(.caption).foregroundStyle(Theme.muted).lineLimit(1).fixedSize()
             }
             .textFieldStyle(.roundedBorder).controlSize(.small)
         }
     }
 
-    /// Screen Reading carries the Developer Mode hammer: red when it is on.
+    /// Developer Mode indicator.
     var hammer: some View {
         Image(systemName: state.devMode ? "hammer.fill" : "hammer")
             .foregroundStyle(state.devMode ? Theme.alert : Theme.text)
     }
 
-    var readingStatus: some View {
-        HStack(spacing: 6) {
-            if capture.running {
-                Circle().fill(ScreenGuideCapture.warm ? Theme.jade : Theme.gold).frame(width: 8, height: 8)
-                    .help(!ScreenGuideCapture.warm ? "Preparing text recognition…"
-                          : capture.discovering ? "Finding your character…" : capture.note)
-                Button { state.devMode.toggle() } label: { hammer }
-                    .controlSize(.small)
-                    .help(state.devMode ? "Developer Mode is on: recording quest givers and zones. Click to turn off."
-                                        : "Developer Mode: record quest givers and their zones while you play.")
-                Button("Stop") { capture.stop() }.controlSize(.small)
-            } else {
-                Button { showReading.toggle() } label: { HStack(spacing: 4) { hammer; Text("Screen Reading…") } }
-                    .controlSize(.small)
-                    .popover(isPresented: $showReading, arrowEdge: .bottom) { readingSettings }
-            }
-        }
-    }
-
-    var readingSettings: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Screen Reading").font(.headline).foregroundStyle(Theme.gold)
-            Text("Reads the chosen game window every 10 seconds, on this Mac only. Use it where your server permits screen tools.")
-                .font(.caption).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
-            HStack {
-                Button("Find Game Window") { capture.refreshWindows() }.disabled(capture.busy)
-                Picker("", selection: $capture.selectedID) {
-                    Text("Choose…").tag(Optional<CGWindowID>.none)
-                    ForEach(capture.windows) { window in Text(window.label).tag(Optional(window.id)) }
-                }
-                .labelsHidden()
-            }
-            SectionLabel(text: "Chat area, % of window")
-            HStack(spacing: 8) {
-                cropField("Left", value: $capture.crop.left)
-                cropField("Top", value: $capture.crop.top)
-                cropField("Width", value: $capture.crop.width)
-                cropField("Height", value: $capture.crop.height)
-            }
-            if !capture.note.isEmpty {
-                Text(capture.note).font(.caption).foregroundStyle(Theme.muted)
-            }
-            Toggle(isOn: $state.devMode) {
-                HStack(spacing: 4) { hammer; Text("Developer Mode: record quest givers and their zones") }
-            }
-            .toggleStyle(.checkbox)
-            HStack {
-                Spacer()
-                Button("Start Reading") {
-                    state.resetScreenshotMatching()
-                    capture.fullWindow = state.isSurveying
-                    capture.start()
-                    state.readingStarted(windowTitle: capture.targetTitle)
-                    tab = 0
-                    showReading = false
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(capture.selectedID == nil || !capture.crop.valid || capture.busy)
-            }
-        }
-        .padding(14)
-        .frame(width: 380)
-    }
-
-    func cropField(_ label: String, value: Binding<Double>) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label).font(.caption2).foregroundStyle(Theme.muted)
-            TextField(label, value: value, format: .number.precision(.fractionLength(0...1)))
-                .frame(width: 56).textFieldStyle(.roundedBorder)
-        }
-    }
-
     // MARK: Guides
 
     var guide: Guide? {
-        state.guides.indices.contains(state.selected) ? state.guides[state.selected] : nil
+        state.guides.indices.contains(state.selected) && state.guides[state.selected].available(on: state.world) ? state.guides[state.selected] : nil
     }
 
     var guidesPane: some View {
@@ -885,28 +843,123 @@ struct CompanionView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Content").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.gold)
                         .padding(.leading, 4)
-                    List(selection: Binding<Int?>(
-                        get: { state.selected },
-                        set: { state.selected = $0 ?? 0; state.stepIndex = 0 }
-                    )) {
-                        ForEach(QuestCatalogue.sectionOrder, id: \.self) { section in
-                            let rows = state.guides.indices.filter { QuestCatalogue.section(of: state.guides[$0]) == section }
-                            if !rows.isEmpty {
-                                Section(section) {
-                                    ForEach(rows, id: \.self) { i in
-                                        Text(state.guides[i].name).font(.callout).lineLimit(2).tag(Optional(i))
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(QuestCatalogue.sectionOrder + ["Completed"], id: \.self) { section in
+                                let rows = state.guides.indices.filter { state.guides[$0].available(on: state.world) && (section == "Completed" ? state.progress.completed(state.guides[$0]) : QuestCatalogue.section(of: state.guides[$0]) == section) }
+                                let articles = section == "Start Here" ? wiki.notes : wiki.quests.filter { article in
+                                    section == "Jobs" ? article.group.lowercased().contains("job") : section == "Missions" ? article.group.lowercased().contains("mission") : section == "Quests" && !article.group.lowercased().contains("job") && !article.group.lowercased().contains("mission")
+                                }
+                                if !rows.isEmpty || !articles.isEmpty {
+                                    Button {
+                                        if expandedContent.contains(section) { expandedContent.remove(section) }
+                                        else { expandedContent.insert(section) }
+                                    } label: {
+                                        HStack(spacing: 7) {
+                                            Image(systemName: expandedContent.contains(section) ? "chevron.down" : "chevron.right")
+                                                .font(.system(size: 10, weight: .bold)).frame(width: 12)
+                                            Text(section).font(.system(size: 13, weight: .semibold))
+                                            Spacer(minLength: 0)
+                                        }
+                                        .foregroundStyle(Theme.gold)
+                                        .padding(.horizontal, 8).padding(.vertical, 9)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(Theme.stroke.opacity(0.5), in: RoundedRectangle(cornerRadius: 5))
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityValue(expandedContent.contains(section) ? "Expanded" : "Collapsed")
+                                    .help("Expand or collapse \(section)")
+                                    if expandedContent.contains(section) {
+                                        ForEach(articles, id: \.name) { article in
+                                            Button { searchPage = .server(WikiState.tag(article)) } label: {
+                                                Text(article.name).font(.callout).foregroundStyle(Theme.crystal)
+                                                    .multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
+                                                    .padding(.vertical, 7).padding(.leading, 16)
+                                            }.buttonStyle(.plain)
+                                        }
+                                        ForEach(rows, id: \.self) { i in
+                                            Button {
+                                                state.openGuide(i)
+                                            } label: {
+                                                HStack(alignment: .top, spacing: 4) {
+                                                    Text(state.guides[i].name).font(.callout)
+                                                        .multilineTextAlignment(.leading)
+                                                        .fixedSize(horizontal: false, vertical: true)
+                                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                                    if state.progress.completed(state.guides[i]) {
+                                                        Image(systemName: "star.fill").font(.caption).foregroundStyle(Theme.gold)
+                                                            .accessibilityLabel("Completed")
+                                                    }
+                                                }
+                                                    .padding(.vertical, 7).padding(.leading, 16).padding(.trailing, 6)
+                                                    .foregroundStyle(state.selected == i ? Theme.crystal : Theme.text)
+                                                    .background(state.selected == i ? Theme.crystal.opacity(0.14) : Color.clear,
+                                                                in: RoundedRectangle(cornerRadius: 5))
+                                                    .contentShape(Rectangle())
+                                            }
+                                            .buttonStyle(.plain)
+                                            .accessibilityAddTraits(state.selected == i ? .isSelected : [])
+                                            .id("\(section):\(i)")
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                    .scrollContentBackground(.hidden)
-                    .listStyle(.sidebar)
+                    .onChange(of: state.selected) { index in
+                        guard state.guides.indices.contains(index) else { return }
+                        expandedContent.insert(QuestCatalogue.section(of: state.guides[index]))
+                    }
                 }
             }
             .frame(width: 190)
 
-            Card { stepDetail }
+            Card {
+                if state.guideDetailOpen { stepDetail }
+                else { completedGuideOverview }
+            }
+        }
+    }
+
+    var completedGuideOverview: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Guide completed", systemImage: "star.fill")
+                    .font(.title2.bold()).foregroundStyle(Theme.gold)
+                Spacer()
+                if let g = guide, state.progress.completed(g) {
+                    Button("Not Completed") { state.uncompleteGuide() }
+                        .controlSize(.small)
+                }
+            }
+            if let guide {
+                Text(guide.name).font(.headline)
+            }
+            if !state.guideSaveError.isEmpty {
+                Text(state.guideSaveError).font(.caption).foregroundStyle(Theme.ember)
+            }
+            Text("Choose another guide from Content, or review a completed guide below.")
+                .font(.callout).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(state.guides.indices.filter { state.guides[$0].available(on: state.world) && state.progress.completed(state.guides[$0]) }, id: \.self) { index in
+                        Button { state.openGuide(index) } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "star.fill").foregroundStyle(Theme.gold)
+                                Text(state.guides[index].name).multilineTextAlignment(.leading)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Spacer(minLength: 0)
+                                Text("Review").font(.caption).foregroundStyle(Theme.crystal)
+                            }
+                            .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Theme.stroke.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
         }
     }
 
@@ -934,6 +987,20 @@ struct CompanionView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(g.name).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.gold)
                     .lineLimit(2)
+                if !state.guideSaveError.isEmpty {
+                    Text(state.guideSaveError).font(.caption).foregroundStyle(Theme.ember)
+                }
+                let starts = g.steps.indices.filter { g.steps[$0].tags["START"] != nil }
+                if !starts.isEmpty {
+                    Picker(g.startingLocationLabel, selection: Binding<Int>(
+                        get: { starts.first(where: { g.steps[$0].tags["START"] == state.progress.guideBookmarks?[g.progressKey]?.startingLocation }) ?? starts[0] },
+                        set: { state.moveToStep($0) }
+                    )) {
+                        ForEach(starts, id: \.self) { index in
+                            Text(g.steps[index].tags["START"] ?? "").tag(index)
+                        }
+                    }
+                }
                 if !g.desc.isEmpty {
                     Text(g.desc).font(.caption).foregroundStyle(Theme.muted)
                         .fixedSize(horizontal: false, vertical: true)
@@ -942,7 +1009,11 @@ struct CompanionView: View {
                     let s = state.resolved(g.steps[state.stepIndex])
                     ScrollView {
                         VStack(alignment: .leading, spacing: 6) {
-                            SectionLabel(text: "Step \(state.stepIndex + 1) of \(g.steps.count)")
+                            let route = g.activeStepIndices(startingLocation: state.progress.guideBookmarks?[g.progressKey]?.startingLocation)
+                            SectionLabel(text: "Step \((route.firstIndex(of: state.stepIndex) ?? 0) + 1) of \(route.count)")
+                            if state.progress.guideBookmarks?[g.progressKey]?.completedSteps?.contains(g.steps[state.stepIndex].title) == true {
+                                Label("Step completed", systemImage: "star.fill").foregroundStyle(Theme.gold).font(.caption)
+                            }
                             if StarterFood.isFoodStep(guide: g.name, title: s.title) {
                                 foodProfile
                             }
@@ -958,11 +1029,12 @@ struct CompanionView: View {
                             .stroke(state.devMode ? Theme.alert : .clear, lineWidth: 1.5))
                     }
                 }
+                let route = g.activeStepIndices(startingLocation: state.progress.guideBookmarks?[g.progressKey]?.startingLocation)
+                let isFinalCompleted = state.progress.completed(g) && route.first(where: { $0 > state.stepIndex }) == nil
                 HStack {
-                    Button("Back") { if state.stepIndex > 0 { state.stepIndex -= 1 } }
-                    Button("Done") {
-                        if g.steps.indices.contains(state.stepIndex) { state.markDone(g.steps[state.stepIndex]) }
-                        if state.stepIndex < g.steps.count - 1 { state.stepIndex += 1 }
+                    Button("Back") { state.previousGuideStep() }
+                    Button(isFinalCompleted ? "Not Completed" : "Done") {
+                        if state.finishGuideStep() { expandedContent.insert("Completed") }
                     }
                     .keyboardShortcut(.defaultAction)
                     Button("Next Unfinished") { state.nextUnfinished() }
@@ -1004,7 +1076,16 @@ struct CompanionView: View {
             Label("Unlocks \(job)", systemImage: "person.badge.plus").font(.callout).foregroundStyle(Theme.gold)
         }
         if let lv = s.tags["LV"] {
-            Label("Recommended level \(lv)", systemImage: "chart.bar").font(.caption).foregroundStyle(Theme.muted)
+            Label(s.goals.isEmpty ? "Recommended level \(lv)" : "Level goal: \(lv)", systemImage: "chart.bar").font(.caption).foregroundStyle(Theme.muted)
+        }
+        ForEach(Array(s.goals.enumerated()), id: \.offset) { _, goal in
+            HStack(alignment: .top, spacing: 7) {
+                Text("•").foregroundStyle(Theme.gold)
+                (Text(goal.label + ": ").bold() + Text(goal.text))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            .font(.callout)
         }
         if let n = s.note, let scripted = s.tags["WALK"] {
             // Walkthrough from the server's own quest script: numbered, after where to go.
@@ -1055,8 +1136,6 @@ struct CompanionView: View {
             } else {
                 Text("Go to \(state.zones.name(target))\(npc.map { $0.isMarker ? " and find the small glowing \"???\" spot. Target it and press Enter." : " and find \($0). Target them and press Enter to talk." } ?? ".")")
                     .font(.callout).fixedSize(horizontal: false, vertical: true)
-                Text("Turn on Screen Reading and the guide will give turn-by-turn directions from where you are.")
-                    .font(.caption).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
             }
         } else if s.tags["Q"] != nil || s.tags["M"] != nil {
             Text("The guide doesn't know where this one starts yet.")
@@ -1071,7 +1150,7 @@ struct CompanionView: View {
         VStack(alignment: .leading, spacing: 6) {
             SectionLabel(text: "Developer Mode")
             if !capture.running {
-                Text("Start Screen Reading to record.").font(.caption).foregroundStyle(Theme.ember)
+                Text("No current location available.").font(.caption).foregroundStyle(Theme.ember)
             }
             Text(state.currentZone.map { "Zone: \(state.zones.name($0))" }
                  ?? "Zone unknown — change zones once so the Area line appears in chat.")
@@ -1117,16 +1196,24 @@ struct CompanionView: View {
 
     @ViewBuilder
     func stepStatus(_ s: GuideStep, in g: Guide) -> some View {
+        if let source = s.tags["SRC"], let url = URL(string: source), url.host == "horizonffxi.wiki" {
+            Link("Horizon wiki", destination: url).font(.caption)
+        }
+        let route = g.activeStepIndices(startingLocation: state.progress.guideBookmarks?[g.progressKey]?.startingLocation)
+        let isFinalCompleted = state.progress.completed(g) && route.first(where: { $0 > state.stepIndex }) == nil
         if let r = state.status(of: s) {
             Text(r.status == .completed ? "Completed · from your \(r.source)" : "Current · from your \(r.source)")
                 .font(.caption).foregroundStyle(r.status == .completed ? Theme.jade : Theme.crystal)
+        } else if isFinalCompleted {
+            Text("Completed · click Not Completed below to mark incomplete.")
+                .font(.caption).foregroundStyle(Theme.jade)
         } else if s.fixed && s.tags["LOG"] == nil {
             Text("Press Done once you have finished this in game.")
                 .font(.caption).foregroundStyle(Theme.gold)
         }
         if g.name == LogSurvey.guideName {
             if s.tags["LOG"] != "none" && !capture.running {
-                Text("Start Screen Reading so this page can be recorded.")
+                Text("Mark completed quests with Done as you follow a guide.")
                     .font(.caption).foregroundStyle(Theme.ember)
             }
             if !state.surveyNote.isEmpty {
@@ -1202,7 +1289,7 @@ struct CompanionView: View {
     @ViewBuilder
     func row(_ r: AchievementRow) -> some View {
         if let link = state.guideLink(for: r.info) {
-            Button { state.selected = link.guide; state.stepIndex = link.step; tab = 0 } label: { linkedRow(r, to: "Open in Guides") }
+            Button { state.openGuide(link.guide, at: link.step); tab = 0 } label: { linkedRow(r, to: "Open in Guides") }
                 .buttonStyle(.plain).help("Open the guide for this achievement")
         } else if let item = achievementItem(r.info) {
             Button { wiki.openItem = item.id; wiki.category = nil; tab = 1 } label: { linkedRow(r, to: "Open \(item.name) in Gear") }

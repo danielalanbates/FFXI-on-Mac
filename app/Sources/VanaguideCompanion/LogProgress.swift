@@ -21,6 +21,8 @@ struct CharacterProgress: Codable, Equatable {
     var world: String
     var foodJob: String?
     var homeNation: String?
+    var guideBookmarks: [String: GuideBookmark]?
+    var lastGuide: String?
     /// Catalogue keys ("Q:sandoria,6", "M:sandoria,1") to what was last seen.
     var entries: [String: LogRecord] = [:]
     var updated = Date()
@@ -120,8 +122,8 @@ enum LogSurvey {
         return Guide(name: guideName,
                      desc: "Show the guide your in-game logs once, so it knows what you have done. Nothing is read from the server.",
                      levels: "", steps: [
-            step("Choose Your Character and Start Reading",
-                 "Above, choose your server, then your character (Add Character… for a new one). Then open Screen Reading…, press Find Game Window, choose the game and press Start Reading. On these steps the whole game window is read, so the chat area does not matter.",
+            step("Choose Your Character",
+                 "Above, choose your server, then your character (Add Character… for a new one). Use search to find a guide, step or monster.",
                  list: "none"),
             step("Open the Main Menu",
                  "Log in and stand somewhere safe. Press the minus key (−) to open the Main Menu (on a gamepad, the menu button). Keep the game window visible next to this one.",

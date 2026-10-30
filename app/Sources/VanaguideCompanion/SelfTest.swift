@@ -50,6 +50,9 @@ enum CompanionSelfTest {
         checks.append(("buy steps retain item conditions",
                        GuideParser.parseStep("B Buy food.|IT|4376,3|")?.tags["IT"] == "4376,3"))
 
+        checks.append(("starting-city entry point is retained for route navigation",
+                       GuideParser.parseStep("t Start in Windurst.|START|Windurst||N|Starting location: Windurst.|")?.tags["START"] == "Windurst"))
+
         for nation in ["San d'Oria", "Bastok", "Windurst"] {
             for job in ["WAR", "MNK", "WHM", "BLM", "RDM", "THF"] {
                 let advice = StarterFood.advice(job: job, nation: nation)
@@ -66,6 +69,47 @@ enum CompanionSelfTest {
         checks.append(("other guides do not borrow food controls",
                        !StarterFood.isFoodStep(guide: "Other", title: "Buy a few affordable food portions before fighting.")))
 
+        let goalStep = GuideParser.parseStep("C Farm.|EXP|Forest Hare near the city.|GIL|Crawler for Silk Thread.|N|Choose safe pulls.|")
+        checks.append(("EXP and Gil goals parse as two ordered bullet items", goalStep?.goals.map { $0.label } == ["EXP", "Gil"]))
+        checks.append(("goal notes stay separate from objective bullets", goalStep?.note == "Choose safe pulls."))
+        let aliasFixture = GuideParser.parse(#"G.register({ name = "Solo Guide - HorizonXI", server = "HorizonXI", progress_id = "Solo Gil - HorizonXI", legacy_progress_id = "Solo EXP - HorizonXI", steps = [[C Test.]] })"#).first
+        checks.append(("progress_id cannot be confused with legacy_progress_id", aliasFixture?.progressID == "Solo Gil - HorizonXI" && aliasFixture?.legacyProgressID == "Solo EXP - HorizonXI"))
+        let searchWiki = WikiState()
+        searchWiki.monsters = [MonsterEntry(name: "Jaggedy-Eared Jack", zone: 100, family: "Rabbit", lo: 9, hi: 10,
+            nm: true, drops: "Rabbit Charm", note: "G-9–H-9", source: "https://horizonffxi.wiki/Category:Rabbits", scope: "HorizonXI")]
+        if let goalStep {
+            let goalHits = GuideSearch.hits(query: "Silk Thread", guides: [Guide(name: "Camp", desc: "", levels: "", steps: [goalStep])], world: "HorizonXI", wiki: searchWiki, zones: WorldMap())
+            checks.append(("search includes objective bullets after separating them from notes", goalHits.contains { $0.target == .guide(0, 0) }))
+        }
+        let searchGuides = [Guide(name: "Solo EXP", desc: "Leveling", levels: "1-75", steps: [
+            GuideStep(kind: "K", title: "Defeat Forest Hare", note: "Rabbit hides")], server: "HorizonXI"),
+            Guide(name: "Other server", desc: "rabbit", levels: "", steps: [], server: "Other")]
+        let rabbitHits = GuideSearch.hits(query: "rabbit", guides: searchGuides, world: "HorizonXI", wiki: searchWiki, zones: WorldMap())
+        checks.append(("rabbit search offers a monster-family database", rabbitHits.contains { $0.target == .family("Rabbit") }))
+        checks.append(("rabbit search separately offers Jaggedy-Eared Jack", rabbitHits.contains { $0.target == .monster(searchWiki.monsters[0].id) }))
+        checks.append(("rabbit search opens the exact matching guide step", rabbitHits.contains { $0.target == .guide(0, 0) && $0.subtitle.contains("Step 1") }))
+        checks.append(("search excludes other-server guides", !rabbitHits.contains { $0.target == .guide(1, 0) }))
+        checks.append(("search normalizes punctuation and case", GuideSearch.matches("jaggedy eared JACK", "Jaggedy-Eared Jack")))
+        checks.append(("plural rabbits also finds the Rabbit family", GuideSearch.matches("rabbits", "Rabbit")))
+        checks.append(("blank search offers no suggestions", GuideSearch.hits(query: "  ", guides: searchGuides, world: "HorizonXI", wiki: searchWiki, zones: WorldMap()).isEmpty))
+        checks.append(("unmatched search offers no suggestions", GuideSearch.hits(query: "zzzznoentry", guides: searchGuides, world: "HorizonXI", wiki: searchWiki, zones: WorldMap()).isEmpty))
+        if let root = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"] {
+            let details = NMDetails.load(roots: [URL(fileURLWithPath: root)], world: "HorizonXI")
+            let tom = details.first { $0.name == "Tom Tit Tat" && $0.zone == 115 }
+            checks.append(("Fruit Punches NM has lottery, camp, NM and distinct placeholder IDs", tom?.spawn.contains("Lottery") == true && tom?.area.contains("H-6") == true && tom?.ids.contains("17248468") == true && tom?.ph.contains("17248467") == true))
+            checks.append(("NM catalogue covers standard encounters", details.count > 3000))
+            let monsters = MonsterEntry.load(roots: [URL(fileURLWithPath: root)], world: "HorizonXI")
+            checks.append(("Horizon monster data keeps Jack in West Ronfaure at 9-10", monsters.contains { $0.name == "Jaggedy-Eared Jack" && $0.zone == 100 && $0.lo == 9 && $0.hi == 10 && $0.family == "Rabbit" && $0.scope == "HorizonXI" }))
+            checks.append(("Horizon rabbit family excludes the standard Nyzul duplicate", !monsters.contains { $0.name == "Jaggedy-Eared Jack" && $0.zone == 77 }))
+        }
+
+        var scoped = Guide(name: "Scoped", desc: "", levels: "", steps: [], server: "HorizonXI")
+        checks.append(("server guide accepts matching world and spacing", scoped.available(on: "Horizon XI")))
+        checks.append(("server guide excludes another or unknown world",
+                       !scoped.available(on: "CatsEyeXI") && !scoped.available(on: "")))
+        scoped.server = nil
+        checks.append(("general guides remain available", scoped.available(on: "CatsEyeXI")))
+
         // An explicit developer source can exercise the real library. Offline fixtures must
         // never auto-discover/hydrate the user's Google Drive or request app permissions.
         let real = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"].map {
@@ -73,7 +117,33 @@ enum CompanionSelfTest {
         }
         if let real {
             let library = GuideParser.loadAll(from: real)
+            let solo = library.filter { $0.name == "Solo Guide - HorizonXI" }
+            checks.append(("one unified Horizon solo entry replaces separate EXP and Gil guides", solo.count == 1 && !library.contains { $0.name == "Solo EXP - HorizonXI" || $0.name == "Solo Gil - HorizonXI" }))
+            if let solo = solo.first {
+                checks.append(("every actual leveling step has two separate goals", solo.steps.filter { $0.tags["LV"] != nil }.allSatisfy { $0.goals.count == 2 }))
+                checks.append(("unified guide retains 30 steps for each origin", ["Windurst", "San d'Oria", "Bastok"].allSatisfy { solo.activeStepIndices(startingLocation: $0).count == 30 }))
+            }
             checks.append(("real authored guide library loads", library.count >= 2))
+            let support = library.filter { $0.name == "Support jobs" }
+            checks.append(("one Support Jobs guide covers both towns", support.count == 1 && !library.contains { $0.name == "Support jobs - Mhaura" }))
+            if let support = support.first {
+                checks.append(("support town selector has ten steps per branch", support.startingLocationLabel == "Route" && ["Selbina", "Mhaura"].allSatisfy { support.activeStepIndices(startingLocation: $0).count == 10 }))
+                let old = Guide(name: "Support jobs - Mhaura", desc: "", levels: "", steps: [GuideStep(kind: "t", title: "Trade one Wild Rabbit Tail to Vera, then finish the dialogue.")])
+                var record = CharacterProgress(character: "Fixture", world: "HorizonXI")
+                record.homeNation = "Windurst"
+                record.remember(old, step: 0, completed: true)
+                record.migrateGuideAliases([support])
+                checks.append(("combined support migration keeps Mhaura town, instruction and unlock star", record.completed(support) && record.guideBookmarks?[support.progressKey]?.startingLocation == "Mhaura" && support.steps[record.resumeStep(in: support)].title == old.steps[0].title))
+            }
+            let root = real.deletingLastPathComponent()
+            let walks = QuestCatalogue.walkthroughs(at: root)
+            let blue = walks["Q:ahturhgan,5"]
+            checks.append(("BLU solution overlay supplies all ten required answers", blue?.steps.filter { $0.hasPrefix("Answer ") }.count == 10))
+            checks.append(("BLU answers replace the missing-answer placeholder", blue?.steps.joined(separator: " ").contains("does not name the right answers") == false))
+            let refs = QuestCatalogue.referenceGuides(QuestCatalogue.entries(at: root), walkthroughs: walks)
+            let blueJob = QuestCatalogue.jobUnlockGuide(from: refs)?.steps.first { $0.tags["JOB"] == "Blue Mage" }
+            checks.append(("Job Unlocks displays BLU answers and final pool location", blueJob?.note?.contains("Answer 10") == true && blueJob?.note?.contains("pool at H-9") == true && blueJob?.tags["SRC"] == "https://horizonffxi.wiki/An_Empty_Vessel"))
+
             checks.append(("every real guide parses at least three steps",
                            library.allSatisfy { $0.steps.count >= 3 }))
             checks.append(("every real guide step keeps an action and readable instruction",
@@ -84,6 +154,10 @@ enum CompanionSelfTest {
 
         checks += achievementChecks(guides: guides)
         checks += screenshotChecks()
+        checks += guideProgressChecks()
+        if let directory = ProcessInfo.processInfo.environment["VANAGUIDE_TEST_DIRECTORY"] {
+            checks += characterSettingsChecks(in: URL(fileURLWithPath: directory))
+        }
         checks += artifactJobChecks()
 
         var failures = 0

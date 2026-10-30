@@ -1031,7 +1031,7 @@ struct ContentView: View {
             // every world, allowlist or not. Players look for it here, not in Performance.
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("ALPHA VanaGuide Server-Safe").font(.system(size: 12)).bold()
+                    Text("VanaGuide Server-Safe (Beta)").font(.system(size: 12)).bold()
                     Text("Quests, gear, skills and server notes in their own window. Loads nothing into the game and reads nothing from the server.")
                         .font(.system(size: 12)).foregroundStyle(Vana.muted)
                         .fixedSize(horizontal: false, vertical: true)
