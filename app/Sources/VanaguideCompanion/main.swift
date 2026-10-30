@@ -644,9 +644,17 @@ struct CompanionView: View {
     @State private var newCharacter = ""
     private let layoutTest: Bool
 
-    init(layoutTest: Bool = false, tab: Int? = nil, wiki: WikiState? = nil) {
+    init(layoutTest: Bool = false, tab: Int? = nil, wiki: WikiState? = nil, foodFixture: String? = nil) {
         self.layoutTest = layoutTest
-        _state = StateObject(wrappedValue: CompanionState(loadData: !layoutTest))
+        let initialState = CompanionState(loadData: !layoutTest)
+        if layoutTest, let foodFixture {
+            initialState.guides = [Guide(name: "Starting out", desc: "Starter food for this character.", levels: "1-10",
+                steps: [GuideStep(kind: "t", title: "Buy a few affordable food portions before fighting.",
+                                  note: "Buy singles first and keep gil for spells and equipment.")])]
+            initialState.progress.foodJob = foodFixture
+            initialState.progress.homeNation = "San d'Oria"
+        }
+        _state = StateObject(wrappedValue: initialState)
         _wiki = StateObject(wrappedValue: wiki ?? WikiState())
         if let tab { _tab = State(initialValue: tab) }
     }

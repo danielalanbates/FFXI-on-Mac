@@ -10,3 +10,9 @@ This depends on launcher PR 81 and VanaGuide PR 38. Earlier candidate-solo-guide
 
 Copyright (c) 2026 Daniel Bates / Bates LLC. All rights reserved.
 https://batesai.org · help@batesai.org
+
+## Current-binary verification
+
+Correction: the first parser/layout runs and candidate-solo-guides used an older binary under arm64-apple-macosx/release. Those runs do not verify the new source. The authoritative build path reported by swift build --show-bin-path is now launcher-build/out/Products/Release. Do not reuse hard-coded historical output paths.
+
+The current release binary passed 142 parser checks against the explicit PR 38 guide root, plus all hidden layout scenarios including melee/caster food profiles at 620x460 and 1000x720. The compact caster image was visually inspected: profile selectors, shop/stock advice and bottom controls are readable. Profile field compatibility and roundtrip checks also passed. This evidence supersedes prior candidate claims.
