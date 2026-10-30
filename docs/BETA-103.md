@@ -49,6 +49,12 @@ against the latter was recognized from the rendered old header and superseded by
 above, which include the new test names. All API fixtures are synthetic. No screen capture,
 game input, application replacement or release publication is performed by these checks.
 
+Signed build-103 launcher and standalone-guide candidates were then packaged in the recovered
+Downloads workspace, from clean source commit `4085ec9` and explicit current guide/voice addon
+roots. Both passed deep strict signature verification. Packaged updater (116), companion
+parser/catalogue (121) and bundled-addon-source checks passed. Neither candidate was installed
+or launched as a GUI; the installed playable bundle and running companion were preserved.
+
 ## Continuing the larger launcher goal
 
 This beta is a source fix and local candidate, not a stable public binary release. Current
