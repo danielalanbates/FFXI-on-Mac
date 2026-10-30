@@ -61,6 +61,7 @@ final class CompanionState: ObservableObject {
     @Published var selected: Int = 0
     @Published var stepIndex: Int = 0
     @Published var guideSaveError = ""
+    @Published var guideDetailOpen = true
     var storesGuideProgress = true
     var guideProgressWriter: (CharacterProgress) -> Bool = { ProgressStore.save($0) }
     @Published var sourceNote = ""
@@ -635,7 +636,6 @@ final class CompanionState: ObservableObject {
 }
 
 struct CompanionView: View {
-    @Environment(\.dismiss) private var dismissGuideWindow
     @StateObject var state: CompanionState
     @StateObject private var capture = ScreenGuideCapture()
     @StateObject var wiki: WikiState
@@ -671,7 +671,7 @@ struct CompanionView: View {
                 steps: [GuideStep(kind: "C", title: "Levels 26-30: Bull Dhalmel.", note: "Starting location: All starting cities. Pull one at a time; these monsters link.", tags: ["EXP": "Bull Dhalmel (20-24) — Buburimu Peninsula.", "GIL": "Carnivorous Crawler for Silk Thread, or Bull Dhalmel for Dhalmel Hide and Dhalmel Meat.", "LV": "30"])])]
         }
         if layoutTest && completedFixture {
-            initialState.progress.remember(initialState.guides[0], step: 0, completed: true)
+            _ = initialState.finishGuideStep()
             _expandedContent = State(initialValue: ["Start Here", "Completed"])
         }
         if layoutTest, let root = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"] {
@@ -914,7 +914,39 @@ struct CompanionView: View {
             }
             .frame(width: 190)
 
-            Card { stepDetail }
+            Card {
+                if state.guideDetailOpen { stepDetail }
+                else { completedGuideOverview }
+            }
+        }
+    }
+
+    var completedGuideOverview: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Guide completed", systemImage: "star.fill")
+                .font(.title2.bold()).foregroundStyle(Theme.gold)
+            if let guide { Text(guide.name).font(.headline) }
+            Text("Choose another guide from Content, or review a completed guide below.")
+                .font(.callout).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(state.guides.indices.filter { state.guides[$0].available(on: state.world) && state.progress.completed(state.guides[$0]) }, id: \.self) { index in
+                        Button { state.openGuide(index) } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "star.fill").foregroundStyle(Theme.gold)
+                                Text(state.guides[index].name).multilineTextAlignment(.leading)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Spacer(minLength: 0)
+                                Text("Review").font(.caption).foregroundStyle(Theme.crystal)
+                            }
+                            .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Theme.stroke.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
         }
     }
 
@@ -984,7 +1016,7 @@ struct CompanionView: View {
                 HStack {
                     Button("Back") { state.previousGuideStep() }
                     Button("Done") {
-                        if state.finishGuideStep() { dismissGuideWindow() }
+                        if state.finishGuideStep() { expandedContent.insert("Completed") }
                     }
                     .keyboardShortcut(.defaultAction)
                     Button("Next Unfinished") { state.nextUnfinished() }

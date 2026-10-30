@@ -16,3 +16,7 @@ Validation: Lua source checks for one menu registration, goal fields, aliases an
 routes; native parser, objective search and bookmark migration fixtures; hidden compact and
 expanded bullet-layout renders; and a signed package with a complete static-data manifest.
 Local beta 107 is installed through the existing one-shot companion replacement workflow.
+
+Completion UI follow-up: beta 108 keeps the app window open and shows a completed-guide
+screen on final Done, with stars and Review buttons. Existing completion/bookmark data is
+retained. This supersedes earlier wording about dismissing the whole companion window.

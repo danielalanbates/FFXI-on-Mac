@@ -78,6 +78,7 @@ extension CompanionState {
         guard guides.indices.contains(index), guides[index].available(on: world) else { return }
         if savingPrevious { saveGuidePosition() }
         selected = index
+        guideDetailOpen = true
         stepIndex = step.map { min(max($0, 0), max(guides[index].steps.count - 1, 0)) }
             ?? progress.resumeStep(in: guides[index])
         saveGuidePosition()
@@ -88,6 +89,7 @@ extension CompanionState {
         let index = guides.indices.first { guides[$0].progressKey == progress.lastGuide && guides[$0].available(on: world) }
             ?? startGuide
         openGuide(index, savingPrevious: false)
+        if guides.indices.contains(index), progress.completed(guides[index]) { guideDetailOpen = false }
     }
 
     func moveToStep(_ index: Int) {
@@ -122,10 +124,10 @@ extension CompanionState {
             .last(where: { $0 < stepIndex }) { moveToStep(index) }
     }
 
-    /// True only after the last Done was saved successfully, so the view can close its window.
+    /// True only after the last Done was saved; transition to the completed-guide screen.
     @discardableResult
     func finishGuideStep() -> Bool {
-        guard guides.indices.contains(selected), guides[selected].steps.indices.contains(stepIndex) else { return false }
+        guard guideDetailOpen, guides.indices.contains(selected), guides[selected].steps.indices.contains(stepIndex) else { return false }
         let guide = guides[selected]
         let step = guide.steps[stepIndex]
         let previous = progress, oldIndex = stepIndex
@@ -142,6 +144,7 @@ extension CompanionState {
             progress = previous; stepIndex = oldIndex
             return false
         }
+        if finished { guideDetailOpen = false }
         return finished
     }
 }

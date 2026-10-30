@@ -9,10 +9,10 @@ removed instructions fall back to a bounded index. Older character JSON loads wi
 
 Done on the final route step records completion, adds a gold star to the right of the guide,
 adds it to the expandable Completed category and updates the guide counter. Only after the
-save succeeds does the view dismiss its own window. Closing the companion window does not
-signal the launcher or game. Reopening a completed guide keeps its star and saved position;
+save succeeds does the step panel transition to a completed-guide screen. The app window
+stays open, showing the saved completion and buttons to review completed guides. Reopening a completed guide keeps its star and saved position;
 reviewing earlier instructions does not revoke completion. Repeated final clicks do not create
-duplicate completed records. A failed final save leaves the window open and displays an error.
+duplicate completed records. A failed final save leaves the active step open and displays an error.
 Quest/mission completion records retain their existing keys and remain separate from guide stars.
 
 Branching routes persist the chosen starting city. Other city branches do not count as route
@@ -30,3 +30,13 @@ resume at the corresponding level band for the chosen starting city. A completed
 record does not automatically award completion of the expanded itinerary. Existing Gil
 bookmarks take precedence, and the old EXP record remains intact. Header completion counts
 are restricted to guides still visible in the selected server's catalogue.
+
+## Completion-screen regression fix (beta 108)
+
+The previous final-Done action dismissed the only SwiftUI Window. AppKit then approved a
+normal app termination. The user reported the disappearing app as a crash; its completion
+record had already been saved, and no crash report was present. Final Done now changes
+`guideDetailOpen` to false after a successful save and renders a completion screen in the
+existing window. It never dismisses that window. Selecting another guide or Review opens
+the saved instruction again; rapid repeated completion calls are ignored once the panel closes.
+The completion layout fixture exercises the production finish action before rendering.

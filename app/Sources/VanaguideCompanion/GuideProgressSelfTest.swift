@@ -12,18 +12,19 @@ extension CompanionSelfTest {
         state.progress = CharacterProgress(character: "Layout", world: "Local fixture")
         state.openGuide(0)
         var checks: [(String, Bool)] = []
-        checks.append(("Done on an intermediate step leaves the window open", !state.finishGuideStep() && state.stepIndex == 1))
+        checks.append(("Done on an intermediate step keeps the guide open", !state.finishGuideStep() && state.stepIndex == 1))
         state.openGuide(1)
         state.openGuide(0)
         checks.append(("switching guides restores the exact unfinished step", state.stepIndex == 1))
         state.moveToStep(2)
-        checks.append(("last Done requests window closure only after completion", state.finishGuideStep()))
+        checks.append(("last Done transitions to completed guides only after saving", state.finishGuideStep()))
+        checks.append(("final Done closes the step panel rather than the app window", !state.guideDetailOpen))
         checks.append(("guide completion records one star and the quest result", state.progress.completed(a) && state.progress.completedGuideCount == 1 && state.progress.entries["Q:bastok,10"]?.status == .completed))
         _ = state.finishGuideStep()
         checks.append(("repeated final Done cannot duplicate the completed guide", state.progress.completedGuideCount == 1))
         state.openGuide(1)
         state.openGuide(0)
-        checks.append(("completed routes reopen at the saved last step", state.stepIndex == 2 && state.progress.completed(a)))
+        checks.append(("completed routes reopen at the saved last step", state.stepIndex == 2 && state.progress.completed(a) && state.guideDetailOpen))
         state.moveToStep(0)
         checks.append(("reviewing earlier steps keeps the completion star", state.progress.completed(a)))
         var shifted = a
@@ -65,7 +66,7 @@ extension CompanionSelfTest {
         let beforeFailure = state.progress
         state.storesGuideProgress = true
         state.guideProgressWriter = { _ in false }
-        checks.append(("failed save keeps the last step open and does not award completion", !state.finishGuideStep() && state.progress == beforeFailure && state.stepIndex == 2 && !state.guideSaveError.isEmpty))
+        checks.append(("failed save keeps the last step open and does not award completion", !state.finishGuideStep() && state.progress == beforeFailure && state.stepIndex == 2 && !state.guideSaveError.isEmpty && state.guideDetailOpen))
         state.storesGuideProgress = false
         var unified = a
         unified.name = "Solo Guide - HorizonXI"
