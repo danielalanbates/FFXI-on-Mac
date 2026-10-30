@@ -650,7 +650,7 @@ struct CompanionView: View {
     @State private var newCharacter = ""
     private let layoutTest: Bool
 
-    init(layoutTest: Bool = false, tab: Int? = nil, wiki: WikiState? = nil, foodFixture: String? = nil, gilFixture: Bool = false, searchFixture: String? = nil, monsterFixture: String? = nil, completedFixture: Bool = false) {
+    init(layoutTest: Bool = false, tab: Int? = nil, wiki: WikiState? = nil, foodFixture: String? = nil, gilFixture: Bool = false, searchFixture: String? = nil, monsterFixture: String? = nil, completedFixture: Bool = false, goalsFixture: Bool = false) {
         self.layoutTest = layoutTest
         let initialState = CompanionState(loadData: !layoutTest)
         if layoutTest, let foodFixture {
@@ -665,6 +665,10 @@ struct CompanionView: View {
                 steps: ["Windurst", "San d'Oria", "Bastok"].map { nation in
                     GuideStep(kind: "t", title: "Start in \(nation).", note: "Starting location: \(nation). Check requirements and costs before travelling.", tags: ["START": nation])
                 })]
+        }
+        if layoutTest && goalsFixture {
+            initialState.guides = [Guide(name: "Solo Guide - HorizonXI", desc: "Leveling, quests and notorious monsters in one route.", levels: "1-75 ALPHA",
+                steps: [GuideStep(kind: "C", title: "Levels 26-30: Bull Dhalmel.", note: "Starting location: All starting cities. Pull one at a time; these monsters link.", tags: ["EXP": "Bull Dhalmel (20-24) — Buburimu Peninsula.", "GIL": "Carnivorous Crawler for Silk Thread, or Bull Dhalmel for Dhalmel Hide and Dhalmel Meat.", "LV": "30"])])]
         }
         if layoutTest && completedFixture {
             initialState.progress.remember(initialState.guides[0], step: 0, completed: true)
@@ -822,7 +826,8 @@ struct CompanionView: View {
                     Text("Developer Mode activated").font(.caption.bold()).foregroundStyle(Theme.alert)
                         .lineLimit(1).fixedSize()
                 }
-                Text("\(state.progress.completedGuideCount) \(state.progress.completedGuideCount == 1 ? "guide" : "guides") · \(state.progress.completedCount) quests completed")
+                let completedGuides = state.guides.filter { $0.available(on: state.world) && state.progress.completed($0) }.count
+                Text("\(completedGuides) \(completedGuides == 1 ? "guide" : "guides") · \(state.progress.completedCount) quests completed")
                     .font(.caption).foregroundStyle(Theme.muted).lineLimit(1).fixedSize()
             }
             .textFieldStyle(.roundedBorder).controlSize(.small)
@@ -1021,7 +1026,16 @@ struct CompanionView: View {
             Label("Unlocks \(job)", systemImage: "person.badge.plus").font(.callout).foregroundStyle(Theme.gold)
         }
         if let lv = s.tags["LV"] {
-            Label("Recommended level \(lv)", systemImage: "chart.bar").font(.caption).foregroundStyle(Theme.muted)
+            Label(s.goals.isEmpty ? "Recommended level \(lv)" : "Level goal: \(lv)", systemImage: "chart.bar").font(.caption).foregroundStyle(Theme.muted)
+        }
+        ForEach(Array(s.goals.enumerated()), id: \.offset) { _, goal in
+            HStack(alignment: .top, spacing: 7) {
+                Text("•").foregroundStyle(Theme.gold)
+                (Text(goal.label + ": ").bold() + Text(goal.text))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            .font(.callout)
         }
         if let n = s.note, let scripted = s.tags["WALK"] {
             // Walkthrough from the server's own quest script: numbered, after where to go.

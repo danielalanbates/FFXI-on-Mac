@@ -15,13 +15,36 @@ extension Guide {
         return steps.indices.filter { steps[$0].tags["HOME"] == nil || steps[$0].tags["HOME"] == location }
     }
 
-    var progressKey: String {
+    func progressKey(named name: String) -> String {
         func key(_ text: String) -> String { text.lowercased().filter { $0.isLetter || $0.isNumber } }
         return key(server ?? "general") + ":" + key(name)
     }
+
+    var progressKey: String { progressKey(named: progressID ?? name) }
+
 }
 
 extension CharacterProgress {
+    mutating func migrateGuideAliases(_ guides: [Guide]) {
+        for guide in guides {
+            guard let alias = guide.legacyProgressID else { continue }
+            let oldKey = guide.progressKey(named: alias)
+            if guideBookmarks?[guide.progressKey] == nil, let old = guideBookmarks?[oldKey] {
+                let location = old.startingLocation ?? homeNation ?? guide.steps.first(where: { $0.tags["START"] != nil })?.tags["START"]
+                let route = guide.activeStepIndices(startingLocation: location)
+                let band = old.title.range(of: #"Levels \d+-\d+:"#, options: .regularExpression).map { String(old.title[$0]) }
+                let index = band.flatMap { prefix in route.first { guide.steps[$0].title.hasPrefix(prefix) } }
+                    ?? (old.completed ? route.last : route.first) ?? 0
+                // Finishing only the old EXP route does not complete the new quests and NM detours.
+                var bookmarks = guideBookmarks ?? [:]
+                bookmarks[guide.progressKey] = GuideBookmark(step: index, title: guide.steps.indices.contains(index) ? guide.steps[index].title : "",
+                    completed: false, startingLocation: location)
+                guideBookmarks = bookmarks
+            }
+            if lastGuide == oldKey { lastGuide = guide.progressKey }
+        }
+    }
+
     var completedGuideCount: Int { guideBookmarks?.values.filter(\.completed).count ?? 0 }
 
     func completed(_ guide: Guide) -> Bool { guideBookmarks?[guide.progressKey]?.completed ?? false }
@@ -61,6 +84,7 @@ extension CompanionState {
     }
 
     func openInitialGuide() {
+        progress.migrateGuideAliases(guides)
         let index = guides.indices.first { guides[$0].progressKey == progress.lastGuide && guides[$0].available(on: world) }
             ?? startGuide
         openGuide(index, savingPrevious: false)

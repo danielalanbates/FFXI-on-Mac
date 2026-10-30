@@ -67,6 +67,21 @@ extension CompanionSelfTest {
         state.guideProgressWriter = { _ in false }
         checks.append(("failed save keeps the last step open and does not award completion", !state.finishGuideStep() && state.progress == beforeFailure && state.stepIndex == 2 && !state.guideSaveError.isEmpty))
         state.storesGuideProgress = false
+        var unified = a
+        unified.name = "Solo Guide - HorizonXI"
+        unified.server = "HorizonXI"
+        unified.progressID = "Solo Gil - HorizonXI"
+        unified.legacyProgressID = "Solo EXP - HorizonXI"
+        unified.steps = [GuideStep(kind: "C", title: "Levels 31-35: Cape Dhalmel."), GuideStep(kind: "C", title: "Levels 36-40: Giant Spider."), GuideStep(kind: "C", title: "Final")]
+        let previousGil = Guide(name: "Solo Gil - HorizonXI", desc: "", levels: "", steps: unified.steps, server: "HorizonXI")
+        var renamed = CharacterProgress(character: "Test", world: "HorizonXI")
+        renamed.remember(previousGil, step: 1, completed: true)
+        checks.append(("folded gil route keeps the same bookmark and star", unified.progressKey == previousGil.progressKey && renamed.resumeStep(in: unified) == 1 && renamed.completed(unified)))
+        let previousEXP = Guide(name: "Solo EXP - HorizonXI", desc: "", levels: "", steps: [GuideStep(kind: "C", title: "Levels 36-40: Different old mob.")], server: "HorizonXI")
+        var migrated = CharacterProgress(character: "Test", world: "HorizonXI")
+        migrated.remember(previousEXP, step: 0, completed: true)
+        migrated.migrateGuideAliases([unified])
+        checks.append(("old EXP bookmark migrates by level band without claiming all new goals completed", migrated.resumeStep(in: unified) == 1 && !migrated.completed(unified) && migrated.lastGuide == unified.progressKey))
         return checks
     }
 }

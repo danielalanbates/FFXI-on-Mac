@@ -23,3 +23,10 @@ Validation: pure production-state fixtures cover switching, intermediate/final D
 completion, JSON round-trip, legacy JSON, another character, inserted/removed steps, branching,
 and a simulated save failure. Hidden compact/expanded renders check star and Completed placement.
 These tests do not alter a real character file or close the user's live window.
+
+Unified Horizon guide: a data-provided `progress_id` keeps the former Gil itinerary's stable
+identity across its display-name change. A `legacy_progress_id` lets native EXP bookmarks
+resume at the corresponding level band for the chosen starting city. A completed EXP-only
+record does not automatically award completion of the expanded itinerary. Existing Gil
+bookmarks take precedence, and the old EXP record remains intact. Header completion counts
+are restricted to guides still visible in the selected server's catalogue.

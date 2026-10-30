@@ -108,7 +108,7 @@ enum GuideSearch {
                     icon: "map", target: .guide(index, nil)))
             }
             if stepHits.count < 8 {
-                for (step, entry) in guide.steps.enumerated() where matches(query, "\(entry.title) \(entry.note ?? "")") {
+                for (step, entry) in guide.steps.enumerated() where matches(query, "\(entry.title) \(entry.note ?? "") " + entry.goals.map { $0.text }.joined(separator: " ")) {
                     stepHits.append(GuideSearchHit(id: "step:\(index):\(step)", title: entry.title,
                         subtitle: "\(guide.name) · Step \(step + 1)", icon: "list.number", target: .guide(index, step)))
                     if stepHits.count == 8 { break }

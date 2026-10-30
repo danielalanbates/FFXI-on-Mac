@@ -69,9 +69,18 @@ enum CompanionSelfTest {
         checks.append(("other guides do not borrow food controls",
                        !StarterFood.isFoodStep(guide: "Other", title: "Buy a few affordable food portions before fighting.")))
 
+        let goalStep = GuideParser.parseStep("C Farm.|EXP|Forest Hare near the city.|GIL|Crawler for Silk Thread.|N|Choose safe pulls.|")
+        checks.append(("EXP and Gil goals parse as two ordered bullet items", goalStep?.goals.map { $0.label } == ["EXP", "Gil"]))
+        checks.append(("goal notes stay separate from objective bullets", goalStep?.note == "Choose safe pulls."))
+        let aliasFixture = GuideParser.parse(#"G.register({ name = "Solo Guide - HorizonXI", server = "HorizonXI", progress_id = "Solo Gil - HorizonXI", legacy_progress_id = "Solo EXP - HorizonXI", steps = [[C Test.]] })"#).first
+        checks.append(("progress_id cannot be confused with legacy_progress_id", aliasFixture?.progressID == "Solo Gil - HorizonXI" && aliasFixture?.legacyProgressID == "Solo EXP - HorizonXI"))
         let searchWiki = WikiState()
         searchWiki.monsters = [MonsterEntry(name: "Jaggedy-Eared Jack", zone: 100, family: "Rabbit", lo: 9, hi: 10,
             nm: true, drops: "Rabbit Charm", note: "G-9–H-9", source: "https://horizonffxi.wiki/Category:Rabbits", scope: "HorizonXI")]
+        if let goalStep {
+            let goalHits = GuideSearch.hits(query: "Silk Thread", guides: [Guide(name: "Camp", desc: "", levels: "", steps: [goalStep])], world: "HorizonXI", wiki: searchWiki, zones: WorldMap())
+            checks.append(("search includes objective bullets after separating them from notes", goalHits.contains { $0.target == .guide(0, 0) }))
+        }
         let searchGuides = [Guide(name: "Solo EXP", desc: "Leveling", levels: "1-75", steps: [
             GuideStep(kind: "K", title: "Defeat Forest Hare", note: "Rabbit hides")], server: "HorizonXI"),
             Guide(name: "Other server", desc: "rabbit", levels: "", steps: [], server: "Other")]
@@ -104,6 +113,12 @@ enum CompanionSelfTest {
         }
         if let real {
             let library = GuideParser.loadAll(from: real)
+            let solo = library.filter { $0.name == "Solo Guide - HorizonXI" }
+            checks.append(("one unified Horizon solo entry replaces separate EXP and Gil guides", solo.count == 1 && !library.contains { $0.name == "Solo EXP - HorizonXI" || $0.name == "Solo Gil - HorizonXI" }))
+            if let solo = solo.first {
+                checks.append(("every actual leveling step has two separate goals", solo.steps.filter { $0.tags["LV"] != nil }.allSatisfy { $0.goals.count == 2 }))
+                checks.append(("unified guide retains 30 steps for each origin", ["Windurst", "San d'Oria", "Bastok"].allSatisfy { solo.activeStepIndices(startingLocation: $0).count == 30 }))
+            }
             checks.append(("real authored guide library loads", library.count >= 2))
             checks.append(("every real guide parses at least three steps",
                            library.allSatisfy { $0.steps.count >= 3 }))
