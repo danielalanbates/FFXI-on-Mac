@@ -24,3 +24,9 @@ updates. Archive the previous companion and verify the replacement's signature b
 
 Validation includes offline source assertions, production parser/search fixtures, and hidden
 layout renders at compact and expanded sizes. These checks do not claim live game acceptance.
+
+Packaged-data regression: the server-data loop originally globbed `"$dir"*.lua` without
+its path separator, creating empty server folders. It now uses `"$dir/"*.lua` and checks
+all server Lua assets with an independent glob. `tools/check-companion-guide-data.py`
+compares the bundle against every allowed source data file (57 files for this snapshot).
+The packaged parser tests exercise Horizon-specific Jack data, catching this omission.
