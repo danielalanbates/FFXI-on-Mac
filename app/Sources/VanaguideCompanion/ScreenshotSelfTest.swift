@@ -3,7 +3,7 @@
 import Foundation
 
 extension CompanionSelfTest {
-    static func screenshotChecks() -> [(String, Bool)] {
+    @MainActor static func screenshotChecks() -> [(String, Bool)] {
         let quests = QuestCatalogue.parse("""
         local Q = {}
         Q.quests = { sandoria = {
@@ -59,6 +59,10 @@ extension CompanionSelfTest {
             ("persistent chat never pulls the guide backward again", third == nil && repeated == nil),
             ("a blank sample resets the two-sample confirmation", interruptedFirst == nil),
         ]
+        let idleCapture = ScreenGuideCapture()
+        checks.append(("a new companion capture stays idle until explicit window selection and Start",
+                       !idleCapture.running && !idleCapture.busy && idleCapture.windows.isEmpty
+                           && idleCapture.selectedID == nil && !idleCapture.discovering))
         let duplicate = QuestCatalogue.parse("local Q = { bastok = { [3] = { name = 'A Squire\\'s Test' } } }", mission: false)
         checks.append(("identical quest titles in different logs are ambiguous",
                        ScreenshotGuideMatcher.match(text: "A Squire's Test", entries: entries + duplicate,

@@ -44,6 +44,21 @@ final class Updater: ObservableObject {
         case manual(UpdateRelease)                  // verified, but this copy can't replace itself
         case installing(UpdateRelease)              // Restart pressed; the helper is taking over
         case restartFailed(UpdateRelease, RestartFailure)
+
+        /// A verified Restart offer still needs the ordinary metadata checks: a published
+        /// release can be withdrawn or replaced while the launcher stays open for days.
+        var releaseToRefresh: UpdateRelease? {
+            switch self {
+            case .ready(let release), .restartFailed(let release, _): return release
+            default: return nil
+            }
+        }
+
+        /// Ignore a response belonging to an offer the user has already started installing,
+        /// or to an offer replaced since the request began. It must not prune that install.
+        func shouldWithdrawOffer(checked release: UpdateRelease, latest: UpdateRelease?) -> Bool {
+            releaseToRefresh == release && !UpdateRules.isStillLatest(release, latest: latest)
+        }
     }
 
     /// Why a Restart did not go through. The UI shows `message`, one short line, and `detail`
@@ -130,13 +145,34 @@ final class Updater: ObservableObject {
     private func check() {
         guard updatesEnabled, !working else { return }
         switch state {
-        case .idle, .manual: break
-        default: return            // something is staged or a restart is under way
+        case .installing: return
+        default: break
         }
+        let offered = state.releaseToRefresh
         working = true
         Task {
-            await checkAndStage()
+            if let offered { await refreshOffer(offered) }
+            else { await checkAndStage() }
             working = false
+        }
+    }
+
+    /// Revalidate an existing Restart offer without remounting or rechecking its signature.
+    /// A transient failure keeps the verified offer. An authoritative withdrawal removes it;
+    /// a replacement is staged by the normal path before a new line can appear.
+    private func refreshOffer(_ release: UpdateRelease) async {
+        if await gameOrWorkBusy() { retryLater(); return }
+        guard state.releaseToRefresh == release else { return }
+        lastCheck = Date()
+        do {
+            let latest = try await UpdateWork.fetchLatest()
+            guard state.shouldWithdrawOffer(checked: release, latest: latest) else { return }
+            UpdateWork.note("\(release.tag) \(release.assetName) is no longer current; clearing its offer")
+            state = .idle
+            UpdateWork.prune(keeping: nil)
+            if latest != nil { await checkAndStage() }
+        } catch {
+            UpdateWork.note("offer recheck failed: \(error.localizedDescription)")
         }
     }
 
@@ -290,8 +326,8 @@ final class Updater: ObservableObject {
     private func install(_ release: UpdateRelease) async {
         if let why = await restartBlocker() { return state = .restartFailed(release, why) }
         guard UpdateWork.canSelfUpdate else { return state = .manual(release) }
-        // `.ready` never checks again, so ask once more: a release withdrawn (or replaced) since
-        // it was staged is not installed, and the line goes. Briefly; no answer (offline, rate
+        // Ask once more at the user's Restart: a release withdrawn (or replaced) since the
+        // ordinary check is not installed, and the line goes. No answer (offline, rate
         // limit) is no reason to hold back a release that verified.
         do {
             let latest = try await UpdateWork.fetchLatest(timeout: 8)

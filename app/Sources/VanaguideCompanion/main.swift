@@ -51,12 +51,10 @@ struct CompanionApp: App {
     }
 }
 
-/// Screen Reading (chat OCR, Getting Started, character detection) and Developer Mode are
-/// parked for a later phase (Daniel, 2026-10-28: "first focus on making this a wiki
-/// replacement"). The code stays and its self-tests still run; `--screen-reading` turns the
-/// UI back on for development.
+/// Screen Reading is available in the companion's normal UI. Merely exposing the controls
+/// never enumerates windows, requests Screen Recording permission or starts capture.
 enum Features {
-    static let screenReading = CommandLine.arguments.contains("--screen-reading")
+    static let screenReading = true
 }
 
 final class CompanionState: ObservableObject {
@@ -188,9 +186,9 @@ final class CompanionState: ObservableObject {
                                 fixed: true)])]
             return
         }
-        // Someone who has used Screen Reading will again: load the recognizer now, not at Start.
+        // Leave OCR idle until the player explicitly finds a game window. Starting the guide
+        // for manual reference must not spend CPU loading the recognizer, even after prior use.
         if !Features.screenReading { devMode = false }
-        if Features.screenReading, UserDefaults.standard.bool(forKey: "reading.used") { ScreenGuideCapture.warmUp() }
         reload()
         if let w = CharacterDiscovery.launcherWorld(), w != world {
             world = w
@@ -731,17 +729,17 @@ struct CompanionView: View {
             HStack(spacing: 8) {
                 Text("VanaGuide").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.gold)
                 Text("Server-Safe").font(.system(size: 12)).foregroundStyle(Theme.muted)
-                Picker("", selection: $tab) {
-                    Text("Guides").tag(0)
-                    Text("Gear").tag(1)
-                    Text("Skills").tag(2)
-                    Text("Server").tag(4)
-                    Text("Achievements").tag(3)
-                }
-                .pickerStyle(.segmented).labelsHidden().frame(width: 390)
                 Spacer()
                 if Features.screenReading { readingStatus }
             }
+            Picker("", selection: $tab) {
+                Text("Guides").tag(0)
+                Text("Gear").tag(1)
+                Text("Skills").tag(2)
+                Text("Server").tag(4)
+                Text("Achievements").tag(3)
+            }
+            .pickerStyle(.segmented).labelsHidden()
             HStack(spacing: 6) {
                 Picker("Server", selection: Binding(get: { state.world }, set: { state.selectWorld($0) })) {
                     if state.world.isEmpty { Text("Choose…").tag("") }

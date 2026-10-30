@@ -84,3 +84,22 @@ Rechecked the primary [Mach9 releases](https://github.com/athei/mach9/releases),
 [mtld3d releases](https://github.com/athei/mtld3d/releases). They still list
 `arm64-11.20-4`, `v1.9.0` and `v0.15.1`, respectively, matching this review.
 The machine still reports macOS 27.0.1. No runtime or OS update was installed.
+
+## Continuation check — 2026-10-29
+
+Before the beta 103 updater change, primary release pages were checked again. They still
+list [Wine 11.0 stable / 11.20 development](https://www.winehq.org/news/announce.php),
+[CrossOver 26.3.0](https://www.codeweavers.com/crossover/changelog),
+[Mach9 arm64-11.20-4 and cx-26.3.0-9](https://github.com/athei/mach9/releases),
+[x87sidecar v1.9.0](https://github.com/athei/x87sidecar/releases),
+[mtld3d v0.15.1](https://github.com/athei/mtld3d/releases), and
+[MoltenVK v1.4.2](https://github.com/KhronosGroup/MoltenVK/releases).
+Direct WineHQ retrieval returned 403; its indexed primary news and official
+[Wine-Announce release](https://list.winehq.org/hyperkitty/list/wine-announce%40list.winehq.org/thread/BXK6IO4YFZW4O5CABDN5SOOFY3ZYTJP3/)
+confirm development 11.20 on October 16.
+
+Read-only local inspection now reports macOS 27.2 build 26B123 and a Rosetta receipt version
+1.0.0.0.1792711153. This is an inventory correction to the October 28 paragraph, not an OS
+update performed by this work. Receipt presence does not establish FFXI compatibility or
+performance. The preserved Wine, DXVK, MoltenVK and sidecar pins stay unchanged; candidate
+runtime migration still requires the isolated gameplay and performance checks above.
