@@ -641,6 +641,7 @@ struct CompanionView: View {
     // --tab <n> (test hook) opens on another tab, 1 Gear, 2 Skills, 3 Achievements, 4 Server, for --snapshot.
     @State var tab = CommandLine.arguments.firstIndex(of: "--tab")
         .flatMap { CommandLine.arguments.indices.contains($0 + 1) ? Int(CommandLine.arguments[$0 + 1]) : nil } ?? 0
+    @State private var expandedContent: Set<String> = ["Start Here"]
     @State private var showReading = false
     @State private var addingCharacter = false
     @State private var newCharacter = ""
@@ -887,23 +888,58 @@ struct CompanionView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Content").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.gold)
                         .padding(.leading, 4)
-                    List(selection: Binding<Int?>(
-                        get: { state.selected },
-                        set: { state.selected = $0 ?? 0; state.stepIndex = 0 }
-                    )) {
-                        ForEach(QuestCatalogue.sectionOrder, id: \.self) { section in
-                            let rows = state.guides.indices.filter { state.guides[$0].available(on: state.world) && QuestCatalogue.section(of: state.guides[$0]) == section }
-                            if !rows.isEmpty {
-                                Section(section) {
-                                    ForEach(rows, id: \.self) { i in
-                                        Text(state.guides[i].name).font(.callout).lineLimit(2).tag(Optional(i))
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 4) {
+                            ForEach(QuestCatalogue.sectionOrder, id: \.self) { section in
+                                let rows = state.guides.indices.filter { state.guides[$0].available(on: state.world) && QuestCatalogue.section(of: state.guides[$0]) == section }
+                                if !rows.isEmpty {
+                                    Button {
+                                        if expandedContent.contains(section) { expandedContent.remove(section) }
+                                        else { expandedContent.insert(section) }
+                                    } label: {
+                                        HStack(spacing: 7) {
+                                            Image(systemName: expandedContent.contains(section) ? "chevron.down" : "chevron.right")
+                                                .font(.system(size: 10, weight: .bold)).frame(width: 12)
+                                            Text(section).font(.system(size: 13, weight: .semibold))
+                                            Spacer(minLength: 0)
+                                        }
+                                        .foregroundStyle(Theme.gold)
+                                        .padding(.horizontal, 8).padding(.vertical, 9)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(Theme.stroke.opacity(0.5), in: RoundedRectangle(cornerRadius: 5))
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityValue(expandedContent.contains(section) ? "Expanded" : "Collapsed")
+                                    .help("Expand or collapse \(section)")
+                                    if expandedContent.contains(section) {
+                                        ForEach(rows, id: \.self) { i in
+                                            Button {
+                                                state.selected = i
+                                                state.stepIndex = 0
+                                            } label: {
+                                                Text(state.guides[i].name).font(.callout)
+                                                    .multilineTextAlignment(.leading)
+                                                    .fixedSize(horizontal: false, vertical: true)
+                                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                                    .padding(.vertical, 7).padding(.leading, 16).padding(.trailing, 6)
+                                                    .foregroundStyle(state.selected == i ? Theme.crystal : Theme.text)
+                                                    .background(state.selected == i ? Theme.crystal.opacity(0.14) : Color.clear,
+                                                                in: RoundedRectangle(cornerRadius: 5))
+                                                    .contentShape(Rectangle())
+                                            }
+                                            .buttonStyle(.plain)
+                                            .accessibilityAddTraits(state.selected == i ? .isSelected : [])
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                    .scrollContentBackground(.hidden)
-                    .listStyle(.sidebar)
+                    .onChange(of: state.selected) { index in
+                        guard state.guides.indices.contains(index) else { return }
+                        expandedContent.insert(QuestCatalogue.section(of: state.guides[index]))
+                    }
                 }
             }
             .frame(width: 190)
