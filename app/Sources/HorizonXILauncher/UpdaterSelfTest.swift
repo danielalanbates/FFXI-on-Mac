@@ -195,6 +195,32 @@ extension Headless {
                                          sha256: String(repeating: "a", count: 64))
             checks.append(("Restart: same name and build with a replacement digest, not installed",
                            UpdateRules.isStillLatest(staged, latest: replaced), false))
+
+            // Checks continue after staging. Keep the same verified offer without repeating
+            // signature work; dismiss an authoritative withdrawal/replacement. A response
+            // arriving after Restart cannot clear the state or prune files under the helper.
+            let ready = Updater.State.ready(staged)
+            let failed = Updater.State.restartFailed(staged, .clientLive)
+            checks += [
+                ("ready offer participates in periodic revalidation", ready.releaseToRefresh == staged, true),
+                ("failed Restart offer participates in periodic revalidation", failed.releaseToRefresh == staged, true),
+                ("unchanged latest keeps the ready offer",
+                 ready.shouldWithdrawOffer(checked: staged, latest: staged), false),
+                ("withdrawn latest clears the ready offer",
+                 ready.shouldWithdrawOffer(checked: staged, latest: nil), true),
+                ("replaced asset clears the ready offer before restaging",
+                 ready.shouldWithdrawOffer(checked: staged, latest: replaced), true),
+                ("withdrawn latest clears a failed Restart offer",
+                 failed.shouldWithdrawOffer(checked: staged, latest: nil), true),
+                ("installing has no ordinary offer refresh",
+                 Updater.State.installing(staged).releaseToRefresh == nil, true),
+                ("response arriving during install cannot withdraw or prune it",
+                 Updater.State.installing(staged).shouldWithdrawOffer(checked: staged, latest: nil), false),
+                ("response for an older offer cannot clear its replacement",
+                 Updater.State.ready(replaced).shouldWithdrawOffer(checked: staged, latest: nil), false),
+                ("response arriving after the offer cleared does nothing",
+                 Updater.State.idle.shouldWithdrawOffer(checked: staged, latest: nil), false),
+            ]
         }
 
         // Rejected-tag memory, in a scratch domain so the real defaults are never touched. One
