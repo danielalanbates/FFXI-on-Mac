@@ -920,14 +920,12 @@ struct CompanionView: View {
                     .font(.title2.bold()).foregroundStyle(Theme.gold)
                 Spacer()
                 if let g = guide, state.progress.completed(g) {
-                    Button("Completed") { state.uncompleteGuide() }
+                    Button("Not Completed") { state.uncompleteGuide() }
                         .controlSize(.small)
                 }
             }
             if let guide {
                 Text(guide.name).font(.headline)
-                Button("Completed") { state.uncompleteCurrentGuide() }
-                    .help("Mark this guide incomplete")
             }
             if !state.guideSaveError.isEmpty {
                 Text(state.guideSaveError).font(.caption).foregroundStyle(Theme.ember)
@@ -1023,7 +1021,7 @@ struct CompanionView: View {
                 let isFinalCompleted = state.progress.completed(g) && route.first(where: { $0 > state.stepIndex }) == nil
                 HStack {
                     Button("Back") { state.previousGuideStep() }
-                    Button(isFinalCompleted ? "Completed" : "Done") {
+                    Button(isFinalCompleted ? "Not Completed" : "Done") {
                         if state.finishGuideStep() { expandedContent.insert("Completed") }
                     }
                     .keyboardShortcut(.defaultAction)
@@ -1195,7 +1193,7 @@ struct CompanionView: View {
             Text(r.status == .completed ? "Completed · from your \(r.source)" : "Current · from your \(r.source)")
                 .font(.caption).foregroundStyle(r.status == .completed ? Theme.jade : Theme.crystal)
         } else if isFinalCompleted {
-            Text("Completed · click Completed below to mark incomplete.")
+            Text("Completed · click Not Completed below to mark incomplete.")
                 .font(.caption).foregroundStyle(Theme.jade)
         } else if s.fixed && s.tags["LOG"] == nil {
             Text("Press Done once you have finished this in game.")

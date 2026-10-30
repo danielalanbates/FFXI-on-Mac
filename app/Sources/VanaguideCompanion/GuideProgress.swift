@@ -133,14 +133,7 @@ extension CompanionState {
     }
 
     @discardableResult
-    func uncompleteCurrentGuide() -> Bool {
-        guard guides.indices.contains(selected), progress.completed(guides[selected]) else { return false }
-        let previous = progress
-        progress.remember(guides[selected], step: stepIndex, completed: false)
-        guard saveGuideProgress() else { progress = previous; return false }
-        guideDetailOpen = true
-        return true
-    }
+    func uncompleteCurrentGuide() -> Bool { uncompleteGuide() }
 
     /// True only after the last Done was saved; transition to the completed-guide screen.
     @discardableResult
@@ -153,7 +146,8 @@ extension CompanionState {
         let next = route.first(where: { $0 > stepIndex })
         let finished = next == nil
         if finished && progress.completed(guide) {
-            return uncompleteGuide()
+            _ = uncompleteGuide()
+            return false
         }
         if let key = Self.key(for: step) {
             let status: LogStatus = (step.kind == "A" || step.tags["QA"] != nil || step.tags["MA"] != nil) ? .current : .completed
@@ -186,6 +180,6 @@ extension CompanionState {
             return false
         }
         guideDetailOpen = true
-        return false
+        return true
     }
 }

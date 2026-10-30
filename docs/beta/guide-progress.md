@@ -40,3 +40,8 @@ record had already been saved, and no crash report was present. Final Done now c
 existing window. It never dismisses that window. Selecting another guide or Review opens
 the saved instruction again; rapid repeated completion calls are ignored once the panel closes.
 The completion layout fixture exercises the production finish action before rendering.
+
+Beta 111 consolidates overlapping undo paths from interrupted work. Both the completion
+screen and final reviewed step use Not Completed, clear the final manual done record,
+remove the guide star and reopen the saved instruction. There is only one completion-screen
+undo control. Observed quest-log records are retained.
