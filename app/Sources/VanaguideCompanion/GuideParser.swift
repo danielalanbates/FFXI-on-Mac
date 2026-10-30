@@ -81,7 +81,7 @@ enum GuideParser {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard trimmed.count > 2, let space = trimmed.firstIndex(of: " ") else { return nil }
         let kind = String(trimmed[..<space])
-        guard kind.count == 1, "ATCFKRULt".contains(kind) else { return nil }
+        guard kind.count == 1, "ATCFKRULtNB".contains(kind) else { return nil }
         var fields = trimmed[trimmed.index(after: space)...].components(separatedBy: "|")
         var step = GuideStep(kind: kind, title: fields.removeFirst())
         var i = 0
