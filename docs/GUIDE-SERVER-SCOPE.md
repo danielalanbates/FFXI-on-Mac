@@ -12,3 +12,5 @@ https://batesai.org · help@batesai.org
 Release verification: clean snapshot build succeeded in33.29s. Current binary passed147 parser checks and hidden layouts. Signed candidate-alpha-scoped bundled the latest scoped guides and BST/BLM camp notes; its packaged binary passed the same parser suite using its own bundled root. Installed standalone transactionally, previous archived, reopened once in background. Launcher/game were not signalled. Installed launcher and its embedded guide remain unchanged while the hosted session runs.
 
 Beta build104: incremented bundle version because keeping standalone at103 tied the older embedded helper, which wins ties. Build104 lets the installed launcher’s existing newest-compatible-copy rule select the updated standalone. No public release is implied.
+
+Build104 is now installed as the standalone beta. Verified installed metadata3.10/104 versus embedded3.10/103, valid deep strict signature and a single running companion from the standalone path. The older standalone is archived. Launcher/game processes remained unchanged. This resolves the tie in the installed launcher’s existing newest-compatible-copy selector.
