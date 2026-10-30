@@ -120,6 +120,26 @@ enum CompanionSelfTest {
                 checks.append(("unified guide retains 30 steps for each origin", ["Windurst", "San d'Oria", "Bastok"].allSatisfy { solo.activeStepIndices(startingLocation: $0).count == 30 }))
             }
             checks.append(("real authored guide library loads", library.count >= 2))
+            let support = library.filter { $0.name == "Support jobs" }
+            checks.append(("one Support Jobs guide covers both towns", support.count == 1 && !library.contains { $0.name == "Support jobs - Mhaura" }))
+            if let support = support.first {
+                checks.append(("support town selector has ten steps per branch", support.startingLocationLabel == "Route" && ["Selbina", "Mhaura"].allSatisfy { support.activeStepIndices(startingLocation: $0).count == 10 }))
+                let old = Guide(name: "Support jobs - Mhaura", desc: "", levels: "", steps: [GuideStep(kind: "t", title: "Trade one Wild Rabbit Tail to Vera, then finish the dialogue.")])
+                var record = CharacterProgress(character: "Fixture", world: "HorizonXI")
+                record.homeNation = "Windurst"
+                record.remember(old, step: 0, completed: true)
+                record.migrateGuideAliases([support])
+                checks.append(("combined support migration keeps Mhaura town, instruction and unlock star", record.completed(support) && record.guideBookmarks?[support.progressKey]?.startingLocation == "Mhaura" && support.steps[record.resumeStep(in: support)].title == old.steps[0].title))
+            }
+            let root = real.deletingLastPathComponent()
+            let walks = QuestCatalogue.walkthroughs(at: root)
+            let blue = walks["Q:ahturhgan,5"]
+            checks.append(("BLU solution overlay supplies all ten required answers", blue?.steps.filter { $0.hasPrefix("Answer ") }.count == 10))
+            checks.append(("BLU answers replace the missing-answer placeholder", blue?.steps.joined(separator: " ").contains("does not name the right answers") == false))
+            let refs = QuestCatalogue.referenceGuides(QuestCatalogue.entries(at: root), walkthroughs: walks)
+            let blueJob = QuestCatalogue.jobUnlockGuide(from: refs)?.steps.first { $0.tags["JOB"] == "Blue Mage" }
+            checks.append(("Job Unlocks displays BLU answers and final pool location", blueJob?.note?.contains("Answer 10") == true && blueJob?.note?.contains("pool at H-9") == true && blueJob?.tags["SRC"] == "https://horizonffxi.wiki/An_Empty_Vessel"))
+
             checks.append(("every real guide parses at least three steps",
                            library.allSatisfy { $0.steps.count >= 3 }))
             checks.append(("every real guide step keeps an action and readable instruction",
@@ -131,6 +151,9 @@ enum CompanionSelfTest {
         checks += achievementChecks(guides: guides)
         checks += screenshotChecks()
         checks += guideProgressChecks()
+        if let directory = ProcessInfo.processInfo.environment["VANAGUIDE_TEST_DIRECTORY"] {
+            checks += characterSettingsChecks(in: URL(fileURLWithPath: directory))
+        }
         checks += artifactJobChecks()
 
         var failures = 0

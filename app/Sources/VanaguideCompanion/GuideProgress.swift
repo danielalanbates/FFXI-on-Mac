@@ -29,16 +29,18 @@ extension CharacterProgress {
         for guide in guides {
             guard let alias = guide.legacyProgressID else { continue }
             let oldKey = guide.progressKey(named: alias)
-            if guideBookmarks?[guide.progressKey] == nil, let old = guideBookmarks?[oldKey] {
-                let location = old.startingLocation ?? homeNation ?? guide.steps.first(where: { $0.tags["START"] != nil })?.tags["START"]
+            let existing = guideBookmarks?[guide.progressKey]
+            if existing == nil || (guide.preservesLegacyCompletion && lastGuide == oldKey && existing?.completed != true), let old = guideBookmarks?[oldKey] {
+                let location = old.startingLocation ?? guide.legacyStartingLocation ?? homeNation ?? guide.steps.first(where: { $0.tags["START"] != nil })?.tags["START"]
                 let route = guide.activeStepIndices(startingLocation: location)
                 let band = old.title.range(of: #"Levels \d+-\d+:"#, options: .regularExpression).map { String(old.title[$0]) }
-                let index = band.flatMap { prefix in route.first { guide.steps[$0].title.hasPrefix(prefix) } }
+                let exact = route.first { guide.steps[$0].title == old.title }
+                let index = exact ?? band.flatMap { prefix in route.first { guide.steps[$0].title.hasPrefix(prefix) } }
                     ?? (old.completed ? route.last : route.first) ?? 0
                 // Finishing only the old EXP route does not complete the new quests and NM detours.
                 var bookmarks = guideBookmarks ?? [:]
                 bookmarks[guide.progressKey] = GuideBookmark(step: index, title: guide.steps.indices.contains(index) ? guide.steps[index].title : "",
-                    completed: false, startingLocation: location)
+                    completed: guide.preservesLegacyCompletion && old.completed, startingLocation: location)
                 guideBookmarks = bookmarks
             }
             if lastGuide == oldKey { lastGuide = guide.progressKey }
@@ -131,13 +133,16 @@ extension CompanionState {
         let guide = guides[selected]
         let step = guide.steps[stepIndex]
         let previous = progress, oldIndex = stepIndex
+        let route = guide.activeStepIndices(startingLocation: progress.guideBookmarks?[guide.progressKey]?.startingLocation)
+        let next = route.first(where: { $0 > stepIndex })
+        let finished = next == nil
+        if finished && progress.completed(guide) {
+            return uncompleteGuide()
+        }
         if let key = Self.key(for: step) {
             let status: LogStatus = (step.kind == "A" || step.tags["QA"] != nil || step.tags["MA"] != nil) ? .current : .completed
             _ = progress.record(key, status, source: "done")
         }
-        let route = guide.activeStepIndices(startingLocation: progress.guideBookmarks?[guide.progressKey]?.startingLocation)
-        let next = route.first(where: { $0 > stepIndex })
-        let finished = next == nil
         if let next { stepIndex = next }
         progress.remember(guide, step: stepIndex, completed: finished ? true : nil)
         guard saveGuideProgress() else {
@@ -146,5 +151,25 @@ extension CompanionState {
         }
         if finished { guideDetailOpen = false }
         return finished
+    }
+
+    /// Un-completes a completed guide, removing its star and restoring Done without losing its saved position.
+    @discardableResult
+    func uncompleteGuide() -> Bool {
+        guard guides.indices.contains(selected), progress.completed(guides[selected]) else { return false }
+        let guide = guides[selected]
+        let previous = progress, oldIndex = stepIndex, oldOpen = guideDetailOpen
+        let savedStep = guideDetailOpen ? stepIndex : progress.resumeStep(in: guide)
+        stepIndex = savedStep
+        if guide.steps.indices.contains(savedStep), let key = Self.key(for: guide.steps[savedStep]), progress.entries[key]?.source == "done" {
+            progress.entries.removeValue(forKey: key)
+        }
+        progress.remember(guide, step: savedStep, completed: false)
+        guard saveGuideProgress() else {
+            progress = previous; stepIndex = oldIndex; guideDetailOpen = oldOpen
+            return false
+        }
+        guideDetailOpen = true
+        return false
     }
 }

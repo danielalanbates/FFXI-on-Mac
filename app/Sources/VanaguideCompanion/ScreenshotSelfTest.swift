@@ -63,6 +63,15 @@ extension CompanionSelfTest {
         checks.append(("a new companion capture stays idle until explicit window selection and Start",
                        !idleCapture.running && !idleCapture.busy && idleCapture.windows.isEmpty
                            && idleCapture.selectedID == nil && !idleCapture.discovering))
+        let gate = OCRRecognitionGate()
+        let firstToken = gate.claim(warmUp: true)!
+        checks.append(("OCR gate shares one worker across warm-up and captures",
+                       !gate.isWarm && gate.claim() == nil && gate.claim(warmUp: true) == nil))
+        checks.append(("OCR gate rejects unowned callbacks and failed model preparation",
+                       !gate.finish(UUID(), succeeded: true) && gate.finish(firstToken, succeeded: false) && !gate.isWarm))
+        let secondToken = gate.claim()!
+        checks.append(("OCR gate records readiness after owned completion and prevents re-warming",
+                       !gate.finish(firstToken, succeeded: true) && gate.finish(secondToken, succeeded: true) && gate.isWarm && gate.claim(warmUp: true) == nil))
         let duplicate = QuestCatalogue.parse("local Q = { bastok = { [3] = { name = 'A Squire\\'s Test' } } }", mission: false)
         checks.append(("identical quest titles in different logs are ambiguous",
                        ScreenshotGuideMatcher.match(text: "A Squire's Test", entries: entries + duplicate,

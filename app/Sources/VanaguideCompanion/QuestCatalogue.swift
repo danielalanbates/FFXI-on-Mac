@@ -48,21 +48,22 @@ enum QuestCatalogue {
     /// What to do for each quest and mission, written from the server's scripts
     /// (data/quest_steps.lua, built by the addon repository's tools/gen_quest_steps.py).
     /// Keyed like CatalogueEntry.key: "Q:sandoria,0". `scripted` is full, partial or stub.
-    struct Walkthrough: Equatable { var steps: [String]; var scripted: String }
+    struct Walkthrough: Equatable { var steps: [String]; var scripted: String; var source: String? = nil }
 
     static func walkthroughs(at root: URL) -> [String: Walkthrough] {
-        guard let text = try? String(contentsOf: root.appendingPathComponent("data/quest_steps.lua"), encoding: .utf8)
-        else { return [:] }
         var out: [String: Walkthrough] = [:]
-        // T.quests then T.missions: { area = { [id] = { scripted = '…', steps = { '…' } } } }
-        for (n, table) in LuaDataReader.tables(in: text).filter({ !$0.keys.isEmpty }).prefix(2).enumerated() {
-            for area in table.keys {
-                guard let ids = table[area]?.table else { continue }
-                for key in ids.keys {
-                    guard let id = Int(key), let e = ids[key]?.table else { continue }
-                    let steps = (e["steps"]?.table?.array ?? []).compactMap(\.string)
-                    guard !steps.isEmpty else { continue }
-                    out["\(n == 0 ? "Q" : "M"):\(area),\(id)"] = Walkthrough(steps: steps, scripted: e["scripted"]?.string ?? "full")
+        for file in ["quest_steps.lua", "quest_solutions.lua"] {
+            guard let text = try? String(contentsOf: root.appendingPathComponent("data/" + file), encoding: .utf8) else { continue }
+            // T.quests then T.missions: { area = { [id] = { scripted = '…', steps = { '…' } } } }
+            for (n, table) in LuaDataReader.tables(in: text).filter({ !$0.keys.isEmpty }).prefix(2).enumerated() {
+                for area in table.keys {
+                    guard let ids = table[area]?.table else { continue }
+                    for key in ids.keys {
+                        guard let id = Int(key), let e = ids[key]?.table else { continue }
+                        let steps = (e["steps"]?.table?.array ?? []).compactMap(\.string)
+                        guard !steps.isEmpty else { continue }
+                        out["\(n == 0 ? "Q" : "M"):\(area),\(id)"] = Walkthrough(steps: steps, scripted: e["scripted"]?.string ?? "full", source: e["source"]?.string)
+                    }
                 }
             }
         }
@@ -141,7 +142,10 @@ enum QuestCatalogue {
                 if let npc = d["npc"]?.string { tags["NPC"] = npc }
                 if let level = d["level"]?.int { tags["LV"] = String(level) }
                 let walk = walkthroughs[entry.key]
-                if let walk { tags["WALK"] = walk.scripted }
+                if let walk {
+                    tags["WALK"] = walk.scripted
+                    if let source = walk.source { tags["SRC"] = source }
+                }
                 return GuideStep(kind: entry.mission ? "M" : "Q", title: entry.name, zone: d["zone"]?.int,
                                  posX: number(d["x"]), posZ: number(d["z"]), note: walk?.steps.joined(separator: "\n"),
                                  fixed: true, tags: tags)

@@ -39,6 +39,9 @@ struct Guide {
     var server: String? = nil
     var progressID: String? = nil
     var legacyProgressID: String? = nil
+    var legacyStartingLocation: String? = nil
+    var preservesLegacyCompletion = false
+    var startingLocationLabel = "Starting location"
 
     func available(on world: String) -> Bool {
         guard let server, !server.isEmpty else { return true }
@@ -78,7 +81,10 @@ enum GuideParser {
                 steps: body.split(separator: "\n").compactMap { parseStep(String($0)) },
                 server: luaString("server", in: head),
                 progressID: luaString("progress_id", in: head),
-                legacyProgressID: luaString("legacy_progress_id", in: head)
+                legacyProgressID: luaString("legacy_progress_id", in: head),
+                legacyStartingLocation: luaString("legacy_start", in: head),
+                preservesLegacyCompletion: luaString("legacy_completion", in: head) == "preserve",
+                startingLocationLabel: luaString("start_label", in: head) ?? "Starting location"
             ))
             search = end.upperBound
         }

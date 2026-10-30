@@ -27,8 +27,8 @@ enum CompanionLayoutSelfTest {
         } ?? []
         let scenarios: [(name: String, tab: Int, job: String?)] = [
             ("tab-0", 0, nil), ("tab-1", 1, nil), ("artifact-war", 1, "WAR"),
-            ("solo-goals", 0, nil), ("guide-completed", 0, nil), ("search-rabbit", 0, nil), ("monster-jack", 0, nil), ("gil-start", 0, nil), ("food-melee", 0, "WAR"), ("food-caster", 0, "BLM"),
-            ("tab-2", 2, nil), ("tab-3", 3, nil), ("tab-4", 4, nil)
+            ("solo-goals", 0, nil), ("guide-completed", 0, nil), ("guide-completed-step", 0, nil), ("search-rabbit", 0, nil), ("monster-jack", 0, nil), ("gil-start", 0, nil), ("food-melee", 0, "WAR"), ("food-caster", 0, "BLM"),
+            ("tab-2", 2, nil), ("tab-3", 3, nil), ("tab-4", 4, nil), ("settings", 5, nil)
         ]
         for scenario in scenarios {
             autoreleasepool {
@@ -44,7 +44,7 @@ enum CompanionLayoutSelfTest {
                 let view = NSHostingView(rootView: CompanionView(layoutTest: true, tab: scenario.tab, wiki: wiki,
                     foodFixture: scenario.name.hasPrefix("food-") ? scenario.job : nil, gilFixture: scenario.name == "gil-start",
                     searchFixture: scenario.name == "search-rabbit" ? "rabbit" : nil,
-                    monsterFixture: scenario.name == "monster-jack" ? monsters.first(where: { $0.name == "Jaggedy-Eared Jack" && $0.zone == 100 })?.id : nil, completedFixture: scenario.name == "guide-completed", goalsFixture: scenario.name == "solo-goals")
+                    monsterFixture: scenario.name == "monster-jack" ? monsters.first(where: { $0.name == "Jaggedy-Eared Jack" && $0.zone == 100 })?.id : nil, completedFixture: scenario.name.hasPrefix("guide-completed"), completedStepFixture: scenario.name == "guide-completed-step", goalsFixture: scenario.name == "solo-goals")
                     .preferredColorScheme(.dark).tint(Theme.crystal))
                 let window = NSWindow(contentRect: NSRect(origin: .zero, size: sizes[0]),
                                       styleMask: [.titled, .closable, .resizable],

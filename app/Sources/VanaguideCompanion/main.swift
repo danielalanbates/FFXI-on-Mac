@@ -646,13 +646,12 @@ struct CompanionView: View {
     @State var globalSearch = ""
     @State var showSearch = false
     @State var searchPage: GuideSearchTarget?
-    @State private var addingCharacter = false
-    @State private var newCharacter = ""
     private let layoutTest: Bool
 
-    init(layoutTest: Bool = false, tab: Int? = nil, wiki: WikiState? = nil, foodFixture: String? = nil, gilFixture: Bool = false, searchFixture: String? = nil, monsterFixture: String? = nil, completedFixture: Bool = false, goalsFixture: Bool = false) {
+    init(layoutTest: Bool = false, tab: Int? = nil, wiki: WikiState? = nil, foodFixture: String? = nil, gilFixture: Bool = false, searchFixture: String? = nil, monsterFixture: String? = nil, completedFixture: Bool = false, completedStepFixture: Bool = false, goalsFixture: Bool = false) {
         self.layoutTest = layoutTest
         let initialState = CompanionState(loadData: !layoutTest)
+        if layoutTest && tab == 5 { initialState.characterOptions = ["Layout", "SecondCharacter"] }
         if layoutTest, let foodFixture {
             initialState.guides = [Guide(name: QuestCatalogue.displayName("Starting out"), desc: "Starter food for this character.", levels: "1-10",
                 steps: [GuideStep(kind: "t", title: "Buy a few affordable food portions before fighting.",
@@ -672,6 +671,7 @@ struct CompanionView: View {
         }
         if layoutTest && completedFixture {
             _ = initialState.finishGuideStep()
+            if completedStepFixture { initialState.openGuide(0) }
             _expandedContent = State(initialValue: ["Start Here", "Completed"])
         }
         if layoutTest, let root = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"] {
@@ -704,6 +704,7 @@ struct CompanionView: View {
                 case 2: skillsPane
                 case 3: achievementsPane
                 case 4: serverPane
+                case 5: CharacterSettingsView(state: state)
                 default: guidesPane
                 }
                 }
@@ -718,7 +719,7 @@ struct CompanionView: View {
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
             guard !layoutTest else { return }
             state.reloadProgress()
-            state.applyLauncherWorld()
+            if tab != 5 { state.applyLauncherWorld() }
         }
         .onAppear {
             guard !layoutTest else { return }
@@ -790,6 +791,7 @@ struct CompanionView: View {
                 Text("Skills").tag(2)
                 Text("Server").tag(4)
                 Text("Achievements").tag(3)
+                Text("Settings").tag(5)
             }
             .pickerStyle(.segmented).labelsHidden()
             HStack(spacing: 6) {
@@ -798,26 +800,16 @@ struct CompanionView: View {
                     ForEach(state.worldOptions, id: \.self) { Text($0).tag($0) }
                 }
                 .frame(width: 165)
-                if addingCharacter {
-                    TextField("Character name", text: $newCharacter).frame(width: 120)
-                        .onSubmit {
-                            state.selectCharacter(newCharacter.capitalized)
-                            newCharacter = ""
-                            addingCharacter = false
-                        }
-                    Button("Cancel") { newCharacter = ""; addingCharacter = false }
-                } else {
-                    Picker("Character", selection: Binding(get: { state.character }, set: {
-                        if $0 == Self.addCharacterTag { addingCharacter = true } else { state.selectCharacter($0) }
-                    })) {
-                        if state.character.isEmpty { Text("None yet").tag("") }
-                        ForEach(state.characterOptions, id: \.self) { Text($0).tag($0) }
-                        Divider()
-                        Text("Add Character…").tag(Self.addCharacterTag)
-                    }
-                    .frame(width: 150)
-                    .disabled(state.world.isEmpty)
+                Picker("Character", selection: Binding(get: { state.character }, set: {
+                    if $0 == Self.addCharacterTag { tab = 5 } else { state.selectCharacter($0) }
+                })) {
+                    if state.character.isEmpty { Text("None yet").tag("") }
+                    ForEach(state.characterOptions, id: \.self) { Text($0).tag($0) }
+                    Divider()
+                    Text("Manage Characters…").tag(Self.addCharacterTag)
                 }
+                .frame(width: 150)
+                .disabled(state.world.isEmpty)
                 Spacer()
                 if !state.discoveryNote.isEmpty {
                     Text(state.discoveryNote).font(.caption).foregroundStyle(Theme.crystal).lineLimit(1)
@@ -923,9 +915,19 @@ struct CompanionView: View {
 
     var completedGuideOverview: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Guide completed", systemImage: "star.fill")
-                .font(.title2.bold()).foregroundStyle(Theme.gold)
+            HStack {
+                Label("Guide completed", systemImage: "star.fill")
+                    .font(.title2.bold()).foregroundStyle(Theme.gold)
+                Spacer()
+                if let g = guide, state.progress.completed(g) {
+                    Button("Completed") { state.uncompleteGuide() }
+                        .controlSize(.small)
+                }
+            }
             if let guide { Text(guide.name).font(.headline) }
+            if !state.guideSaveError.isEmpty {
+                Text(state.guideSaveError).font(.caption).foregroundStyle(Theme.ember)
+            }
             Text("Choose another guide from Content, or review a completed guide below.")
                 .font(.callout).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
             ScrollView {
@@ -979,7 +981,7 @@ struct CompanionView: View {
                 }
                 let starts = g.steps.indices.filter { g.steps[$0].tags["START"] != nil }
                 if !starts.isEmpty {
-                    Picker("Starting location", selection: Binding<Int>(
+                    Picker(g.startingLocationLabel, selection: Binding<Int>(
                         get: { starts.first(where: { g.steps[$0].tags["START"] == state.progress.guideBookmarks?[g.progressKey]?.startingLocation }) ?? starts[0] },
                         set: { state.moveToStep($0) }
                     )) {
@@ -1013,9 +1015,11 @@ struct CompanionView: View {
                             .stroke(state.devMode ? Theme.alert : .clear, lineWidth: 1.5))
                     }
                 }
+                let route = g.activeStepIndices(startingLocation: state.progress.guideBookmarks?[g.progressKey]?.startingLocation)
+                let isFinalCompleted = state.progress.completed(g) && route.first(where: { $0 > state.stepIndex }) == nil
                 HStack {
                     Button("Back") { state.previousGuideStep() }
-                    Button("Done") {
+                    Button(isFinalCompleted ? "Completed" : "Done") {
                         if state.finishGuideStep() { expandedContent.insert("Completed") }
                     }
                     .keyboardShortcut(.defaultAction)
@@ -1181,9 +1185,14 @@ struct CompanionView: View {
         if let source = s.tags["SRC"], let url = URL(string: source), url.host == "horizonffxi.wiki" {
             Link("Horizon wiki", destination: url).font(.caption)
         }
+        let route = g.activeStepIndices(startingLocation: state.progress.guideBookmarks?[g.progressKey]?.startingLocation)
+        let isFinalCompleted = state.progress.completed(g) && route.first(where: { $0 > state.stepIndex }) == nil
         if let r = state.status(of: s) {
             Text(r.status == .completed ? "Completed · from your \(r.source)" : "Current · from your \(r.source)")
                 .font(.caption).foregroundStyle(r.status == .completed ? Theme.jade : Theme.crystal)
+        } else if isFinalCompleted {
+            Text("Completed · click Completed below to mark incomplete.")
+                .font(.caption).foregroundStyle(Theme.jade)
         } else if s.fixed && s.tags["LOG"] == nil {
             Text("Press Done once you have finished this in game.")
                 .font(.caption).foregroundStyle(Theme.gold)
