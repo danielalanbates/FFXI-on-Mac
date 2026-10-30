@@ -133,7 +133,11 @@ extension CompanionState {
     }
 
     @discardableResult
-    func uncompleteCurrentGuide() -> Bool { uncompleteGuide() }
+    func uncompleteCurrentGuide() -> Bool {
+        guard guides.indices.contains(selected), progress.completed(guides[selected]) else { return false }
+        _ = uncompleteGuide()
+        return !progress.completed(guides[selected])
+    }
 
     /// True only after the last Done was saved; transition to the completed-guide screen.
     @discardableResult
@@ -180,6 +184,6 @@ extension CompanionState {
             return false
         }
         guideDetailOpen = true
-        return true
+        return false
     }
 }
