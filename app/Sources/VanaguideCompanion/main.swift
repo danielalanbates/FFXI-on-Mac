@@ -51,10 +51,9 @@ struct CompanionApp: App {
     }
 }
 
-/// Screen Reading is available in the companion's normal UI. Merely exposing the controls
-/// never enumerates windows, requests Screen Recording permission or starts capture.
+/// Automatic window reading is kept off in the public navigation UI.
 enum Features {
-    static let screenReading = true
+    static let screenReading = false
 }
 
 final class CompanionState: ObservableObject {
@@ -238,7 +237,7 @@ final class CompanionState: ObservableObject {
         selected = startGuide
     }
 
-    /// Getting Started (Screen Reading) for a character with nothing on record; otherwise the
+    /// Getting Started for a character with nothing on record; otherwise the
     /// first real guide.
     var startGuide: Int {
         let available = guides.indices.filter { guides[$0].available(on: world) }
@@ -641,13 +640,15 @@ struct CompanionView: View {
     // --tab <n> (test hook) opens on another tab, 1 Gear, 2 Skills, 3 Achievements, 4 Server, for --snapshot.
     @State var tab = CommandLine.arguments.firstIndex(of: "--tab")
         .flatMap { CommandLine.arguments.indices.contains($0 + 1) ? Int(CommandLine.arguments[$0 + 1]) : nil } ?? 0
-    @State private var expandedContent: Set<String> = ["Start Here"]
-    @State private var showReading = false
+    @State var expandedContent: Set<String> = ["Start Here"]
+    @State var globalSearch = ""
+    @State var showSearch = false
+    @State var searchPage: GuideSearchTarget?
     @State private var addingCharacter = false
     @State private var newCharacter = ""
     private let layoutTest: Bool
 
-    init(layoutTest: Bool = false, tab: Int? = nil, wiki: WikiState? = nil, foodFixture: String? = nil, gilFixture: Bool = false) {
+    init(layoutTest: Bool = false, tab: Int? = nil, wiki: WikiState? = nil, foodFixture: String? = nil, gilFixture: Bool = false, searchFixture: String? = nil, monsterFixture: String? = nil) {
         self.layoutTest = layoutTest
         let initialState = CompanionState(loadData: !layoutTest)
         if layoutTest, let foodFixture {
@@ -663,9 +664,18 @@ struct CompanionView: View {
                     GuideStep(kind: "t", title: "Start in \(nation).", note: "Starting location: \(nation). Check requirements and costs before travelling.", tags: ["START": nation])
                 })]
         }
+        if layoutTest, let root = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"] {
+            initialState.zones = WorldMap.load(root: URL(fileURLWithPath: root))
+        }
         _state = StateObject(wrappedValue: initialState)
         _wiki = StateObject(wrappedValue: wiki ?? WikiState())
         if let tab { _tab = State(initialValue: tab) }
+        if let searchFixture {
+            _globalSearch = State(initialValue: searchFixture)
+            _showSearch = State(initialValue: true)
+        }
+        if let monsterFixture { _searchPage = State(initialValue: .monster(monsterFixture)) }
+
     }
     static let addCharacterTag = "\u{1}add"
 
@@ -674,14 +684,18 @@ struct CompanionView: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            header
+            header.zIndex(10)
             Group {
+                if let page = searchPage {
+                    searchDetail(page)
+                } else {
                 switch tab {
                 case 1: gearPane
                 case 2: skillsPane
                 case 3: achievementsPane
                 case 4: serverPane
                 default: guidesPane
+                }
                 }
             }
                 .frame(maxHeight: .infinity)
@@ -717,7 +731,11 @@ struct CompanionView: View {
             }
         }
         .onChange(of: state.isSurveying) { capture.fullWindow = $0 }
-        .onChange(of: state.world) { if !layoutTest { wiki.load(roots: CompanionState.vanaguideRoots, world: $0) } }
+        .onChange(of: state.world) {
+            searchPage = nil; showSearch = false
+            if !layoutTest { wiki.load(roots: CompanionState.vanaguideRoots, world: $0) }
+        }
+        .onChange(of: tab) { _ in searchPage = nil; showSearch = false }
         .onDisappear { capture.stop() }
     }
 
@@ -745,7 +763,7 @@ struct CompanionView: View {
         }
     }
 
-    // MARK: Header — tabs, character, screen reading
+    // MARK: Header — tabs, character, search
 
     var header: some View {
         VStack(spacing: 6) {
@@ -753,8 +771,9 @@ struct CompanionView: View {
                 Text("ALPHA VanaGuide").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.gold)
                 Text("Server-Safe").font(.system(size: 12)).foregroundStyle(Theme.muted)
                 Spacer()
-                if Features.screenReading { readingStatus }
+                globalSearchBar
             }
+            .zIndex(2)
             Picker("", selection: $tab) {
                 Text("Guides").tag(0)
                 Text("Gear").tag(1)
@@ -804,82 +823,10 @@ struct CompanionView: View {
         }
     }
 
-    /// Screen Reading carries the Developer Mode hammer: red when it is on.
+    /// Developer Mode indicator.
     var hammer: some View {
         Image(systemName: state.devMode ? "hammer.fill" : "hammer")
             .foregroundStyle(state.devMode ? Theme.alert : Theme.text)
-    }
-
-    var readingStatus: some View {
-        HStack(spacing: 6) {
-            if capture.running {
-                Circle().fill(ScreenGuideCapture.warm ? Theme.jade : Theme.gold).frame(width: 8, height: 8)
-                    .help(!ScreenGuideCapture.warm ? "Preparing text recognition…"
-                          : capture.discovering ? "Finding your character…" : capture.note)
-                Button { state.devMode.toggle() } label: { hammer }
-                    .controlSize(.small)
-                    .help(state.devMode ? "Developer Mode is on: recording quest givers and zones. Click to turn off."
-                                        : "Developer Mode: record quest givers and their zones while you play.")
-                Button("Stop") { capture.stop() }.controlSize(.small)
-            } else {
-                Button { showReading.toggle() } label: { HStack(spacing: 4) { hammer; Text("Screen Reading…") } }
-                    .controlSize(.small)
-                    .popover(isPresented: $showReading, arrowEdge: .bottom) { readingSettings }
-            }
-        }
-    }
-
-    var readingSettings: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Screen Reading").font(.headline).foregroundStyle(Theme.gold)
-            Text("Reads the chosen game window every 10 seconds, on this Mac only. Use it where your server permits screen tools.")
-                .font(.caption).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
-            HStack {
-                Button("Find Game Window") { capture.refreshWindows() }.disabled(capture.busy)
-                Picker("", selection: $capture.selectedID) {
-                    Text("Choose…").tag(Optional<CGWindowID>.none)
-                    ForEach(capture.windows) { window in Text(window.label).tag(Optional(window.id)) }
-                }
-                .labelsHidden()
-            }
-            SectionLabel(text: "Chat area, % of window")
-            HStack(spacing: 8) {
-                cropField("Left", value: $capture.crop.left)
-                cropField("Top", value: $capture.crop.top)
-                cropField("Width", value: $capture.crop.width)
-                cropField("Height", value: $capture.crop.height)
-            }
-            if !capture.note.isEmpty {
-                Text(capture.note).font(.caption).foregroundStyle(Theme.muted)
-            }
-            Toggle(isOn: $state.devMode) {
-                HStack(spacing: 4) { hammer; Text("Developer Mode: record quest givers and their zones") }
-            }
-            .toggleStyle(.checkbox)
-            HStack {
-                Spacer()
-                Button("Start Reading") {
-                    state.resetScreenshotMatching()
-                    capture.fullWindow = state.isSurveying
-                    capture.start()
-                    state.readingStarted(windowTitle: capture.targetTitle)
-                    tab = 0
-                    showReading = false
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(capture.selectedID == nil || !capture.crop.valid || capture.busy)
-            }
-        }
-        .padding(14)
-        .frame(width: 380)
-    }
-
-    func cropField(_ label: String, value: Binding<Double>) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label).font(.caption2).foregroundStyle(Theme.muted)
-            TextField(label, value: value, format: .number.precision(.fractionLength(0...1)))
-                .frame(width: 56).textFieldStyle(.roundedBorder)
-        }
     }
 
     // MARK: Guides
@@ -1110,8 +1057,6 @@ struct CompanionView: View {
             } else {
                 Text("Go to \(state.zones.name(target))\(npc.map { $0.isMarker ? " and find the small glowing \"???\" spot. Target it and press Enter." : " and find \($0). Target them and press Enter to talk." } ?? ".")")
                     .font(.callout).fixedSize(horizontal: false, vertical: true)
-                Text("Turn on Screen Reading and the guide will give turn-by-turn directions from where you are.")
-                    .font(.caption).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
             }
         } else if s.tags["Q"] != nil || s.tags["M"] != nil {
             Text("The guide doesn't know where this one starts yet.")
@@ -1126,7 +1071,7 @@ struct CompanionView: View {
         VStack(alignment: .leading, spacing: 6) {
             SectionLabel(text: "Developer Mode")
             if !capture.running {
-                Text("Start Screen Reading to record.").font(.caption).foregroundStyle(Theme.ember)
+                Text("No current location available.").font(.caption).foregroundStyle(Theme.ember)
             }
             Text(state.currentZone.map { "Zone: \(state.zones.name($0))" }
                  ?? "Zone unknown — change zones once so the Area line appears in chat.")
@@ -1181,7 +1126,7 @@ struct CompanionView: View {
         }
         if g.name == LogSurvey.guideName {
             if s.tags["LOG"] != "none" && !capture.running {
-                Text("Start Screen Reading so this page can be recorded.")
+                Text("Mark completed quests with Done as you follow a guide.")
                     .font(.caption).foregroundStyle(Theme.ember)
             }
             if !state.surveyNote.isEmpty {

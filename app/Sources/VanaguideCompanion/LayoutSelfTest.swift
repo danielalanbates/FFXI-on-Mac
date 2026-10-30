@@ -22,9 +22,12 @@ enum CompanionLayoutSelfTest {
         let gear = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"].flatMap {
             WikiData.gear(URL(fileURLWithPath: $0).appendingPathComponent("data/gear_guide.lua"))
         }
+        let monsters = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"].map {
+            MonsterEntry.load(roots: [URL(fileURLWithPath: $0)], world: "HorizonXI")
+        } ?? []
         let scenarios: [(name: String, tab: Int, job: String?)] = [
             ("tab-0", 0, nil), ("tab-1", 1, nil), ("artifact-war", 1, "WAR"),
-            ("gil-start", 0, nil), ("food-melee", 0, "WAR"), ("food-caster", 0, "BLM"),
+            ("search-rabbit", 0, nil), ("monster-jack", 0, nil), ("gil-start", 0, nil), ("food-melee", 0, "WAR"), ("food-caster", 0, "BLM"),
             ("tab-2", 2, nil), ("tab-3", 3, nil), ("tab-4", 4, nil)
         ]
         for scenario in scenarios {
@@ -35,10 +38,13 @@ enum CompanionLayoutSelfTest {
                     GearItem(id: index, name: "\(job) fixture armor", level: 60, slot: "body", jobs: job,
                              rare: true, ex: true, categories: ["artifact"], how: [])
                 }
+                wiki.monsters = monsters
                 wiki.note = ""
                 if let job = scenario.job { wiki.selectArtifactJob(job) }
                 let view = NSHostingView(rootView: CompanionView(layoutTest: true, tab: scenario.tab, wiki: wiki,
-                    foodFixture: scenario.name.hasPrefix("food-") ? scenario.job : nil, gilFixture: scenario.name == "gil-start")
+                    foodFixture: scenario.name.hasPrefix("food-") ? scenario.job : nil, gilFixture: scenario.name == "gil-start",
+                    searchFixture: scenario.name == "search-rabbit" ? "rabbit" : nil,
+                    monsterFixture: scenario.name == "monster-jack" ? monsters.first(where: { $0.name == "Jaggedy-Eared Jack" && $0.zone == 100 })?.id : nil)
                     .preferredColorScheme(.dark).tint(Theme.crystal))
                 let window = NSWindow(contentRect: NSRect(origin: .zero, size: sizes[0]),
                                       styleMask: [.titled, .closable, .resizable],

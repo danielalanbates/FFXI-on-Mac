@@ -69,6 +69,27 @@ enum CompanionSelfTest {
         checks.append(("other guides do not borrow food controls",
                        !StarterFood.isFoodStep(guide: "Other", title: "Buy a few affordable food portions before fighting.")))
 
+        let searchWiki = WikiState()
+        searchWiki.monsters = [MonsterEntry(name: "Jaggedy-Eared Jack", zone: 100, family: "Rabbit", lo: 9, hi: 10,
+            nm: true, drops: "Rabbit Charm", note: "G-9–H-9", source: "https://horizonffxi.wiki/Category:Rabbits", scope: "HorizonXI")]
+        let searchGuides = [Guide(name: "Solo EXP", desc: "Leveling", levels: "1-75", steps: [
+            GuideStep(kind: "K", title: "Defeat Forest Hare", note: "Rabbit hides")], server: "HorizonXI"),
+            Guide(name: "Other server", desc: "rabbit", levels: "", steps: [], server: "Other")]
+        let rabbitHits = GuideSearch.hits(query: "rabbit", guides: searchGuides, world: "HorizonXI", wiki: searchWiki, zones: WorldMap())
+        checks.append(("rabbit search offers a monster-family database", rabbitHits.contains { $0.target == .family("Rabbit") }))
+        checks.append(("rabbit search separately offers Jaggedy-Eared Jack", rabbitHits.contains { $0.target == .monster(searchWiki.monsters[0].id) }))
+        checks.append(("rabbit search opens the exact matching guide step", rabbitHits.contains { $0.target == .guide(0, 0) && $0.subtitle.contains("Step 1") }))
+        checks.append(("search excludes other-server guides", !rabbitHits.contains { $0.target == .guide(1, 0) }))
+        checks.append(("search normalizes punctuation and case", GuideSearch.matches("jaggedy eared JACK", "Jaggedy-Eared Jack")))
+        checks.append(("plural rabbits also finds the Rabbit family", GuideSearch.matches("rabbits", "Rabbit")))
+        checks.append(("blank search offers no suggestions", GuideSearch.hits(query: "  ", guides: searchGuides, world: "HorizonXI", wiki: searchWiki, zones: WorldMap()).isEmpty))
+        checks.append(("unmatched search offers no suggestions", GuideSearch.hits(query: "zzzznoentry", guides: searchGuides, world: "HorizonXI", wiki: searchWiki, zones: WorldMap()).isEmpty))
+        if let root = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"] {
+            let monsters = MonsterEntry.load(roots: [URL(fileURLWithPath: root)], world: "HorizonXI")
+            checks.append(("Horizon monster data keeps Jack in West Ronfaure at 9-10", monsters.contains { $0.name == "Jaggedy-Eared Jack" && $0.zone == 100 && $0.lo == 9 && $0.hi == 10 && $0.family == "Rabbit" && $0.scope == "HorizonXI" }))
+            checks.append(("Horizon rabbit family excludes the standard Nyzul duplicate", !monsters.contains { $0.name == "Jaggedy-Eared Jack" && $0.zone == 77 }))
+        }
+
         var scoped = Guide(name: "Scoped", desc: "", levels: "", steps: [], server: "HorizonXI")
         checks.append(("server guide accepts matching world and spacing", scoped.available(on: "Horizon XI")))
         checks.append(("server guide excludes another or unknown world",

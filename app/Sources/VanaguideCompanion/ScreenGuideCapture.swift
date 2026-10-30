@@ -123,7 +123,7 @@ final class ScreenGuideCapture: ObservableObject {
         guard #available(macOS 14.0, *) else { note = "Screenshot mode needs macOS 14 or later."; return }
         // Permission is requested only after this explicit button press; never on app launch.
         guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {
-            note = "Allow Screen Recording for this app, then refresh windows."
+            note = "Window access is unavailable."
             return
         }
         busy = true
@@ -138,7 +138,7 @@ final class ScreenGuideCapture: ObservableObject {
                 }.sorted { $0.label < $1.label }
                 if !windows.contains(where: { $0.id == selectedID }) { selectedID = nil }
                 note = windows.isEmpty ? "No visible FFXI game window found." : "Choose the game window and chat area."
-            } catch { note = "Could not list game windows. Check Screen Recording permission." }
+            } catch { note = "Could not list game windows." }
         }
     }
 
@@ -160,7 +160,7 @@ final class ScreenGuideCapture: ObservableObject {
               let target = windows.first(where: { $0.id == selectedID }) else { return }
         guard #available(macOS 14.0, *) else { note = "Screenshot mode needs macOS 14 or later."; return }
         guard CGPreflightScreenCaptureAccess() else {
-            note = "Screen Recording permission is required."
+            note = "Window access is unavailable."
             return
         }
         self.target = target

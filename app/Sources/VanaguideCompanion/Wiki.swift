@@ -110,6 +110,7 @@ final class WikiState: ObservableObject {
     /// own wiki or site, data/servers/<key>/server_notes.lua and quest_guides.lua.
     @Published var crafts: [String: [CraftRecipe]] = [:]
     @Published var targets: [SkillTarget] = []
+    @Published var monsters: [MonsterEntry] = []
     @Published var notes: [SkillGuide] = []
     @Published var quests: [SkillGuide] = []
     @Published var serverPick: String?
@@ -159,7 +160,11 @@ final class WikiState: ObservableObject {
         world.lowercased().filter { $0.isLetter || $0.isNumber }
     }
 
+    private var requestedWorld = ""
+
     func load(roots: [URL], world: String = "") {
+        requestedWorld = world
+        monsters = []; notes = []; quests = []; items = []; skills = []
         let key = Self.serverKey(for: world)
         Task.detached(priority: .userInitiated) {
             func pick<T>(_ file: String, _ read: (URL) -> T?) -> (T, Bool)? {
@@ -193,7 +198,11 @@ final class WikiState: ObservableObject {
                 return []
             }
             let notes = own("server_notes.lua"), quests = own("quest_guides.lua")
+            let monsters = MonsterEntry.load(roots: roots, world: world)
             await MainActor.run {
+                // A previous server's slower load must never replace the current results.
+                guard Self.serverKey(for: self.requestedWorld) == key else { return }
+                self.monsters = monsters
                 self.notes = notes
                 self.quests = quests
                 self.serverPick = notes.first.map { Self.tag($0) } ?? quests.first.map { Self.tag($0) }
