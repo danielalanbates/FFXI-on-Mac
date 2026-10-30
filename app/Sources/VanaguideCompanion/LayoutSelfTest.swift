@@ -24,7 +24,7 @@ enum CompanionLayoutSelfTest {
         }
         let scenarios: [(name: String, tab: Int, job: String?)] = [
             ("tab-0", 0, nil), ("tab-1", 1, nil), ("artifact-war", 1, "WAR"),
-            ("food-melee", 0, "WAR"), ("food-caster", 0, "BLM"),
+            ("gil-start", 0, nil), ("food-melee", 0, "WAR"), ("food-caster", 0, "BLM"),
             ("tab-2", 2, nil), ("tab-3", 3, nil), ("tab-4", 4, nil)
         ]
         for scenario in scenarios {
@@ -38,7 +38,7 @@ enum CompanionLayoutSelfTest {
                 wiki.note = ""
                 if let job = scenario.job { wiki.selectArtifactJob(job) }
                 let view = NSHostingView(rootView: CompanionView(layoutTest: true, tab: scenario.tab, wiki: wiki,
-                    foodFixture: scenario.name.hasPrefix("food-") ? scenario.job : nil)
+                    foodFixture: scenario.name.hasPrefix("food-") ? scenario.job : nil, gilFixture: scenario.name == "gil-start")
                     .preferredColorScheme(.dark).tint(Theme.crystal))
                 let window = NSWindow(contentRect: NSRect(origin: .zero, size: sizes[0]),
                                       styleMask: [.titled, .closable, .resizable],

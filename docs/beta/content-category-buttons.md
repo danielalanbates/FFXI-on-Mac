@@ -10,3 +10,8 @@ Only categories with guides available for the selected server appear. Longer rou
 wrap instead of being cut off. Buttons expose their expanded/collapsed state to accessibility.
 
 This change affects navigation, not the route content or server level-cap rules.
+
+The combined Solo Gil guide also offers a Starting location picker. Windurst, San d'Oria,
+and Bastok jump to the first step of their respective sections. Each step identifies its
+starting-city route; action text still names the actual destination. This navigation does
+not change the character's home nation or quest-completion records.

@@ -647,7 +647,7 @@ struct CompanionView: View {
     @State private var newCharacter = ""
     private let layoutTest: Bool
 
-    init(layoutTest: Bool = false, tab: Int? = nil, wiki: WikiState? = nil, foodFixture: String? = nil) {
+    init(layoutTest: Bool = false, tab: Int? = nil, wiki: WikiState? = nil, foodFixture: String? = nil, gilFixture: Bool = false) {
         self.layoutTest = layoutTest
         let initialState = CompanionState(loadData: !layoutTest)
         if layoutTest, let foodFixture {
@@ -656,6 +656,12 @@ struct CompanionView: View {
                                   note: "Buy singles first and keep gil for spells and equipment.")])]
             initialState.progress.foodJob = foodFixture
             initialState.progress.homeNation = "San d'Oria"
+        }
+        if layoutTest && gilFixture {
+            initialState.guides = [Guide(name: "Solo Gil - HorizonXI", desc: "Choose your starting location.", levels: "Early quests",
+                steps: ["Windurst", "San d'Oria", "Bastok"].map { nation in
+                    GuideStep(kind: "t", title: "Start in \(nation).", note: "Starting location: \(nation). Check requirements and costs before travelling.", tags: ["START": nation])
+                })]
         }
         _state = StateObject(wrappedValue: initialState)
         _wiki = StateObject(wrappedValue: wiki ?? WikiState())
@@ -972,6 +978,17 @@ struct CompanionView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(g.name).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.gold)
                     .lineLimit(2)
+                let starts = g.steps.indices.filter { g.steps[$0].tags["START"] != nil }
+                if !starts.isEmpty {
+                    Picker("Starting location", selection: Binding<Int>(
+                        get: { starts.last(where: { $0 <= state.stepIndex }) ?? starts[0] },
+                        set: { state.stepIndex = $0 }
+                    )) {
+                        ForEach(starts, id: \.self) { index in
+                            Text(g.steps[index].tags["START"] ?? "").tag(index)
+                        }
+                    }
+                }
                 if !g.desc.isEmpty {
                     Text(g.desc).font(.caption).foregroundStyle(Theme.muted)
                         .fixedSize(horizontal: false, vertical: true)

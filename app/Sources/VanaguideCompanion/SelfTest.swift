@@ -50,6 +50,9 @@ enum CompanionSelfTest {
         checks.append(("buy steps retain item conditions",
                        GuideParser.parseStep("B Buy food.|IT|4376,3|")?.tags["IT"] == "4376,3"))
 
+        checks.append(("starting-city entry point is retained for route navigation",
+                       GuideParser.parseStep("t Start in Windurst.|START|Windurst||N|Starting location: Windurst.|")?.tags["START"] == "Windurst"))
+
         for nation in ["San d'Oria", "Bastok", "Windurst"] {
             for job in ["WAR", "MNK", "WHM", "BLM", "RDM", "THF"] {
                 let advice = StarterFood.advice(job: job, nation: nation)
