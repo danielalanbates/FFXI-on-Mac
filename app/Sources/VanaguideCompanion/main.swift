@@ -40,7 +40,7 @@ struct CompanionApp: App {
     }
 
     var body: some Scene {
-        Window("VanaGuide Server-Safe", id: "guide") {
+        Window("ALPHA VanaGuide Server-Safe", id: "guide") {
             CompanionView()
                 .preferredColorScheme(.dark)
                 .tint(Theme.crystal)
@@ -247,6 +247,12 @@ final class CompanionState: ObservableObject {
 
     static func lastCharacter(on world: String) -> String {
         ProgressStore.saved().first { $0.world == world && !$0.character.isEmpty }?.character ?? ""
+    }
+
+    func setFoodProfile(job: String? = nil, nation: String? = nil) {
+        if let job { progress.foodJob = job }
+        if let nation { progress.homeNation = nation }
+        ProgressStore.save(progress)
     }
 
     func selectCharacter(_ name: String) {
@@ -638,9 +644,17 @@ struct CompanionView: View {
     @State private var newCharacter = ""
     private let layoutTest: Bool
 
-    init(layoutTest: Bool = false, tab: Int? = nil, wiki: WikiState? = nil) {
+    init(layoutTest: Bool = false, tab: Int? = nil, wiki: WikiState? = nil, foodFixture: String? = nil) {
         self.layoutTest = layoutTest
-        _state = StateObject(wrappedValue: CompanionState(loadData: !layoutTest))
+        let initialState = CompanionState(loadData: !layoutTest)
+        if layoutTest, let foodFixture {
+            initialState.guides = [Guide(name: QuestCatalogue.displayName("Starting out"), desc: "Starter food for this character.", levels: "1-10",
+                steps: [GuideStep(kind: "t", title: "Buy a few affordable food portions before fighting.",
+                                  note: "Buy singles first and keep gil for spells and equipment.")])]
+            initialState.progress.foodJob = foodFixture
+            initialState.progress.homeNation = "San d'Oria"
+        }
+        _state = StateObject(wrappedValue: initialState)
         _wiki = StateObject(wrappedValue: wiki ?? WikiState())
         if let tab { _tab = State(initialValue: tab) }
     }
@@ -727,7 +741,7 @@ struct CompanionView: View {
     var header: some View {
         VStack(spacing: 6) {
             HStack(spacing: 8) {
-                Text("VanaGuide").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.gold)
+                Text("ALPHA VanaGuide").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.gold)
                 Text("Server-Safe").font(.system(size: 12)).foregroundStyle(Theme.muted)
                 Spacer()
                 if Features.screenReading { readingStatus }
@@ -897,6 +911,24 @@ struct CompanionView: View {
     }
 
     @ViewBuilder
+    var foodProfile: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("Main job", selection: Binding(get: { state.progress.foodJob ?? "" },
+                set: { state.setFoodProfile(job: $0) })) {
+                Text("Choose job").tag("")
+                ForEach(["WAR", "MNK", "WHM", "BLM", "RDM", "THF"], id: \.self) { Text($0).tag($0) }
+            }
+            Picker("Home nation", selection: Binding(get: { state.progress.homeNation ?? "" },
+                set: { state.setFoodProfile(nation: $0) })) {
+                Text("Choose nation").tag("")
+                ForEach(["San d'Oria", "Bastok", "Windurst"], id: \.self) { Text($0).tag($0) }
+            }
+            Text(StarterFood.advice(job: state.progress.foodJob, nation: state.progress.homeNation))
+                .font(.callout).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
     var stepDetail: some View {
         if let g = guide {
             VStack(alignment: .leading, spacing: 8) {
@@ -911,6 +943,9 @@ struct CompanionView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 6) {
                             SectionLabel(text: "Step \(state.stepIndex + 1) of \(g.steps.count)")
+                            if StarterFood.isFoodStep(guide: g.name, title: s.title) {
+                                foodProfile
+                            }
                             stepCard(s)
                             stepStatus(s, in: g)
                             if state.devMode { devPanel(s) }
