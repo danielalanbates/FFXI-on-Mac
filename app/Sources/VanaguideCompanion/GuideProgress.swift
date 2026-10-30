@@ -7,6 +7,7 @@ struct GuideBookmark: Codable, Equatable {
     var title: String
     var completed: Bool
     var startingLocation: String? = nil
+    var completedSteps: [String]? = nil
 }
 
 extension Guide {
@@ -67,7 +68,8 @@ extension CharacterProgress {
         let previous = bookmarks[guide.progressKey]
         bookmarks[guide.progressKey] = GuideBookmark(step: index, title: guide.steps[index].title,
             completed: completed ?? previous?.completed ?? false,
-            startingLocation: guide.steps[index].tags["HOME"] ?? guide.steps[index].tags["START"] ?? previous?.startingLocation)
+            startingLocation: guide.steps[index].tags["HOME"] ?? guide.steps[index].tags["START"] ?? previous?.startingLocation,
+            completedSteps: previous?.completedSteps)
         guideBookmarks = bookmarks
         lastGuide = guide.progressKey
         updated = Date()
@@ -157,6 +159,10 @@ extension CompanionState {
             let status: LogStatus = (step.kind == "A" || step.tags["QA"] != nil || step.tags["MA"] != nil) ? .current : .completed
             _ = progress.record(key, status, source: "done")
         }
+        var done = progress.guideBookmarks?[guide.progressKey]?.completedSteps ?? []
+        if !done.contains(step.title) { done.append(step.title) }
+        progress.remember(guide, step: stepIndex)
+        progress.guideBookmarks?[guide.progressKey]?.completedSteps = done
         if let next { stepIndex = next }
         progress.remember(guide, step: stepIndex, completed: finished ? true : nil)
         guard saveGuideProgress() else {
@@ -177,6 +183,9 @@ extension CompanionState {
         stepIndex = savedStep
         if guide.steps.indices.contains(savedStep), let key = Self.key(for: guide.steps[savedStep]), progress.entries[key]?.source == "done" {
             progress.entries.removeValue(forKey: key)
+        }
+        if guide.steps.indices.contains(savedStep) {
+            progress.guideBookmarks?[guide.progressKey]?.completedSteps?.removeAll { $0 == guide.steps[savedStep].title }
         }
         progress.remember(guide, step: savedStep, completed: false)
         guard saveGuideProgress() else {

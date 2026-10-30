@@ -13,6 +13,7 @@ extension CompanionSelfTest {
         state.openGuide(0)
         var checks: [(String, Bool)] = []
         checks.append(("Done on an intermediate step keeps the guide open", !state.finishGuideStep() && state.stepIndex == 1))
+        checks.append(("Done stars an individual non-quest step", state.progress.guideBookmarks?[a.progressKey]?.completedSteps == ["One"]))
         state.openGuide(1)
         state.openGuide(0)
         checks.append(("switching guides restores the exact unfinished step", state.stepIndex == 1))
@@ -41,7 +42,7 @@ extension CompanionSelfTest {
         checks.append(("new content before a saved step preserves the instruction", state.progress.resumeStep(in: shifted) == 1))
         let encoder = JSONEncoder(), decoder = JSONDecoder()
         if let data = try? encoder.encode(state.progress), let restored = try? decoder.decode(CharacterProgress.self, from: data) {
-            checks.append(("saved bookmarks and stars survive JSON round-trip", restored == state.progress && restored.completed(a) && restored.resumeStep(in: a) == 0))
+            checks.append(("saved bookmarks and stars survive JSON round-trip", restored == state.progress && restored.guideBookmarks?[a.progressKey]?.completedSteps?.contains("One") == true && restored.completed(a) && restored.resumeStep(in: a) == 0))
         } else { checks.append(("saved bookmarks and stars survive JSON round-trip", false)) }
         let legacy = Data(#"{"character":"Old","world":"Local fixture","entries":{},"updated":0}"#.utf8)
         let old = try? decoder.decode(CharacterProgress.self, from: legacy)

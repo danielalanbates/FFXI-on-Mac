@@ -40,7 +40,7 @@ struct CompanionApp: App {
     }
 
     var body: some Scene {
-        Window("ALPHA VanaGuide Server-Safe", id: "guide") {
+        Window("VanaGuide Server-Safe (Beta)", id: "guide") {
             CompanionView()
                 .preferredColorScheme(.dark)
                 .tint(Theme.crystal)
@@ -703,7 +703,7 @@ struct CompanionView: View {
                 case 1: gearPane
                 case 2: skillsPane
                 case 3: achievementsPane
-                case 4: serverPane
+                case 4: guidesPane
                 case 5: CharacterSettingsView(state: state)
                 default: guidesPane
                 }
@@ -779,7 +779,7 @@ struct CompanionView: View {
     var header: some View {
         VStack(spacing: 6) {
             HStack(spacing: 8) {
-                Text("ALPHA VanaGuide").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.gold)
+                Text("VanaGuide (Beta)").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.gold)
                 Text("Server-Safe").font(.system(size: 12)).foregroundStyle(Theme.muted)
                 Spacer()
                 globalSearchBar
@@ -789,7 +789,6 @@ struct CompanionView: View {
                 Text("Guides").tag(0)
                 Text("Gear").tag(1)
                 Text("Skills").tag(2)
-                Text("Server").tag(4)
                 Text("Achievements").tag(3)
                 Text("Settings").tag(5)
             }
@@ -848,7 +847,10 @@ struct CompanionView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(QuestCatalogue.sectionOrder + ["Completed"], id: \.self) { section in
                                 let rows = state.guides.indices.filter { state.guides[$0].available(on: state.world) && (section == "Completed" ? state.progress.completed(state.guides[$0]) : QuestCatalogue.section(of: state.guides[$0]) == section) }
-                                if !rows.isEmpty {
+                                let articles = section == "Start Here" ? wiki.notes : wiki.quests.filter { article in
+                                    section == "Jobs" ? article.group.lowercased().contains("job") : section == "Missions" ? article.group.lowercased().contains("mission") : section == "Quests" && !article.group.lowercased().contains("job") && !article.group.lowercased().contains("mission")
+                                }
+                                if !rows.isEmpty || !articles.isEmpty {
                                     Button {
                                         if expandedContent.contains(section) { expandedContent.remove(section) }
                                         else { expandedContent.insert(section) }
@@ -869,6 +871,13 @@ struct CompanionView: View {
                                     .accessibilityValue(expandedContent.contains(section) ? "Expanded" : "Collapsed")
                                     .help("Expand or collapse \(section)")
                                     if expandedContent.contains(section) {
+                                        ForEach(articles, id: \.name) { article in
+                                            Button { searchPage = .server(WikiState.tag(article)) } label: {
+                                                Text(article.name).font(.callout).foregroundStyle(Theme.crystal)
+                                                    .multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
+                                                    .padding(.vertical, 7).padding(.leading, 16)
+                                            }.buttonStyle(.plain)
+                                        }
                                         ForEach(rows, id: \.self) { i in
                                             Button {
                                                 state.openGuide(i)
@@ -1002,6 +1011,9 @@ struct CompanionView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             let route = g.activeStepIndices(startingLocation: state.progress.guideBookmarks?[g.progressKey]?.startingLocation)
                             SectionLabel(text: "Step \((route.firstIndex(of: state.stepIndex) ?? 0) + 1) of \(route.count)")
+                            if state.progress.guideBookmarks?[g.progressKey]?.completedSteps?.contains(g.steps[state.stepIndex].title) == true {
+                                Label("Step completed", systemImage: "star.fill").foregroundStyle(Theme.gold).font(.caption)
+                            }
                             if StarterFood.isFoodStep(guide: g.name, title: s.title) {
                                 foodProfile
                             }

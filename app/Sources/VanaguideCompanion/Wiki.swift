@@ -111,6 +111,7 @@ final class WikiState: ObservableObject {
     @Published var crafts: [String: [CraftRecipe]] = [:]
     @Published var targets: [SkillTarget] = []
     @Published var monsters: [MonsterEntry] = []
+    @Published var nmDetails: [NMDetails] = []
     @Published var notes: [SkillGuide] = []
     @Published var quests: [SkillGuide] = []
     @Published var serverPick: String?
@@ -164,7 +165,7 @@ final class WikiState: ObservableObject {
 
     func load(roots: [URL], world: String = "") {
         requestedWorld = world
-        monsters = []; notes = []; quests = []; items = []; skills = []
+        nmDetails = []; monsters = []; notes = []; quests = []; items = []; skills = []
         let key = Self.serverKey(for: world)
         Task.detached(priority: .userInitiated) {
             func pick<T>(_ file: String, _ read: (URL) -> T?) -> (T, Bool)? {
@@ -199,10 +200,12 @@ final class WikiState: ObservableObject {
             }
             let notes = own("server_notes.lua"), quests = own("quest_guides.lua")
             let monsters = MonsterEntry.load(roots: roots, world: world)
+            let nmDetails = NMDetails.load(roots: roots, world: world)
             await MainActor.run {
                 // A previous server's slower load must never replace the current results.
                 guard Self.serverKey(for: self.requestedWorld) == key else { return }
                 self.monsters = monsters
+                self.nmDetails = nmDetails
                 self.notes = notes
                 self.quests = quests
                 self.serverPick = notes.first.map { Self.tag($0) } ?? quests.first.map { Self.tag($0) }
@@ -383,7 +386,7 @@ extension CompanionView {
                                 // A quest only this server's wiki knows: its walkthrough on the Server tab.
                                 Button {
                                     wiki.serverPick = WikiState.tag(q)
-                                    tab = 4
+                                    searchPage = .server(WikiState.tag(q)); tab = 0
                                 } label: {
                                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                                         Text(h.text).underline().multilineTextAlignment(.leading)
@@ -397,6 +400,10 @@ extension CompanionView {
                             } else {
                                 Text(h.text).font(.callout).fixedSize(horizontal: false, vertical: true)
                             }
+                            ForEach(wiki.nmDetails.filter { nm in
+                                (h.zone == nil || h.zone == nm.zone) &&
+                                (h.kind == "nm" || h.kind == "drop") && h.text.localizedCaseInsensitiveContains(nm.name)
+                            }) { nm in nmDetail(nm) }
                             let place = [h.npc.map { $0 == "???" ? "the ??? marker" : $0.npcDisplay },
                                          h.zone.map { state.zones.name($0) }].compactMap { $0 }
                             if !place.isEmpty {

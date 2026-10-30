@@ -94,6 +94,10 @@ enum CompanionSelfTest {
         checks.append(("blank search offers no suggestions", GuideSearch.hits(query: "  ", guides: searchGuides, world: "HorizonXI", wiki: searchWiki, zones: WorldMap()).isEmpty))
         checks.append(("unmatched search offers no suggestions", GuideSearch.hits(query: "zzzznoentry", guides: searchGuides, world: "HorizonXI", wiki: searchWiki, zones: WorldMap()).isEmpty))
         if let root = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"] {
+            let details = NMDetails.load(roots: [URL(fileURLWithPath: root)], world: "HorizonXI")
+            let tom = details.first { $0.name == "Tom Tit Tat" && $0.zone == 115 }
+            checks.append(("Fruit Punches NM has lottery, camp, NM and distinct placeholder IDs", tom?.spawn.contains("Lottery") == true && tom?.area.contains("H-6") == true && tom?.ids.contains("17248468") == true && tom?.ph.contains("17248467") == true))
+            checks.append(("NM catalogue covers standard encounters", details.count > 3000))
             let monsters = MonsterEntry.load(roots: [URL(fileURLWithPath: root)], world: "HorizonXI")
             checks.append(("Horizon monster data keeps Jack in West Ronfaure at 9-10", monsters.contains { $0.name == "Jaggedy-Eared Jack" && $0.zone == 100 && $0.lo == 9 && $0.hi == 10 && $0.family == "Rabbit" && $0.scope == "HorizonXI" }))
             checks.append(("Horizon rabbit family excludes the standard Nyzul duplicate", !monsters.contains { $0.name == "Jaggedy-Eared Jack" && $0.zone == 77 }))

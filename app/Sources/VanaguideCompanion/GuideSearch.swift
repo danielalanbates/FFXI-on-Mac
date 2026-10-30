@@ -203,7 +203,7 @@ extension CompanionView {
         case .family, .monster: searchPage = target
         case .gear(let id): wiki.openItem = id; tab = 1
         case .skill(let name): wiki.skill = name; tab = 2
-        case .server(let name): wiki.serverPick = name; tab = 4
+        case .server: searchPage = target; tab = 0
         }
     }
 
@@ -242,6 +242,7 @@ extension CompanionView {
                                 Button("\(mob.family) · Monster database") { searchPage = .family(mob.family) }.buttonStyle(.link)
                                 Text("\(mob.nm ? "Notorious monster" : "Monster") · Level \(mob.lo)–\(mob.hi)")
                                 Label(state.zones.name(mob.zone), systemImage: "mappin.and.ellipse")
+                                if let nm = wiki.nmDetails.first(where: { $0.name == mob.name && $0.zone == mob.zone }) { nmDetail(nm) }
                                 if !mob.note.isEmpty { Text(mob.note).fixedSize(horizontal: false, vertical: true) }
                                 if !mob.drops.isEmpty { Text("Drops: \(mob.drops)").fixedSize(horizontal: false, vertical: true) }
                                 Text(mob.scope == "Standard reference" ? "Standard reference; this server may change availability, levels and drops." : "\(mob.scope) reference")
@@ -252,6 +253,8 @@ extension CompanionView {
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         }
                     } else { Text("This entry is unavailable for the selected server.") }
+                case .server(let name):
+                    guideDetail((wiki.notes + wiki.quests).first { WikiState.tag($0) == name }, empty: "Choose a guide from Content.")
                 default: EmptyView()
                 }
             }
