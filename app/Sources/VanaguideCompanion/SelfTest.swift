@@ -45,6 +45,11 @@ enum CompanionSelfTest {
                            && GuideParser.parseStep("]],") == nil
                            && GuideParser.parseStep("") == nil))
 
+        checks.append(("note steps remain visible with their explanation",
+                       GuideParser.parseStep("N Budget first.|N|Keep money for spells.|")?.note == "Keep money for spells."))
+        checks.append(("buy steps retain item conditions",
+                       GuideParser.parseStep("B Buy food.|IT|4376,3|")?.tags["IT"] == "4376,3"))
+
         // An explicit developer source can exercise the real library. Offline fixtures must
         // never auto-discover/hydrate the user's Google Drive or request app permissions.
         let real = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"].map {
