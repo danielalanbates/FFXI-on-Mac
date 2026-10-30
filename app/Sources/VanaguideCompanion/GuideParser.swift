@@ -28,6 +28,15 @@ struct Guide {
     var steps: [GuideStep]
     /// Database reference lists group independent targets; their indices are not route progress.
     var isReference = false
+    var server: String? = nil
+
+    func available(on world: String) -> Bool {
+        guard let server, !server.isEmpty else { return true }
+        func key(_ value: String) -> String {
+            value.lowercased().filter { $0.isLetter || $0.isNumber }
+        }
+        return key(server) == key(world)
+    }
 }
 
 enum GuideParser {
@@ -56,7 +65,8 @@ enum GuideParser {
                 name: luaString("name", in: head) ?? "Unnamed guide",
                 desc: luaString("desc", in: head) ?? "",
                 levels: luaString("levels", in: head) ?? "",
-                steps: body.split(separator: "\n").compactMap { parseStep(String($0)) }
+                steps: body.split(separator: "\n").compactMap { parseStep(String($0)) },
+                server: luaString("server", in: head)
             ))
             search = end.upperBound
         }

@@ -66,6 +66,13 @@ enum CompanionSelfTest {
         checks.append(("other guides do not borrow food controls",
                        !StarterFood.isFoodStep(guide: "Other", title: "Buy a few affordable food portions before fighting.")))
 
+        var scoped = Guide(name: "Scoped", desc: "", levels: "", steps: [], server: "HorizonXI")
+        checks.append(("server guide accepts matching world and spacing", scoped.available(on: "Horizon XI")))
+        checks.append(("server guide excludes another or unknown world",
+                       !scoped.available(on: "CatsEyeXI") && !scoped.available(on: "")))
+        scoped.server = nil
+        checks.append(("general guides remain available", scoped.available(on: "CatsEyeXI")))
+
         // An explicit developer source can exercise the real library. Offline fixtures must
         // never auto-discover/hydrate the user's Google Drive or request app permissions.
         let real = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"].map {

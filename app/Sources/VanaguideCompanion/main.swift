@@ -241,8 +241,9 @@ final class CompanionState: ObservableObject {
     /// Getting Started (Screen Reading) for a character with nothing on record; otherwise the
     /// first real guide.
     var startGuide: Int {
-        guard Features.screenReading else { return 0 }
-        return progress.entries.isEmpty ? 0 : min(1, max(guides.count - 1, 0))
+        let available = guides.indices.filter { guides[$0].available(on: world) }
+        guard Features.screenReading, !progress.entries.isEmpty else { return available.first ?? 0 }
+        return available.first(where: { guides[$0].name != LogSurvey.guide.name }) ?? available.first ?? 0
     }
 
     static func lastCharacter(on world: String) -> String {
@@ -554,6 +555,7 @@ final class CompanionState: ObservableObject {
             screenshotMatchNote = "Recognized \(confirmed.title)."
             return
         }
+        guard guides.indices.contains(confirmed.guide), guides[confirmed.guide].available(on: world) else { return }
         selected = confirmed.guide
         stepIndex = confirmed.step
         screenshotMatchNote = "Opened \(confirmed.title)."
@@ -876,7 +878,7 @@ struct CompanionView: View {
     // MARK: Guides
 
     var guide: Guide? {
-        state.guides.indices.contains(state.selected) ? state.guides[state.selected] : nil
+        state.guides.indices.contains(state.selected) && state.guides[state.selected].available(on: state.world) ? state.guides[state.selected] : nil
     }
 
     var guidesPane: some View {
@@ -890,7 +892,7 @@ struct CompanionView: View {
                         set: { state.selected = $0 ?? 0; state.stepIndex = 0 }
                     )) {
                         ForEach(QuestCatalogue.sectionOrder, id: \.self) { section in
-                            let rows = state.guides.indices.filter { QuestCatalogue.section(of: state.guides[$0]) == section }
+                            let rows = state.guides.indices.filter { state.guides[$0].available(on: state.world) && QuestCatalogue.section(of: state.guides[$0]) == section }
                             if !rows.isEmpty {
                                 Section(section) {
                                     ForEach(rows, id: \.self) { i in
