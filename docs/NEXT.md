@@ -1,5 +1,13 @@
 # What to do next
 
+**Current continuation (2026-10-29, installed beta 103):** Read
+[CURRENT-2026-10-29.md](CURRENT-2026-10-29.md). A private local quest was accepted and its
+dialogue submitted to the generic narrator, but strict walking, audible/visual acceptance,
+client message compatibility and controlled performance comparisons remain open. The generated
+route graph fix is bundled and requires a live retest. No test client or private service is
+left running. Recheck all processes before any future launch or install. The older priorities
+below are historical.
+
 **Resize continuation (2026-10-28, beta 98):** [BETA-98.md](BETA-98.md) records the newer
 source/installed-build distinction, hidden resize verification, and the macOS 27.2 dependency
 check. Do not use the older beta 82 installation status below as the current inventory.
