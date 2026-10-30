@@ -40,7 +40,7 @@ struct CompanionApp: App {
     }
 
     var body: some Scene {
-        Window("VanaGuide Server-Safe", id: "guide") {
+        Window("ALPHA VanaGuide Server-Safe", id: "guide") {
             CompanionView()
                 .preferredColorScheme(.dark)
                 .tint(Theme.crystal)
@@ -648,7 +648,7 @@ struct CompanionView: View {
         self.layoutTest = layoutTest
         let initialState = CompanionState(loadData: !layoutTest)
         if layoutTest, let foodFixture {
-            initialState.guides = [Guide(name: "Starting out", desc: "Starter food for this character.", levels: "1-10",
+            initialState.guides = [Guide(name: QuestCatalogue.displayName("Starting out"), desc: "Starter food for this character.", levels: "1-10",
                 steps: [GuideStep(kind: "t", title: "Buy a few affordable food portions before fighting.",
                                   note: "Buy singles first and keep gil for spells and equipment.")])]
             initialState.progress.foodJob = foodFixture
@@ -741,7 +741,7 @@ struct CompanionView: View {
     var header: some View {
         VStack(spacing: 6) {
             HStack(spacing: 8) {
-                Text("VanaGuide").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.gold)
+                Text("ALPHA VanaGuide").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.gold)
                 Text("Server-Safe").font(.system(size: 12)).foregroundStyle(Theme.muted)
                 Spacer()
                 if Features.screenReading { readingStatus }
@@ -943,7 +943,7 @@ struct CompanionView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 6) {
                             SectionLabel(text: "Step \(state.stepIndex + 1) of \(g.steps.count)")
-                            if g.name == "Starting out" && s.title == "Buy a few affordable food portions before fighting." {
+                            if StarterFood.isFoodStep(guide: g.name, title: s.title) {
                                 foodProfile
                             }
                             stepCard(s)

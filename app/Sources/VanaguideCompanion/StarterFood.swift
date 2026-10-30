@@ -2,6 +2,11 @@
 import Foundation
 
 enum StarterFood {
+    static func isFoodStep(guide: String, title: String) -> Bool {
+        guide.caseInsensitiveCompare("Starting out") == .orderedSame
+            && title == "Buy a few affordable food portions before fighting."
+    }
+
     static func advice(job: String?, nation: String?) -> String {
         let shops = ["San d'Oria": "Boncort — Northern San d'Oria (F-8), Phoenix Perch Inn upstairs",
                      "Bastok": "Griselda — Bastok Mines (H-5), Bat's Lair Inn",
