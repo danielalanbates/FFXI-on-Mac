@@ -60,6 +60,9 @@ final class CompanionState: ObservableObject {
     @Published var guides: [Guide] = []
     @Published var selected: Int = 0
     @Published var stepIndex: Int = 0
+    @Published var guideSaveError = ""
+    var storesGuideProgress = true
+    var guideProgressWriter: (CharacterProgress) -> Bool = { ProgressStore.save($0) }
     @Published var sourceNote = ""
     @Published var screenshotMatchNote = ""
     private var catalogue: [CatalogueEntry] = []
@@ -139,8 +142,7 @@ final class CompanionState: ObservableObject {
         loadCharacter()
         remember()
         restoreZone()
-        stepIndex = 0
-        selected = startGuide
+        openInitialGuide()
     }
     private var screenshotTracker = ScreenshotMatchTracker()
 
@@ -167,6 +169,7 @@ final class CompanionState: ObservableObject {
     }
 
     init(loadData: Bool = true) {
+        storesGuideProgress = loadData
         // The hidden layout verifier uses synthetic state and never loads/saves a character,
         // discovers a game, warms OCR, or reads the launcher's session.
         guard loadData else {
@@ -197,7 +200,7 @@ final class CompanionState: ObservableObject {
         if let w = DevTrace.value("--world") { world = w }
         loadCharacter()
         // A character with nothing recorded starts on Getting started; others on their guides.
-        selected = startGuide
+        openInitialGuide()
         // Developer preview: --open-guide "<name>" [--step <n>] [--zone <id>], for screenshots.
         let args = CommandLine.arguments
         func value(_ flag: String) -> String? {
@@ -233,8 +236,7 @@ final class CompanionState: ObservableObject {
         character = Self.lastCharacter(on: w)
         loadCharacter()
         restoreZone()
-        stepIndex = 0
-        selected = startGuide
+        openInitialGuide()
     }
 
     /// Getting Started for a character with nothing on record; otherwise the
@@ -262,8 +264,7 @@ final class CompanionState: ObservableObject {
         loadCharacter()
         remember()
         restoreZone()
-        stepIndex = 0
-        selected = startGuide
+        openInitialGuide()
     }
 
     /// Keeps a chosen or discovered character in this server's list from now on.
@@ -407,10 +408,11 @@ final class CompanionState: ObservableObject {
 
     func nextUnfinished() {
         guard guides.indices.contains(selected) else { return }
-        let steps = guides[selected].steps
-        var i = stepIndex + 1
-        while i < steps.count, status(of: steps[i])?.status == .completed { i += 1 }
-        if i < steps.count { stepIndex = i }
+        let guide = guides[selected]
+        let route = guide.activeStepIndices(startingLocation: progress.guideBookmarks?[guide.progressKey]?.startingLocation)
+        if let next = route.first(where: { $0 > stepIndex && status(of: guide.steps[$0])?.status != .completed }) {
+            moveToStep(next)
+        }
     }
 
     private func readLogPage(_ text: String) {
@@ -555,8 +557,7 @@ final class CompanionState: ObservableObject {
             return
         }
         guard guides.indices.contains(confirmed.guide), guides[confirmed.guide].available(on: world) else { return }
-        selected = confirmed.guide
-        stepIndex = confirmed.step
+        openGuide(confirmed.guide, at: confirmed.step)
         screenshotMatchNote = "Opened \(confirmed.title)."
         DevTrace.log("opened", ["title": confirmed.title, "key": confirmed.key,
                                 "guide": guides[confirmed.guide].name, "step": confirmed.step + 1])
@@ -634,6 +635,7 @@ final class CompanionState: ObservableObject {
 }
 
 struct CompanionView: View {
+    @Environment(\.dismiss) private var dismissGuideWindow
     @StateObject var state: CompanionState
     @StateObject private var capture = ScreenGuideCapture()
     @StateObject var wiki: WikiState
@@ -648,7 +650,7 @@ struct CompanionView: View {
     @State private var newCharacter = ""
     private let layoutTest: Bool
 
-    init(layoutTest: Bool = false, tab: Int? = nil, wiki: WikiState? = nil, foodFixture: String? = nil, gilFixture: Bool = false, searchFixture: String? = nil, monsterFixture: String? = nil) {
+    init(layoutTest: Bool = false, tab: Int? = nil, wiki: WikiState? = nil, foodFixture: String? = nil, gilFixture: Bool = false, searchFixture: String? = nil, monsterFixture: String? = nil, completedFixture: Bool = false) {
         self.layoutTest = layoutTest
         let initialState = CompanionState(loadData: !layoutTest)
         if layoutTest, let foodFixture {
@@ -663,6 +665,10 @@ struct CompanionView: View {
                 steps: ["Windurst", "San d'Oria", "Bastok"].map { nation in
                     GuideStep(kind: "t", title: "Start in \(nation).", note: "Starting location: \(nation). Check requirements and costs before travelling.", tags: ["START": nation])
                 })]
+        }
+        if layoutTest && completedFixture {
+            initialState.progress.remember(initialState.guides[0], step: 0, completed: true)
+            _expandedContent = State(initialValue: ["Start Here", "Completed"])
         }
         if layoutTest, let root = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"] {
             initialState.zones = WorldMap.load(root: URL(fileURLWithPath: root))
@@ -816,7 +822,7 @@ struct CompanionView: View {
                     Text("Developer Mode activated").font(.caption.bold()).foregroundStyle(Theme.alert)
                         .lineLimit(1).fixedSize()
                 }
-                Text("\(state.progress.completedCount) completed · \(state.progress.currentCount) current")
+                Text("\(state.progress.completedGuideCount) \(state.progress.completedGuideCount == 1 ? "guide" : "guides") · \(state.progress.completedCount) quests completed")
                     .font(.caption).foregroundStyle(Theme.muted).lineLimit(1).fixedSize()
             }
             .textFieldStyle(.roundedBorder).controlSize(.small)
@@ -842,9 +848,9 @@ struct CompanionView: View {
                     Text("Content").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.gold)
                         .padding(.leading, 4)
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 4) {
-                            ForEach(QuestCatalogue.sectionOrder, id: \.self) { section in
-                                let rows = state.guides.indices.filter { state.guides[$0].available(on: state.world) && QuestCatalogue.section(of: state.guides[$0]) == section }
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(QuestCatalogue.sectionOrder + ["Completed"], id: \.self) { section in
+                                let rows = state.guides.indices.filter { state.guides[$0].available(on: state.world) && (section == "Completed" ? state.progress.completed(state.guides[$0]) : QuestCatalogue.section(of: state.guides[$0]) == section) }
                                 if !rows.isEmpty {
                                     Button {
                                         if expandedContent.contains(section) { expandedContent.remove(section) }
@@ -868,13 +874,18 @@ struct CompanionView: View {
                                     if expandedContent.contains(section) {
                                         ForEach(rows, id: \.self) { i in
                                             Button {
-                                                state.selected = i
-                                                state.stepIndex = 0
+                                                state.openGuide(i)
                                             } label: {
-                                                Text(state.guides[i].name).font(.callout)
-                                                    .multilineTextAlignment(.leading)
-                                                    .fixedSize(horizontal: false, vertical: true)
-                                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                                HStack(alignment: .top, spacing: 4) {
+                                                    Text(state.guides[i].name).font(.callout)
+                                                        .multilineTextAlignment(.leading)
+                                                        .fixedSize(horizontal: false, vertical: true)
+                                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                                    if state.progress.completed(state.guides[i]) {
+                                                        Image(systemName: "star.fill").font(.caption).foregroundStyle(Theme.gold)
+                                                            .accessibilityLabel("Completed")
+                                                    }
+                                                }
                                                     .padding(.vertical, 7).padding(.leading, 16).padding(.trailing, 6)
                                                     .foregroundStyle(state.selected == i ? Theme.crystal : Theme.text)
                                                     .background(state.selected == i ? Theme.crystal.opacity(0.14) : Color.clear,
@@ -883,6 +894,7 @@ struct CompanionView: View {
                                             }
                                             .buttonStyle(.plain)
                                             .accessibilityAddTraits(state.selected == i ? .isSelected : [])
+                                            .id("\(section):\(i)")
                                         }
                                     }
                                 }
@@ -925,11 +937,14 @@ struct CompanionView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(g.name).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.gold)
                     .lineLimit(2)
+                if !state.guideSaveError.isEmpty {
+                    Text(state.guideSaveError).font(.caption).foregroundStyle(Theme.ember)
+                }
                 let starts = g.steps.indices.filter { g.steps[$0].tags["START"] != nil }
                 if !starts.isEmpty {
                     Picker("Starting location", selection: Binding<Int>(
-                        get: { starts.last(where: { $0 <= state.stepIndex }) ?? starts[0] },
-                        set: { state.stepIndex = $0 }
+                        get: { starts.first(where: { g.steps[$0].tags["START"] == state.progress.guideBookmarks?[g.progressKey]?.startingLocation }) ?? starts[0] },
+                        set: { state.moveToStep($0) }
                     )) {
                         ForEach(starts, id: \.self) { index in
                             Text(g.steps[index].tags["START"] ?? "").tag(index)
@@ -944,7 +959,8 @@ struct CompanionView: View {
                     let s = state.resolved(g.steps[state.stepIndex])
                     ScrollView {
                         VStack(alignment: .leading, spacing: 6) {
-                            SectionLabel(text: "Step \(state.stepIndex + 1) of \(g.steps.count)")
+                            let route = g.activeStepIndices(startingLocation: state.progress.guideBookmarks?[g.progressKey]?.startingLocation)
+                            SectionLabel(text: "Step \((route.firstIndex(of: state.stepIndex) ?? 0) + 1) of \(route.count)")
                             if StarterFood.isFoodStep(guide: g.name, title: s.title) {
                                 foodProfile
                             }
@@ -961,10 +977,9 @@ struct CompanionView: View {
                     }
                 }
                 HStack {
-                    Button("Back") { if state.stepIndex > 0 { state.stepIndex -= 1 } }
+                    Button("Back") { state.previousGuideStep() }
                     Button("Done") {
-                        if g.steps.indices.contains(state.stepIndex) { state.markDone(g.steps[state.stepIndex]) }
-                        if state.stepIndex < g.steps.count - 1 { state.stepIndex += 1 }
+                        if state.finishGuideStep() { dismissGuideWindow() }
                     }
                     .keyboardShortcut(.defaultAction)
                     Button("Next Unfinished") { state.nextUnfinished() }
@@ -1117,6 +1132,9 @@ struct CompanionView: View {
 
     @ViewBuilder
     func stepStatus(_ s: GuideStep, in g: Guide) -> some View {
+        if let source = s.tags["SRC"], let url = URL(string: source), url.host == "horizonffxi.wiki" {
+            Link("Horizon wiki", destination: url).font(.caption)
+        }
         if let r = state.status(of: s) {
             Text(r.status == .completed ? "Completed · from your \(r.source)" : "Current · from your \(r.source)")
                 .font(.caption).foregroundStyle(r.status == .completed ? Theme.jade : Theme.crystal)
@@ -1202,7 +1220,7 @@ struct CompanionView: View {
     @ViewBuilder
     func row(_ r: AchievementRow) -> some View {
         if let link = state.guideLink(for: r.info) {
-            Button { state.selected = link.guide; state.stepIndex = link.step; tab = 0 } label: { linkedRow(r, to: "Open in Guides") }
+            Button { state.openGuide(link.guide, at: link.step); tab = 0 } label: { linkedRow(r, to: "Open in Guides") }
                 .buttonStyle(.plain).help("Open the guide for this achievement")
         } else if let item = achievementItem(r.info) {
             Button { wiki.openItem = item.id; wiki.category = nil; tab = 1 } label: { linkedRow(r, to: "Open \(item.name) in Gear") }

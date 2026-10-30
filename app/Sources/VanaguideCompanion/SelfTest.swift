@@ -115,6 +115,7 @@ enum CompanionSelfTest {
 
         checks += achievementChecks(guides: guides)
         checks += screenshotChecks()
+        checks += guideProgressChecks()
         checks += artifactJobChecks()
 
         var failures = 0

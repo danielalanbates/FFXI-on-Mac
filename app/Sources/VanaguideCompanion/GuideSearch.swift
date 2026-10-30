@@ -44,7 +44,7 @@ struct MonsterEntry: Identifiable, Equatable {
 }
 
 enum GuideSearchTarget: Equatable {
-    case guide(Int, Int)
+    case guide(Int, Int?)
     case family(String)
     case monster(String)
     case gear(Int)
@@ -105,7 +105,7 @@ enum GuideSearch {
         for (index, guide) in guides.enumerated() where guide.available(on: world) {
             if matches(query, "\(guide.name) \(guide.desc)") && guideHits.count < 5 {
                 guideHits.append(GuideSearchHit(id: "guide:\(index)", title: guide.name, subtitle: "Guide",
-                    icon: "map", target: .guide(index, 0)))
+                    icon: "map", target: .guide(index, nil)))
             }
             if stepHits.count < 8 {
                 for (step, entry) in guide.steps.enumerated() where matches(query, "\(entry.title) \(entry.note ?? "")") {
@@ -197,8 +197,8 @@ extension CompanionView {
         switch target {
         case .guide(let guide, let step):
             guard state.guides.indices.contains(guide), state.guides[guide].available(on: state.world),
-                  state.guides[guide].steps.indices.contains(step) else { return }
-            tab = 0; state.selected = guide; state.stepIndex = step
+                  step.map({ state.guides[guide].steps.indices.contains($0) }) ?? true else { return }
+            tab = 0; state.openGuide(guide, at: step)
             expandedContent.insert(QuestCatalogue.section(of: state.guides[guide]))
         case .family, .monster: searchPage = target
         case .gear(let id): wiki.openItem = id; tab = 1
