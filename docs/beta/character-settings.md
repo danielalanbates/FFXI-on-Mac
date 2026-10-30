@@ -34,3 +34,7 @@ Completion toggle: when a guide is completed, the final step's primary button re
 instead of Done, and the Guide completed screen provides a Completed toggle button. Clicking
 Completed on either view marks the guide incomplete, removes its completion star and Completed
 section entry, and restores Done while preserving the saved step position.
+
+The final-step Completed button and the completion screen's Completed button can mark the
+guide incomplete again. This removes its star/list entry and restores Done while preserving
+its current instruction and observed quest records.

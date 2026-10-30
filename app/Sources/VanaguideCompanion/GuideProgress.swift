@@ -126,6 +126,22 @@ extension CompanionState {
             .last(where: { $0 < stepIndex }) { moveToStep(index) }
     }
 
+    var isFinalGuideStep: Bool {
+        guard guides.indices.contains(selected) else { return false }
+        let guide = guides[selected]
+        return guide.activeStepIndices(startingLocation: progress.guideBookmarks?[guide.progressKey]?.startingLocation).last == stepIndex
+    }
+
+    @discardableResult
+    func uncompleteCurrentGuide() -> Bool {
+        guard guides.indices.contains(selected), progress.completed(guides[selected]) else { return false }
+        let previous = progress
+        progress.remember(guides[selected], step: stepIndex, completed: false)
+        guard saveGuideProgress() else { progress = previous; return false }
+        guideDetailOpen = true
+        return true
+    }
+
     /// True only after the last Done was saved; transition to the completed-guide screen.
     @discardableResult
     func finishGuideStep() -> Bool {

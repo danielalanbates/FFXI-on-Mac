@@ -924,7 +924,11 @@ struct CompanionView: View {
                         .controlSize(.small)
                 }
             }
-            if let guide { Text(guide.name).font(.headline) }
+            if let guide {
+                Text(guide.name).font(.headline)
+                Button("Completed") { state.uncompleteCurrentGuide() }
+                    .help("Mark this guide incomplete")
+            }
             if !state.guideSaveError.isEmpty {
                 Text(state.guideSaveError).font(.caption).foregroundStyle(Theme.ember)
             }

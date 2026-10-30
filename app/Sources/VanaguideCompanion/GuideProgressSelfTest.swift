@@ -20,6 +20,7 @@ extension CompanionSelfTest {
         checks.append(("last Done transitions to completed guides only after saving", state.finishGuideStep()))
         checks.append(("final Done closes the step panel rather than the app window", !state.guideDetailOpen))
         checks.append(("guide completion records one star and the quest result", state.progress.completed(a) && state.progress.completedGuideCount == 1 && state.progress.entries["Q:bastok,10"]?.status == .completed))
+        checks.append(("Completed toggle removes the star and reopens the saved final step", state.uncompleteCurrentGuide() && !state.progress.completed(a) && state.guideDetailOpen && state.stepIndex == 2))
         _ = state.finishGuideStep()
         checks.append(("repeated final Done cannot duplicate the completed guide", state.progress.completedGuideCount == 1))
         state.openGuide(1)
