@@ -16,3 +16,9 @@ https://batesai.org · help@batesai.org
 Correction: the first parser/layout runs and candidate-solo-guides used an older binary under arm64-apple-macosx/release. Those runs do not verify the new source. The authoritative build path reported by swift build --show-bin-path is now launcher-build/out/Products/Release. Do not reuse hard-coded historical output paths.
 
 The current release binary passed 142 parser checks against the explicit PR 38 guide root, plus all hidden layout scenarios including melee/caster food profiles at 620x460 and 1000x720. The compact caster image was visually inspected: profile selectors, shop/stock advice and bottom controls are readable. Profile field compatibility and roundtrip checks also passed. This evidence supersedes prior candidate claims.
+
+## Installed standalone beta
+
+Installed the verified candidate into /Applications/VanaGuide Server-Safe.app. The previous standalone app is archived in the private Downloads recovery workspace. Stopped only the exact running embedded companion executable, then reopened the updated standalone once with open -g. Verified a single companion process from the new installed path and a valid deep strict signature. The existing launcher and Horizon game processes remained running and were not signalled.
+
+The launcher’s embedded helper remains unchanged and can reopen its older guide on a future launch; update that helper only through a verified launcher package. No public binary release was published.
