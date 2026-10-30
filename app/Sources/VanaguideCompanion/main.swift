@@ -249,6 +249,12 @@ final class CompanionState: ObservableObject {
         ProgressStore.saved().first { $0.world == world && !$0.character.isEmpty }?.character ?? ""
     }
 
+    func setFoodProfile(job: String? = nil, nation: String? = nil) {
+        if let job { progress.foodJob = job }
+        if let nation { progress.homeNation = nation }
+        ProgressStore.save(progress)
+    }
+
     func selectCharacter(_ name: String) {
         let n = name.trimmingCharacters(in: .whitespaces)
         guard !n.isEmpty, n != character else { return }
@@ -897,6 +903,24 @@ struct CompanionView: View {
     }
 
     @ViewBuilder
+    var foodProfile: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("Main job", selection: Binding(get: { state.progress.foodJob ?? "" },
+                set: { state.setFoodProfile(job: $0) })) {
+                Text("Choose job").tag("")
+                ForEach(["WAR", "MNK", "WHM", "BLM", "RDM", "THF"], id: \.self) { Text($0).tag($0) }
+            }
+            Picker("Home nation", selection: Binding(get: { state.progress.homeNation ?? "" },
+                set: { state.setFoodProfile(nation: $0) })) {
+                Text("Choose nation").tag("")
+                ForEach(["San d'Oria", "Bastok", "Windurst"], id: \.self) { Text($0).tag($0) }
+            }
+            Text(StarterFood.advice(job: state.progress.foodJob, nation: state.progress.homeNation))
+                .font(.callout).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
     var stepDetail: some View {
         if let g = guide {
             VStack(alignment: .leading, spacing: 8) {
@@ -911,6 +935,9 @@ struct CompanionView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 6) {
                             SectionLabel(text: "Step \(state.stepIndex + 1) of \(g.steps.count)")
+                            if g.name == "Starting out" && s.title == "Buy a few affordable food portions before fighting." {
+                                foodProfile
+                            }
                             stepCard(s)
                             stepStatus(s, in: g)
                             if state.devMode { devPanel(s) }

@@ -50,6 +50,16 @@ enum CompanionSelfTest {
         checks.append(("buy steps retain item conditions",
                        GuideParser.parseStep("B Buy food.|IT|4376,3|")?.tags["IT"] == "4376,3"))
 
+        for nation in ["San d'Oria", "Bastok", "Windurst"] {
+            for job in ["WAR", "MNK", "WHM", "BLM", "RDM", "THF"] {
+                let advice = StarterFood.advice(job: job, nation: nation)
+                checks.append(("food profile \(job) \(nation)",
+                    advice.contains("Shop:") && advice.contains("MP drinks") == ["WHM", "BLM"].contains(job)))
+            }
+        }
+        checks.append(("food profile unknown stays explicit",
+                       StarterFood.advice(job: nil, nation: nil).contains("Choose")))
+
         // An explicit developer source can exercise the real library. Offline fixtures must
         // never auto-discover/hydrate the user's Google Drive or request app permissions.
         let real = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"].map {

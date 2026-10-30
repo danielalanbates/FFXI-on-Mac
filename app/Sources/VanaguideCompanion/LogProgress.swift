@@ -19,6 +19,8 @@ struct LogRecord: Codable, Equatable {
 struct CharacterProgress: Codable, Equatable {
     var character: String
     var world: String
+    var foodJob: String?
+    var homeNation: String?
     /// Catalogue keys ("Q:sandoria,6", "M:sandoria,1") to what was last seen.
     var entries: [String: LogRecord] = [:]
     var updated = Date()
