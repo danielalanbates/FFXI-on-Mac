@@ -315,7 +315,7 @@ extension Headless {
             switch d.action {
             case .play, .playAnother, .stop, .enterAccount: break
             case .serverInfo:
-                if !d.enabled || d.label != "Server Info" { notActionable.append(name) }
+                if !d.enabled || !["Server Info", "Connect Phoenix (Beta)"].contains(d.label) { notActionable.append(name) }
             case .working:
                 if d.enabled || !isProgress(d.label) { notActionable.append("\(name): \(d.label)") }
             case .setup, .update, .repair:
