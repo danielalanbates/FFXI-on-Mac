@@ -1991,7 +1991,7 @@ struct ContentView: View {
         switch a {
         case .serverInfo:
             if s.name == "Phoenix XI" {
-                PhoenixSetup.shared.begin { message in notice = message }
+                PhoenixSetup.shared.begin(wine: X87Sidecar.patchedWine() ?? selected?.wine, bootstrapWine: selected?.wine) { message in notice = message }
                 return
             }
             if let url = URL(string: s.installURL) { NSWorkspace.shared.open(url) }
