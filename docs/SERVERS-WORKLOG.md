@@ -494,3 +494,26 @@ Two things worth knowing before touching this UI again:
 Also noticed, not fixed: the loader is invoked with `--pass` on its command line, so the account
 password is visible in `ps` output to any process on this Mac. Fixing it means feeding the
 credential to xiloader some other way (stdin or its config), which is a separate piece of work.
+
+## 2026-10-24 — AscensionXI (beta 71)
+
+Daniel: "get ascension working", then "every LandSandBoat based private server". AscensionXI is
+LSB (port 54231 JSON over TLS 1.3, loader = LSB xiloader 2.1.2) and distributes only a .NET
+launcher whose update channel is public HTTP. Its protocol was read out of the launcher with
+ILSpy and ported natively (`AscensionChannel.swift`, `AscensionSync.swift`); the whole write-up,
+deviations and pathways are in [`ASCENSION.md`](ASCENSION.md).
+
+- Client into `FFXI on Mac/Games/AscensionXI` on the x10 (where Setup puts a new world). The base
+  client was prefetched with `tools/ascension-prefetch.py` (same rules as the Swift code) before the
+  app could do it: 66,783 files, under 2,000 downloaded, the rest copied byte-identical from the
+  CatsEyeXI, Supernova and HorizonXI clients. The app's own first run then verified every file.
+- One Play with a throwaway account through the installed b71 window reached their login server,
+  which refused the account ("Invalid username or password"): version accepted, pipeline proven to
+  the account. Logging in needs Daniel's own AscensionXI account (email signup, character made on
+  their website).
+- Fixed on the way: a new world inherited HorizonXI's saved name and password (now only HorizonXI
+  inherits the pre-per-world store), `--hairpin` dropped by the account line, LuaJITGuard's lines
+  making the sync refetch 79 addon files every Play, the Addons… sheet adding a second managed
+  block beside theirs.
+
+Phoenix and the rest of the LSB survey: [`LSB-SERVERS.md`](LSB-SERVERS.md).

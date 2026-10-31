@@ -233,6 +233,37 @@ struct GraphicsSettings: Codable, Equatable {
         if out != text { Credentials.writeFile(out, to: url) }
     }
 
+    // MARK: - Window mode
+
+    /// FFXI's window mode, `0034`: 0 full screen, 1 windowed, 2 borderless windowed, 3 full-screen
+    /// windowed (AscensionXI's launcher offers all four, `GraphicsPage.cs`). Only 1 works on the Mac.
+    /// Full screen exits at start (`EnterFullscreenMode` fails, docs/PATHWAYS.md). The borderless modes
+    /// open a window macOS cannot move or resize, which the game-window helper leaves alone ("not
+    /// titled and resizable") and the size fitter does not measure, so it can open bigger than the
+    /// screen and off its middle: AscensionXI's own default is 2 (2026-10-24, Daniel: "isn't launching
+    /// with a window border ... not centered"). macOS's own full screen works on the windowed client.
+    static let windowModeKey = "0034"
+
+    /// `text` with the window mode windowed, or nil when it already is. Added when the profile has
+    /// none: the Wine prefix's registry is shared, and another world's value would otherwise stay.
+    static func windowedOnMac(_ text: String) -> String? {
+        guard BootProfile.value(windowModeKey, section: "ffxi.registry", in: text) != "1" else { return nil }
+        return BootProfile.setting(BootProfile.Setting(section: "ffxi.registry", key: windowModeKey, value: "1"), in: text)
+    }
+
+    /// The profile made windowed (`windowedOnMac`); the value it had ("none" when it had none), or
+    /// nil when nothing changed.
+    @discardableResult
+    static func makeWindowed(_ install: Install, profile: String) -> String? {
+        let name = install.bootProfileName(profile)
+        // v3's XML has no `[ffxi.registry]` section.
+        guard name.hasSuffix(".ini") else { return nil }
+        let url = install.gameDir.appendingPathComponent("config/boot/\(name)")
+        Credentials.profileLock.lock(); defer { Credentials.profileLock.unlock() }
+        guard let text = Credentials.readFile(at: url), let out = windowedOnMac(text), Credentials.writeFile(out, to: url) else { return nil }
+        return BootProfile.value(windowModeKey, section: "ffxi.registry", in: text) ?? "none"
+    }
+
     // MARK: - Reading a profile
 
     /// Read what is actually in the profile, so the panel opens showing the real state rather

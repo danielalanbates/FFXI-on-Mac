@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 /// Vanaguide: Zygor-style quest / mission guide for Vana'diel.
 ///
@@ -11,6 +12,88 @@ import Foundation
 /// CatsEyeXI, FFEra, and any other allowlist world the launcher refuses to install it and
 /// removes any leftover copy, same safety model as `Narration.swift` for VanaVoice.
 enum Guide {
+    /// Separate, user-opened GUI. Keeping a copy inside the launcher also lets a launcher
+    /// update carry the matching guide UI without installing an unapproved game addon.
+    /// Server-Safe needs macOS 14 (ScreenCaptureKit screenshots); its bundle says so too.
+    static var companionSupported: Bool {
+        ProcessInfo.processInfo.isOperatingSystemAtLeast(OperatingSystemVersion(majorVersion: 14, minorVersion: 0, patchVersion: 0))
+    }
+
+    static var companionURL: URL? {
+        guard companionSupported else { return nil }
+        let candidates = [
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/VanaGuide Server-Safe.app"),
+            URL(fileURLWithPath: "/Applications/VanaGuide Server-Safe.app"),
+        ]
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        return companionURL(in: candidates, osVersion: "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)")
+    }
+
+    /// A standalone beta may be updated while the playable launcher stays open. Prefer the
+    /// newest compatible copy, preserving candidate order (embedded first) on equal builds.
+    /// Read the plist directly: Bundle caches can retain metadata from before a bundle swap.
+    static func companionURL(in candidates: [URL], osVersion: String) -> URL? {
+        var selected: (url: URL, build: UpdateRules.Build)?
+        for url in candidates {
+            guard let data = try? Data(contentsOf: url.appendingPathComponent("Contents/Info.plist")),
+                  let info = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
+                  info["CFBundleIdentifier"] as? String == "org.batesai.vanaguide-companion",
+                  info["CFBundleExecutable"] as? String == "VanaguideCompanion",
+                  let version = info["CFBundleShortVersionString"] as? String,
+                  version.range(of: #"\A[0-9]+(?:\.[0-9]+){1,2}\z"#, options: .regularExpression) != nil,
+                  let buildText = info["CFBundleVersion"] as? String, let number = Int(buildText), number > 0,
+                  let minimumOS = info["LSMinimumSystemVersion"] as? String,
+                  minimumOS.range(of: #"\A[0-9]+(?:\.[0-9]+){0,2}\z"#, options: .regularExpression) != nil,
+                  UpdateRules.compare(osVersion, minimumOS) >= 0,
+                  FileManager.default.isExecutableFile(atPath: url.appendingPathComponent("Contents/MacOS/VanaguideCompanion").path)
+            else { continue }
+            let build = UpdateRules.Build(version: version, build: number)
+            if selected == nil || UpdateRules.isOffered(build, over: selected!.build) {
+                selected = (url, build)
+            }
+        }
+        return selected?.url
+    }
+
+    /// Tells Server-Safe which world is being played and which worlds the launcher offers, so
+    /// its Server list matches this one and World fills in by itself. A tiny JSON file in
+    /// Server-Safe's own Application Support folder; no accounts or credentials.
+    static func shareSession(world: String = "", worlds: [String]? = nil) {
+        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        else { return }
+        let dir = base.appendingPathComponent("VanaGuide Server-Safe", isDirectory: true)
+        let url = dir.appendingPathComponent("session.json")
+        var body = (try? Data(contentsOf: url))
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        if !world.isEmpty { body["world"] = world }
+        if let worlds { body["worlds"] = worlds }
+        guard body["world"] != nil || body["worlds"] != nil else { return }
+        body["updated"] = ISO8601DateFormatter().string(from: Date())
+        guard let data = try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]) else { return }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? data.write(to: url, options: .atomic)
+    }
+
+    /// "Open with Play" checkbox: Server-Safe opens alongside the game.
+    static let autoOpenKey = "guide.autoOpenWithPlay"
+
+    /// `activate: false` (Play) opens Server-Safe behind the game instead of in front of it, and
+    /// leaves an already running copy where it is.
+    static func openCompanion(world: String = "", worlds: [String]? = nil, activate: Bool = true) {
+        shareSession(world: world, worlds: worlds)
+        let identifier = "org.batesai.vanaguide-companion"
+        if let existing = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == identifier
+        }) {
+            if activate { existing.activate() }
+            return
+        }
+        guard let url = companionURL else { return }
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = activate
+        NSWorkspace.shared.openApplication(at: url, configuration: config)
+    }
+
     static let loadLine = "/addon load vanaguide"
     static let marker = "# Vanaguide quest guide"
     /// Folder name matches `vanaguide/tools/install.sh` (`addons/Vanaguide`).
@@ -117,7 +200,7 @@ enum Guide {
             }
             if removeLoadLine(from: scripts) || enabled {
                 log("==> vanaguide: not allowed here — this world runs an addon allowlist and "
-                    + "Vanaguide is not on it")
+                    + "VanaGuide is not on it")
             }
             return
         }

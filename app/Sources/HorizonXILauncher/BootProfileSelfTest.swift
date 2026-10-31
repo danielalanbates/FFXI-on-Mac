@@ -89,8 +89,14 @@ extension Headless {
         checks.append(("HorizonXI declares horizon-loader.exe and the template; the local world (same client) the loader only",
                        horizon.loader == "horizon-loader.exe" && horizon.bootTemplate == T
                            && Server.all.filter(\.local).allSatisfy { $0.loader == "horizon-loader.exe" && $0.bootTemplate.isEmpty }))
-        checks.append(("no other world declares either",
-                       Server.all.filter { $0.name != "HorizonXI" && !$0.local }.allSatisfy { $0.loader.isEmpty && $0.bootTemplate.isEmpty }))
+        // AscensionXI (b71) names its loader too: their launcher writes ascensionxi-loader.exe into
+        // bootloader/ and boots it at every Play, while their client's profile still says xiloader.exe.
+        // Vanadreams (b72) names xiloader.exe: this launcher installs the pinned v2.2.0 there.
+        checks.append(("no other world declares a template; only AscensionXI and Vanadreams a loader (each installed by this launcher)",
+                       Server.all.filter { $0.name != "HorizonXI" && !$0.local }.allSatisfy { $0.bootTemplate.isEmpty }
+                           && Server.all.filter { $0.name != "HorizonXI" && !$0.local && !$0.loader.isEmpty }.map(\.name).sorted()
+                               == [AscensionChannel.worldName, VanadreamsChannel.worldName]
+                           && Server.all.first { $0.name == AscensionChannel.worldName }?.loader == AscensionChannel.loaderName))
 
         // 2. The loader decision.
         let all3 = ["pol.exe", "xiloader.exe", "horizon-loader.exe"]

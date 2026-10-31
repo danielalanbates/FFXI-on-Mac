@@ -27,6 +27,15 @@ struct PerfSettings: Codable {
     /// `scripts/tests/audiofollow-test.sh`. Harmless if it fails: the audio keeps playing exactly
     /// where it already was.
     var followSoundOutput = true
+    /// Keep the game's picture in proportion when its window is resized.
+    ///
+    /// FFXI's back buffer is fixed at the profile's 0001 x 0002 and the renderer scales it to the
+    /// window, so dragging the window to another shape squeezed or stretched the whole picture.
+    /// `gamewindow.dylib` (see `window/gamewindow.c` and `GameWindow`) is inserted into wine and
+    /// sets the window's content aspect ratio to the size the client was started at, so AppKit keeps
+    /// every drag in proportion. Harmless if it fails: the window resizes freely, as before.
+    /// The same dylib keeps the window's title "FFXI on Mac" (b69), so this one setting covers both.
+    var keepWindowShape = true
     /// FFXI limits itself to 60/n fps, n=2 by default (30 fps) -- but under wine the limiter
     /// overshoots and the client spends more than the 33.3ms budget per frame even while only
     /// ~52% busy. Our d3d9.dll patches the divisor at start-up (see docs/PERFORMANCE.md);
@@ -96,6 +105,7 @@ struct PerfSettings: Codable {
         disableAppNap = b(.disableAppNap, true)
         fpsDivisorOne = b(.fpsDivisorOne, true)
         followSoundOutput = b(.followSoundOutput, true)
+        keepWindowShape = b(.keepWindowShape, true)
         flareReadbackNoWait = false   // option removed: NPCs blink with it on
         largeAddressAware = b(.largeAddressAware, true)
         narrateCutscenes = b(.narrateCutscenes, false)
@@ -142,8 +152,10 @@ struct PerfSettings: Codable {
     /// - Parameter world: names the default frame-rate log, so two clients never share one.
     /// - Parameter gameWine: the client runs under the patched game Wine (`X87Sidecar.patchedWine`),
     ///   not the wrapper's own.
+    /// - Parameter gameSize: the size the client will be started at (`GameWindow.launchSize`), for
+    ///   `HXI_GAME_ASPECT`; nil when unknown.
     func environment(for install: Install, x87: Bool = true, world: String = "",
-                     gameWine: Bool = true) -> [String: String] {
+                     gameWine: Bool = true, gameSize: WindowMemory.Size? = nil) -> [String: String] {
         var env: [String: String] = [:]
         env["WINEPREFIX"] = install.prefix.path
         env["D3DMETAL_FRAMEWORK_PATH"] = install.d3dMetal.path
@@ -169,6 +181,11 @@ struct PerfSettings: Codable {
         // surfaces <= 32 px. See patches/dxvk-1.10.3-horizonxi-fencewait.patch.
         env["D3D9_RT_READBACK_FENCE"] = "32"
         env["MVK_CONFIG_USE_COMMAND_POOLING"] = "1"
+        // A GPU reset elsewhere fails one of our Metal command buffers (2026-10-16 21:31,
+        // "Discarded (victim of GPU error/recovery)"). By default MoltenVK then marks the VkDevice
+        // lost for good. With this it still signals that buffer's fence and the device stays usable
+        // (one frame of GPU work lost); a lost GPU (removed/access revoked) is still fatal.
+        env["MVK_CONFIG_RESUME_LOST_DEVICE"] = "1"
         // The last macOS 27 session emitted thousands of identical DXVK/MoltenVK warnings
         // after login. They are still available when explicitly requested for diagnostics,
         // but routine play should not spend time writing them or redrawing the log pane.
@@ -212,10 +229,16 @@ struct PerfSettings: Codable {
         //
         // GOTCHA for anyone reworking the launch: this variable does NOT survive an exec through
         // `arch(1)` or any other system binary — dyld strips DYLD_* across those. The wine
-        // command has to be exec'd directly.
+        // command has to be exec'd directly. The hardened x87 sidecar strips it too; see
+        // InsertedLibrary and the carry in window/gamewindow.c.
         if followSoundOutput, let dylib = AudioFollow.dylib() {
-            let existing = env["DYLD_INSERT_LIBRARIES"]
-            env["DYLD_INSERT_LIBRARIES"] = existing.map { $0 + ":" + dylib.path } ?? dylib.path
+            InsertedLibrary.insert(dylib.path, into: &env)
+        }
+        // The game window keeps its shape when resized and its title "FFXI on Mac" (b69):
+        // gamewindow.dylib, same rules, the ratio the client is started at and the title. Joined
+        // to audiofollow's with ':' when both are on.
+        if keepWindowShape {
+            GameWindow.apply(to: &env, dylib: GameWindow.dylib(), size: gameSize)
         }
         if disableAppNap { env["LSAppNapIsDisabled"] = "1" }
         if largeAddressAware { env["WINE_LARGE_ADDRESS_AWARE"] = "1" }

@@ -15,7 +15,7 @@ Apple Silicon · macOS 13 or later · signed and notarized by Apple
 
 ![HorizonXI on a Mac, in Selbina](docs/img/murn-in-selbina.png)
 
-Works with **HorizonXI**, CatsEyeXI, Eden, Supernova, OmicronXI and other FFXI private servers.
+Works with **HorizonXI**, CatsEyeXI, AscensionXI, Supernova, OmicronXI and other FFXI private servers.
 It can also run a server on your own Mac if you want to play offline.
 
 ---
@@ -97,17 +97,32 @@ Pick one from **CHANGE WORLD**. Each world keeps its own game folder and its own
 have several installed side by side. **Every one of them is a single *Setup* button** — the
 differences below are just what happens behind it.
 
+**Beta 81: optional multi-server play.** Check **Enable multi-server play** under each world's
+title, then press **Setup**, to give that world its own Windows environment. It uses about
+1 GB extra per enabled world on the Wine drive and reuses existing game files. With separate
+environments, different worlds can start in either order; server client limits still apply.
+The option starts off and unchecking it retains its files. This is a local beta feature;
+see [the beta notes and validation status](docs/BETA-81.md).
+
 | World | What *Setup* does for the game | Tested end-to-end here |
 | --- | --- | --- |
 | **HorizonXI** | fetches their client the way their own launcher does — a 9.4 GB download, then their updates, up to the current version | ✅ downloaded, launched, reached login |
 | **CatsEyeXI** | runs CatsEyeXI's own launcher for you; it installs their full client (~15 GB) | ✅ downloaded, launched, reached login |
+| **Vanadreams** | puts their client package (about 9 GB of downloads), Ashita and the loader their server takes together, the way their own launcher does, and fetches what they add before each Play | ⚙️ installed and checked; login needs your account (made in the loader window) |
+| **DriftwoodXI** | DriftwoodXI ships no game files: their client is retail FFXI, put together from identical files of another world's client already on your Mac (AscensionXI or Vanadreams), then their Ashita and addons from their public repo, kept current before each Play | ⚙️ installed and checked; login needs your account from their website |
+| **PegasusXI** | reads PegasusXI's release zip straight off their server, file by file and checked (about 14 GB the first time, only what changed after), skipping their Windows-only tools; never resets your settings or macros | ⚙️ installed and checked; login needs your account from their website |
+| **MistXI, Moghouse XI** | puts retail FFXI together from the identical files of another world's client on your Mac, then Ashita and the exact LandSandBoat loader each server takes, as their setup guides describe | ⚙️ installed and checked; login needs your account (MistXI: their website; Moghouse: Create account) |
+| **LevelDown 99** | downloads their own copy of the game on the version their server runs (5.5 GB), unpacks it without the other player's settings it carries, then Ashita and the loader their server takes | ⚙️ installed and checked; login needs Create account |
+| **Scythe** | reads Scythe's signed client release and checks its signature, copies the files your Mac already has byte for byte and downloads the rest from Scythe (about 1 GB), then their Ashita and loader | ⚙️ installed and checked; login needs Create account |
+| **Olympus XI, Legendary Relaunch** | retail FFXI from your Mac's other clients (Olympus: from their own client list, with the few files only they have downloaded from them), Ashita and the loader their server takes, then their custom DATs as an overlay the game reads first | ⚙️ installed and checked; Olympus: sign up or Create account; Legendary: invite-only (ask a GM) |
+| **AscensionXI** | reads AscensionXI's own update server the way their launcher does: their client (~14 GB, every file checked; identical files are copied from FFXI clients already on your Mac instead of downloaded), then their DATs, addons and loader, and the same update before every Play | ✅ installed, launched, their login server answered |
 | **Supernova, OmicronXI** | downloads Square Enix's own **free** client (7.7 GB), installs it, updates it through PlayOnline, then adds the world's files on top. Slow — hours — but every step is automatic | ⚙️ fully automated, not yet run start-to-finish |
 | **Eden, FFEra** | downloads their installer (a 5–6 GB zip) and runs it | ⚙️ wired up, not yet run start-to-finish |
 | **ValhallaXI** | downloads their small web-installer, which pulls the client | ⚙️ wired up, not yet run start-to-finish |
 | **Gaia XI** | their zip is behind a login, so it opens their site — then press **Run installer…** on the file you saved | ⚙️ needs that one manual step |
 
-"Tested end-to-end here" is deliberately honest: HorizonXI and CatsEyeXI were downloaded and
-launched on the test Mac all the way to the server's login screen. The others are coded from each
+"Tested end-to-end here" is deliberately honest: HorizonXI, CatsEyeXI and AscensionXI were
+downloaded and launched on the test Mac all the way to the server's login. The others are coded from each
 server's published installer but haven't been driven start-to-finish yet — see
 [`docs/SERVERS-WORKLOG.md`](docs/SERVERS-WORKLOG.md) for exactly what is and isn't proven.
 Logging *in* always needs your own account, made on that server's own site.

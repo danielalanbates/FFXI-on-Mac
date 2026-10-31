@@ -1,9 +1,39 @@
 # What to do next
 
+**Current continuation (2026-10-29, installed beta 103):** Read
+[CURRENT-2026-10-29.md](CURRENT-2026-10-29.md). A private local quest was accepted and its
+dialogue submitted to the generic narrator, but strict walking, audible/visual acceptance,
+client message compatibility and controlled performance comparisons remain open. The generated
+route graph fix is bundled and requires a live retest. No test client or private service is
+left running. Recheck all processes before any future launch or install. The older priorities
+below are historical.
+
+**Resize continuation (2026-10-28, beta 98):** [BETA-98.md](BETA-98.md) records the newer
+source/installed-build distinction, hidden resize verification, and the macOS 27.2 dependency
+check. Do not use the older beta 82 installation status below as the current inventory.
+Recheck running apps before installation; the playable launcher must stay intact during a game.
+
+**Current priorities (2026-10-27, beta 82)**
+
+1. Read [BETA-82.md](BETA-82.md) for the current checkout, validation record and remaining
+   local-only gameplay checks. Preserve the installed playable app while a session is running.
+2. Beta-test [VanaGuide Server-Safe](SERVER-SAFE-GUIDE.md) with local LSB dialogue/log titles.
+   Test narration and sequential quests locally; never use hosted servers for addon/bot tests.
+3. Evaluate the newly released runtime candidates in the isolated lab described in
+   [the dependency review](DEPENDENCIES-2026-10-27.md), before proposing a runtime migration.
+4. Review the source PRs, then require stable real use and the release checklist before a
+   public app release. Source publication does not imply a stable binary release.
+
+The ranked list below predates betas 70–82. Consult the newer beta records before acting on it.
+
 Updated 2026-10-14, ranked. Context, PR table and dead ends: [`HANDOFF.md`](HANDOFF.md). Every b59
 change and its live-test recipe: [`BETA-59.md`](BETA-59.md). The August version of this list is
 in `archive/docs-2026-08/`.
 
+0. **2026-10-24, b71:** log in to AscensionXI with Daniel's own account (BETA-71 › Needs
+   Daniel), then the next LandSandBoat worlds in [`LSB-SERVERS.md`](LSB-SERVERS.md) › Next, one at a
+   time, each the way AscensionXI was done: read the world's own launcher, port its update steps,
+   one throwaway-account Play to its login server.
 1. **Daniel's live test of b59.** Install with `./app/bundle.sh /Applications` (builds, then swaps)
    only when no launcher, client or wine runs (it refuses otherwise). Then the "Needs Daniel's live
    test" lists in `BETA-59.md`: no update text while v3.9 is latest, footer/strip text, #27 window,

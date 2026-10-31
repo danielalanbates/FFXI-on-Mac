@@ -25,6 +25,7 @@ enum SetupStage: String, CaseIterable {
     case unpackingGame = "Unpacking HorizonXI"
     case updatingGame = "Updating HorizonXI"
     case finishing = "Finishing"
+    case multiServer = "Enabling multi-server"
     case buildingServer = "Building the server"
 
     /// The setup sheet's step (Bootstrap), as the button names it.
@@ -140,7 +141,7 @@ struct ScriptProgress {
 struct SetupMeter {
     /// In the order Setup takes them (ContentView.runSetup).
     enum Step: Int, CaseIterable, Comparable {
-        case rosetta, wine, files, gameWine, game, configure, localServer
+        case rosetta, wine, files, gameWine, multiServer, game, configure, localServer
         static func < (a: Step, b: Step) -> Bool { a.rawValue < b.rawValue }
     }
 
@@ -153,6 +154,7 @@ struct SetupMeter {
         case .wine: return 8
         case .files: return 12
         case .gameWine: return 5
+        case .multiServer: return 2
         case .game: return 70
         case .configure: return 2
         case .localServer: return 30
@@ -174,6 +176,7 @@ struct SetupMeter {
         if x.hasInstall, x.rosettaMissing { s.insert(.rosetta) }
         if !x.hasInstall || driveGone || bad.contains("wine") { s.insert(.wine) }
         if x.patchedWineMissing { s.insert(.gameWine) }
+        if x.multiServerNeeded { s.insert(.multiServer) }
         if !x.hasInstall || driveGone || !x.hasGame || !bad.isDisjoint(with: Primary.gameFiles) {
             s.insert(.game); s.insert(.configure)
         }

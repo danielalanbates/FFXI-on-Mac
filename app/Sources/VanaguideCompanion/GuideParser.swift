@@ -19,6 +19,14 @@ struct GuideStep {
     var fixed = false
     /// Raw tags kept for display/debugging (KI, IT, MA, M, Q, QA, LV values).
     var tags: [String: String] = [:]
+
+    var goals: [(label: String, text: String)] {
+        ["EXP", "GIL"].compactMap { tag in
+            guard let text = tags[tag], !text.isEmpty else { return nil }
+            return (tag == "GIL" ? "Gil" : "EXP", text)
+        }
+    }
+
 }
 
 struct Guide {
@@ -26,6 +34,22 @@ struct Guide {
     var desc: String
     var levels: String
     var steps: [GuideStep]
+    /// Database reference lists group independent targets; their indices are not route progress.
+    var isReference = false
+    var server: String? = nil
+    var progressID: String? = nil
+    var legacyProgressID: String? = nil
+    var legacyStartingLocation: String? = nil
+    var preservesLegacyCompletion = false
+    var startingLocationLabel = "Starting location"
+
+    func available(on world: String) -> Bool {
+        guard let server, !server.isEmpty else { return true }
+        func key(_ value: String) -> String {
+            value.lowercased().filter { $0.isLetter || $0.isNumber }
+        }
+        return key(server) == key(world)
+    }
 }
 
 enum GuideParser {
@@ -54,7 +78,13 @@ enum GuideParser {
                 name: luaString("name", in: head) ?? "Unnamed guide",
                 desc: luaString("desc", in: head) ?? "",
                 levels: luaString("levels", in: head) ?? "",
-                steps: body.split(separator: "\n").compactMap { parseStep(String($0)) }
+                steps: body.split(separator: "\n").compactMap { parseStep(String($0)) },
+                server: luaString("server", in: head),
+                progressID: luaString("progress_id", in: head),
+                legacyProgressID: luaString("legacy_progress_id", in: head),
+                legacyStartingLocation: luaString("legacy_start", in: head),
+                preservesLegacyCompletion: luaString("legacy_completion", in: head) == "preserve",
+                startingLocationLabel: luaString("start_label", in: head) ?? "Starting location"
             ))
             search = end.upperBound
         }
@@ -65,8 +95,10 @@ enum GuideParser {
         // name = "value" or name = 'value' — take the LAST occurrence before the steps block,
         // so a file with several registers attributes fields to the nearest block.
         for quote in ["\"", "'"] {
-            let pattern = "\(key) = \(quote)"
-            if let r = text.range(of: pattern, options: .backwards),
+            let pattern = "(?<![A-Za-z0-9_])" + NSRegularExpression.escapedPattern(for: key) + "\\s*=\\s*" + NSRegularExpression.escapedPattern(for: quote)
+            if let regex = try? NSRegularExpression(pattern: pattern),
+               let match = regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).last,
+               let r = Range(match.range, in: text),
                let close = text.range(of: quote, range: r.upperBound..<text.endIndex) {
                 return String(text[r.upperBound..<close.lowerBound])
             }
@@ -79,7 +111,7 @@ enum GuideParser {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard trimmed.count > 2, let space = trimmed.firstIndex(of: " ") else { return nil }
         let kind = String(trimmed[..<space])
-        guard kind.count == 1, "ATCFKRULt".contains(kind) else { return nil }
+        guard kind.count == 1, "ATCFKRULtNB".contains(kind) else { return nil }
         var fields = trimmed[trimmed.index(after: space)...].components(separatedBy: "|")
         var step = GuideStep(kind: kind, title: fields.removeFirst())
         var i = 0

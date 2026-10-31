@@ -58,7 +58,7 @@ fi
 # .../wine/lib/wine/../../bin/wineserver, so the whole folder is matched. Other Wine apps
 # (CrossOver, Whisky, XIV on Mac) keep their wine elsewhere and do not count. Checked before the
 # build and again right before the swap. "Install FFXI on Mac.command" uses the same pattern.
-LIVE_PATTERN='FFXI-on-Mac\.app/Contents/(MacOS|Resources/x87sidecar)|horizon-loader|Ashita-cli|/wine-coop/wine/|/SharedSupport/wine/'
+LIVE_PATTERN='FFXI-on-Mac\.app/Contents/(MacOS|Resources/x87sidecar|Helpers/[^/]+\.app/Contents/MacOS/VanaguideCompanion)|horizon-loader|Ashita-cli|/wine-coop/wine/|/SharedSupport/wine/'
 APPLICATIONS_ID="$(/usr/bin/stat -f %d:%i /Applications)"
 # Pid and executable of each match, never the arguments: a loader's carry the account password.
 # Fails when nothing matches.
@@ -95,8 +95,8 @@ cd "$HERE"
 if [[ -n "${HXI_BINARY:-}" ]]; then
   BIN="$HXI_BINARY"
 else
-  swift build -c release --scratch-path "$BUILD_DIR"
-  BIN="$(swift build -c release --scratch-path "$BUILD_DIR" --show-bin-path)/HorizonXILauncher"
+  swift build --build-system native -c release -j 1 --scratch-path "$BUILD_DIR" -Xswiftc -parse-as-library
+  BIN="$(swift build --build-system native -c release --scratch-path "$BUILD_DIR" --show-bin-path)/HorizonXILauncher"
 fi
 [[ -x "$BIN" ]] || { echo "build produced no binary" >&2; exit 1; }
 
@@ -111,8 +111,8 @@ bundle_addon() {
 VANAGUIDE_SOURCE="${HXI_VANAGUIDE_SOURCE:-$REPO/../vanaguide/Vanaguide}"
 VANAVOICE_SOURCE="${HXI_VANAVOICE_SOURCE:-$REPO/../vanavoice/addon/vanavoice}"
 WINECURSOR_SOURCE="${HXI_WINECURSOR_SOURCE:-$REPO/addons/winecursor}"
-VANAGUIDE_LICENSE="$REPO/../vanaguide/LICENSE"
-VANAVOICE_LICENSE="$REPO/../vanavoice/LICENSE"
+VANAGUIDE_LICENSE="${VANAGUIDE_SOURCE:h}/LICENSE"
+VANAVOICE_LICENSE="${VANAVOICE_SOURCE:h:h}/LICENSE"
 
 for relative in \
   Vanaguide.lua core/guide.lua core/progress.lua core/story.lua core/conditions.lua \
@@ -219,6 +219,14 @@ if [[ ! -f "$REPO/app/Resources/audiofollow.dylib" ]]; then
 fi
 [[ -f "$REPO/app/Resources/audiofollow.dylib" ]] && \
   cp "$REPO/app/Resources/audiofollow.dylib" "$APP/Contents/Resources/audiofollow.dylib"
+# gamewindow.dylib -- inserted into wine the same way; keeps the game window's picture in
+# proportion when it is resized, and carries DYLD_INSERT_LIBRARIES across the x87 sidecar's exec
+# (see window/gamewindow.c). Built here if it is missing so a fresh clone still gets it.
+if [[ ! -f "$REPO/app/Resources/gamewindow.dylib" ]]; then
+  "$REPO/scripts/build-gamewindow.sh" >/dev/null 2>&1 || true
+fi
+[[ -f "$REPO/app/Resources/gamewindow.dylib" ]] && \
+  cp "$REPO/app/Resources/gamewindow.dylib" "$APP/Contents/Resources/gamewindow.dylib"
 
 # Dock/Finder icon: an original crystal mark in the launcher's own Vana'diel palette (see
 # scripts/make_icon.py), not extracted from Square Enix's client -- this project's own art.
@@ -270,6 +278,22 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
+  <!-- AscensionXI publishes its client, DATs and addon catalog only over plain HTTP
+       (http://dl.ascensionffxi.com:54290 and dl2), and every file is checked against the SHA-256
+       their manifest gives before it is used (AscensionChannel.swift). That one domain only. -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <!-- The Ascension self-test serves a fake channel only on 127.0.0.1. -->
+    <key>NSAllowsLocalNetworking</key><true/>
+    <key>NSExceptionDomains</key>
+    <dict>
+      <key>ascensionffxi.com</key>
+      <dict>
+        <key>NSIncludesSubdomains</key><true/>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key><true/>
+      </dict>
+    </dict>
+  </dict>
   <key>HXILauncherRevision</key><string>${LAUNCHER_REVISION}</string>
   <key>HXIAddonRevisions</key>
   <dict>
@@ -285,6 +309,12 @@ PLIST
 if [[ -z "${HXI_SIGN_ID:-}" && -z "${HXI_ADHOC:-}" ]]; then
   HXI_SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ {print $2; exit}')"
 fi
+# The guide remains a separate process and starts only when the player opens it. Embed the
+# matching GUI so the ordinary GitHub launcher update carries both parts together.
+COMPANION_BIN="${HXI_COMPANION_BINARY:-${BIN:h}/VanaguideCompanion}"
+[[ -x "$COMPANION_BIN" ]] || { echo "companion binary missing: $COMPANION_BIN" >&2; exit 1; }
+HXI_COMPANION_BINARY="$COMPANION_BIN" HXI_VANAGUIDE_SOURCE="$VANAGUIDE_SOURCE" \
+  HXI_SIGN_ID="${HXI_SIGN_ID:-}" "$HERE/bundle-server-safe.sh" "$APP/Contents/Helpers"
 # Signature. Ad-hoc by default; set HXI_SIGN_ID to a Developer ID hash for a release build
 # that can be notarised. Use the certificate *hash*, not its name -- there are two identical
 # "Developer ID Application: Daniel Bates" certs in the login keychain and codesign rejects
@@ -302,6 +332,7 @@ find "$APP" -exec xattr -c {} \; 2>/dev/null || true
 X87SC="$APP/Contents/Resources/x87sidecar_entitled"
 X87COOP="$APP/Contents/Resources/x87sidecar-coop"
 AUDIOFOLLOW="$APP/Contents/Resources/audiofollow.dylib"
+GAMEWINDOW="$APP/Contents/Resources/gamewindow.dylib"
 MOLTENVK="$APP/Contents/Resources/libMoltenVK-1.4.2.dylib"
 if [[ -n "${HXI_SIGN_ID:-}" ]]; then
   # The cooperative sidecar has no entitlements, so it can carry the hardened runtime and the
@@ -315,6 +346,7 @@ if [[ -n "${HXI_SIGN_ID:-}" ]]; then
   # Nested dylibs need the hardened runtime and a secure timestamp too, or the notary rejects
   # the whole bundle on this one file.
   if [[ -f "$AUDIOFOLLOW" ]]; then codesign --force --options runtime --timestamp -s "$HXI_SIGN_ID" "$AUDIOFOLLOW"; fi
+  if [[ -f "$GAMEWINDOW" ]]; then codesign --force --options runtime --timestamp -s "$HXI_SIGN_ID" "$GAMEWINDOW"; fi
   if [[ -f "$MOLTENVK" ]]; then codesign --force --options runtime --timestamp -s "$HXI_SIGN_ID" "$MOLTENVK"; fi
   codesign --force --options runtime -s "$HXI_SIGN_ID" "$APP"
 else
@@ -322,6 +354,7 @@ else
     codesign --force -s - --entitlements "$REPO/vendor/x87sidecar-entitlements.plist" "$X87SC"
   fi
   if [[ -f "$AUDIOFOLLOW" ]]; then codesign --force -s - "$AUDIOFOLLOW"; fi
+  if [[ -f "$GAMEWINDOW" ]]; then codesign --force -s - "$GAMEWINDOW"; fi
   if [[ -f "$MOLTENVK" ]]; then codesign --force -s - "$MOLTENVK"; fi
   codesign --force -s - "$APP"
 fi

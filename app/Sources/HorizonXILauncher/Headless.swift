@@ -28,12 +28,17 @@ enum Headless {
             || a.contains("--selftest-addon-install")
             || a.contains("--selftest-cursor-fix")
             || a.contains("--selftest-guide-disabled")
+            || a.contains("--selftest-guide-companion")
             || a.contains("--selftest-narration-disabled")
             || a.contains("--selftest-multiworld")
+            || a.contains("--selftest-world-prefix")
+            || a.contains("--selftest-prefix-scope")
+            || a.contains("--selftest-runner-gate")
             || a.contains("--selftest-retroachievements")
             || a.contains("--selftest-updater")
             || a.contains("--selftest-perf")
             || a.contains("--selftest-ui-text")
+            || a.contains("--selftest-server-catalog")
             || a.contains("--selftest-primary-action")
             || a.contains("--selftest-install-location")
             || a.contains("--selftest-install-selection")
@@ -45,6 +50,20 @@ enum Headless {
             || a.contains("--selftest-graphics")
             || a.contains("--selftest-addons-live")
             || a.contains("--selftest-carryover")
+            || a.contains("--selftest-ascension")
+            || a.contains("--ascension-sync")
+            || a.contains("--selftest-vanadreams")
+            || a.contains("--vanadreams-sync")
+            || a.contains("--login-version")
+            || a.contains("--selftest-driftwood")
+            || a.contains("--driftwood-sync")
+            || a.contains("--driftwood-treehash")
+            || a.contains("--selftest-pegasus")
+            || a.contains("--pegasus-sync")
+            || a.contains("--selftest-retail-world")
+            || a.contains("--retail-world-sync")
+            || a.contains("--selftest-scythe")
+            || a.contains("--scythe-sync")
             || a.contains("--send-ashita")
             || a.contains("--carryover-report")
             || a.contains("--carryover-apply")
@@ -57,6 +76,7 @@ enum Headless {
             || a.contains("--fix")
             || a.contains("--selftest-single-instance")
             || a.contains("--selftest-single-instance-probe")
+            || a.contains("--selftest-lock-probe")
     }
 
     @MainActor static func runIfAsked() {
@@ -85,12 +105,18 @@ enum Headless {
         if args.contains("--selftest-guide-disabled") {
             runGuideDisabledSelfTest()
         }
+        if args.contains("--selftest-guide-companion") {
+            GuideCompanionSelfTest.run()
+        }
         if args.contains("--selftest-narration-disabled") {
             runNarrationDisabledSelfTest()
         }
         if args.contains("--selftest-multiworld") {
             runMultiWorldSelfTest()
         }
+        if args.contains("--selftest-world-prefix") { runWorldPrefixSelfTest() }
+        if args.contains("--selftest-prefix-scope") { runPrefixScopeSelfTest() }
+        if args.contains("--selftest-runner-gate") { runRunnerGateSelfTest() }
         if args.contains("--selftest-retroachievements") {
             runRetroAchievementsSelfTest()
         }
@@ -103,6 +129,7 @@ enum Headless {
         if args.contains("--selftest-ui-text") {
             runUITextSelfTest()
         }
+        if args.contains("--selftest-server-catalog") { runServerCatalogSelfTest() }
         if args.contains("--selftest-primary-action") {
             runPrimaryActionSelfTest()
         }
@@ -133,6 +160,21 @@ enum Headless {
         if args.contains("--selftest-addons-live") {
             runAddonsLiveSelfTest()
         }
+        if args.contains("--selftest-ascension") {
+            runAscensionSelfTest()
+        }
+        if args.contains("--ascension-sync") { runAscensionSync(args) }
+        if args.contains("--selftest-vanadreams") { runVanadreamsSelfTest() }
+        if args.contains("--vanadreams-sync") { runVanadreamsSync(args) }
+        if args.contains("--login-version") { runLoginVersion(args) }
+        if args.contains("--selftest-driftwood") { runDriftwoodSelfTest() }
+        if args.contains("--driftwood-sync") || args.contains("--driftwood-treehash") { runDriftwoodSync(args) }
+        if args.contains("--selftest-pegasus") { runPegasusSelfTest() }
+        if args.contains("--pegasus-sync") { runPegasusSync(args) }
+        if args.contains("--selftest-retail-world") { runRetailWorldSelfTest() }
+        if args.contains("--retail-world-sync") { runRetailWorldSync(args) }
+        if args.contains("--selftest-scythe") { runScytheSelfTest() }
+        if args.contains("--scythe-sync") { runScytheSync(args) }
         if args.contains("--selftest-carryover") {
             runCarryOverSelfTest()
         }
@@ -143,6 +185,9 @@ enum Headless {
         if args.contains("--progress-trace") { runProgressTrace() }
         if let at = args.firstIndex(of: "--selftest-single-instance-probe") {
             runSingleInstanceProbe(Array(args[(at + 1)...]))
+        }
+        if let at = args.firstIndex(of: "--selftest-lock-probe") {
+            runLockProbe(Array(args[(at + 1)...]))
         }
         if args.contains("--selftest-single-instance") {
             runSingleInstanceSelfTest()
@@ -748,9 +793,24 @@ enum Headless {
                                                             maxClients: 1, clients: onlyLocal) } != nil))
         checks.append(("a session of this window that is still injecting counts as a copy",
                        refusal(horizon, [], own: [-1]) != nil))
-        checks.append(("only the local world and CatsEyeXI (cited rules) allow several clients",
+        // Vanadreams (b72): "As many accounts and characters as you want, boxing welcome" (fairywitch.ca).
+        // MistXI (b75): "Dual boxing: Allowed ( maximum 2 per IP )" (mistxi.com/server-info).
+        // LevelDown 99 (b76): "Accounts – 2 Active, 1 Mule (only two logged in at a time)" (their wiki).
+        // Scythe (b76): "up to two accounts per player for dual-boxing, with both online simultaneously".
+        // Legendary Relaunch (b77): "no account limits and no cap on how many characters you run at once" (their FAQ).
+        // b80, rules read 2026-10-25: Gaia XI 2 ("Maximum 2 Accounts Per Player", "Dual-Boxing Allowed"),
+        // Supernova 6 (no "more than 6 characters at once"), OmicronXI 2 ("2 active characters on at a time"),
+        // Moghouse XI and Olympus XI no cap (nothing against boxing). HorizonXI, AscensionXI, DriftwoodXI and
+        // PegasusXI forbid it.
+        checks.append(("the worlds whose rules allow it, and only those, allow several clients",
                        Server.all.filter(\.allowsMultipleClients).map(\.name).sorted()
-                           == ["CatsEyeXI", "Local server"]))
+                           == ["CatsEyeXI", "Gaia XI", "Legendary Relaunch", "LevelDown 99", "Local server", "MistXI",
+                               "Moghouse XI", "Olympus XI", "OmicronXI", "Scythe", "Supernova", "Vanadreams"]))
+        let caps = Dictionary(Server.builtins.map { ($0.name, $0.maxClients) }, uniquingKeysWith: { a, _ in a })
+        checks.append(("each world's cap is its rules' number: HorizonXI/AscensionXI/DriftwoodXI/PegasusXI 1, Supernova 6, Gaia XI/OmicronXI 2",
+                       caps["HorizonXI"] == 1 && caps["AscensionXI"] == 1 && caps["DriftwoodXI"] == 1 && caps["PegasusXI"] == 1
+                           && caps["Supernova"] == 6 && caps["Gaia XI"] == 2 && caps["OmicronXI"] == 2
+                           && caps["Moghouse XI"] == Server.noClientCap && caps["Olympus XI"] == Server.noClientCap))
         let oneCats = LiveClients.parse("62001 62000 C:\\CatsEye\\xiloader.exe --server server.catseyexi.com\n"
                                         + "62002 62000 /x/x87sidecar-coop --cooperative /x/wine C:\\CatsEye\\xiloader.exe --server server.catseyexi.com\n").clients
         let twoCats = oneCats + LiveClients.parse("63001 63000 C:\\CatsEye\\xiloader.exe --server server.catseyexi.com\n").clients
@@ -758,6 +818,21 @@ enum Headless {
                        catseye?.maxClients == 2 && refusal(catseye, oneCats) == nil))
         checks.append(("CatsEyeXI: a third client is refused (their two-character cap)",
                        refusal(catseye, twoCats)?.contains("at most 2") == true))
+        // b69: with gamewindow.dylib inserted, wine execs the sidecar with a /bin/sh step before the
+        // loader (the DYLD_INSERT_LIBRARIES carry, window/gamewindow.c), so the sidecar that lives
+        // as long as the client shows this command line (read from ps, 2026-10-16). It must still
+        // file under the client's host, still count as its sidecar, and an injector still names
+        // its boot file.
+        let carryScript = "/bin/sh -c export DYLD_INSERT_LIBRARIES=\"$HXI_DYLD_INSERT_LIBRARIES\"; exec \"$@\" hxi-carry"
+        let carried = LiveClients.parse("""
+            76001 76000 .\\\\bootloader\\\\horizon-loader.exe --server play.horizonxi.com --user fixture --pass fixture
+            76002 76000 /Applications/FFXI on Mac.app/Contents/Resources/x87sidecar-coop --cooperative \(carryScript) /Users/x/Library/Application Support/BatesAI/ffxi-runtime/wine-coop/wine/lib/wine/x86_64-unix/wine .\\\\bootloader\\\\horizon-loader.exe --server play.horizonxi.com --user fixture --pass fixture
+            77002 77000 /x/x87sidecar-coop --cooperative \(carryScript) /x/wine C:\\HorizonXI\\Ashita-cli.exe horizonxi.ini
+            """)
+        checks.append(("the carry's /bin/sh step: the loader and its sidecar still file under one host, the sidecar as a sidecar",
+                       carried.byHost["play.horizonxi.com"] == [76001, 76002] && carried.sidecars == [76002, 77002]))
+        checks.append(("the carry's /bin/sh step: an injector's sidecar is still an injector with its boot file",
+                       carried.clients.first { $0.pid == 77002 }.map { $0.injecting && $0.bootFile == "horizonxi.ini" } == true))
 
         // Two local-world sessions in one prefix: A launched first (group 71000), then B (72000).
         let twoLocal = LiveClients.parse("""
@@ -828,6 +903,15 @@ enum Headless {
         checks.append(("CatsEyeXI: one running plus another launcher's injector for it is at the cap of two",
                        refusalSeeing(catseye, oneCats + catsInjecting,
                                      resolve: ["catseye.ini": "server.catseyexi.com"])?.contains("at most 2") == true))
+        // b80 (Daniel, 2026-10-25: as many clients as each server's rules allow): a world without
+        // a cap takes a twelfth client beside eleven running, this window's own starting session and
+        // another launcher's injector whose world cannot be told.
+        let elevenLocal = LiveClients.parse((1...11).map {
+            "\(83000 + $0 * 10 + 1) \(83000 + $0 * 10) .\\\\bootloader\\\\horizon-loader.exe --server 127.0.0.1\n"
+        }.joined()).clients
+        checks.append(("a world without a cap takes a twelfth client",
+                       elevenLocal.count == 11 && Set(elevenLocal.map(\.group)).count == 11
+                           && refusalSeeing(local, elevenLocal + otherInjecting, own: [-1], resolve: [:]) == nil))
         checks.append(("a launch while another world is injecting treats the prefix as in use",
                        MultiWorld.clientsLive(injecting, otherSessionsPlaying: 0)))
         checks.append(("a launch while another session of this window is playing but not yet visible treats the prefix as in use",
@@ -1126,6 +1210,21 @@ enum Headless {
                           othersLive: false, log: { _ in })
             checks.append(("with nothing else live, a strict allowlist world still gets the folder removed",
                            !fm.fileExists(atPath: addons.appendingPathComponent(Guide.addonDirName).path)))
+            // b80: a Sandbox world (AscensionXI's profile as their launcher writes it) starts beside a
+            // client whatever the prefix's registry names; one without Sandbox, or with Sandbox but no
+            // paths, still reads the registry.
+            try ("[ashita.polplugins]\nsandbox=1\npivot=1\n\n[sandbox.paths]\ncommon=C:\\Program Files (x86)\\Common Files\n"
+                 + "pol=..\\..\\Game\\PlayOnlineViewer\nffxi=..\\..\\Game\\FINAL FANTASY XI\n")
+                .write(to: boot.appendingPathComponent("sandboxed.ini"), atomically: true, encoding: .utf8)
+            try "[ashita.polplugins]\nsandbox = 1\n".write(to: boot.appendingPathComponent("nopaths.ini"), atomically: true, encoding: .utf8)
+            try "[ashita.polplugins]\nsandbox = 0\npivot = 1\n\n[sandbox.paths]\npol=x\nffxi=y\n"
+                .write(to: boot.appendingPathComponent("unsandboxed.ini"), atomically: true, encoding: .utf8)
+            checks.append(("a world whose profile loads Sandbox with its paths does not read the prefix's registry",
+                           Sandbox.suppliesRegistry(install, profile: "sandboxed.ini")
+                               && !Sandbox.suppliesRegistry(install, profile: "nopaths.ini")
+                               && !Sandbox.suppliesRegistry(install, profile: "unsandboxed.ini")
+                               && !Sandbox.suppliesRegistry(install, profile: "horizonxi.ini")
+                               && !Sandbox.suppliesRegistry(install, profile: "missing.ini")))
 
             // The real path: Runner reads the injector's boot profile from the install.
             try "[ashita.boot]\ncommand     = --server play.horizonxi.com --user x --pass y\n"
@@ -1142,6 +1241,120 @@ enum Headless {
             FileHandle.standardError.write(Data("  \(error.localizedDescription)\n".utf8))
         }
         try? fm.removeItem(at: root)
+
+        // b70: Wine that died under a session. Pure, or injected: no process is read or
+        // signalled; the launch lock and the stand-in volumes are temporary files of their own.
+        let me = getuid()
+        let folder = "/tmp/.wine-\(me)/server-1000016-d7c73b"
+        let playing = LiveClients.parse("""
+            44464 44464 /x/wine-coop/wine/bin/wineserver
+            44474 44474 C:\\windows\\system32\\services.exe
+            44482 44482 C:\\windows\\system32\\explorer.exe /desktop
+            44487 44470 .\\\\bootloader\\\\horizon-loader.exe --server play.horizonxi.com --user fixture --pass fixture
+            44489 44470 /Applications/FFXI-on-Mac.app/Contents/Resources/x87sidecar-coop --cooperative /x/wine-coop/wine/lib/wine/x86_64-unix/wine .\\\\bootloader\\\\horizon-loader.exe --server play.horizonxi.com --user fixture --pass fixture
+            77783 77783 C:\\windows\\system32\\plugplay.exe
+            77785 77785 C:\\windows\\system32\\explorer.exe /desktop
+            77793 77790 .\\\\bootloader\\\\horizon-loader.exe --server play.horizonxi.com --user fixture --pass fixture
+            """)
+        let startOf: [pid_t: UInt64] = [44474: 1792193860, 44482: 1792193861, 77783: 1792175494, 77785: 1792175495]
+        let identity: (pid_t) -> Leftovers.ProcID? = { p in startOf[p].map { Leftovers.ProcID(startSec: $0, uid: me, ppid: 1) } }
+        let liveServer = Leftovers.ServerLock.held(44464, Leftovers.ProcID(startSec: 1792193859, uid: me, ppid: 1))
+        checks.append(("b70: a session playing beside a dead session's programs: only those are flagged, never a loader or the sidecar",
+                       Leftovers.stale(playing, dirs: [folder], identity: identity, lock: { _ in liveServer },
+                                       maps: { _, _, _ in true }).map(\.pid) == [77783, 77785]
+                           && MultiWorld.sessionPIDs(group: 44470, groupHeldLoader: true, host: "play.horizonxi.com",
+                                                     preexisting: [], otherGroups: [], in: playing) == [44487, 44489]))
+        // The drive back under another device number: the prefix has a new server folder, and
+        // the dead session's programs map the old one, which a session of this run recorded.
+        let oldFolder = "/tmp/.wine-\(me)/server-1000019-d7c73b"
+        let byFolder: (String, pid_t, Leftovers.ProcID) -> Bool = { dir, pid, _ in (pid > 77000) == (dir == oldFolder) }
+        let lockOf: (String) -> Leftovers.ServerLock = { $0 == oldFolder ? .free : liveServer }
+        checks.append(("b70: the drive back under another device number: found through the recorded folder; without it, nothing",
+                       Leftovers.stale(playing, dirs: [folder, oldFolder], identity: identity, lock: lockOf,
+                                       maps: byFolder).map(\.pid) == [77783, 77785]
+                           && Leftovers.stale(playing, dirs: [folder], identity: identity, lock: lockOf, maps: byFolder).isEmpty))
+        let lockURL = fm.temporaryDirectory.appendingPathComponent("hxi-launch-lock-\(UUID().uuidString)")
+        let fake = [Leftovers.Stale(pid: 77785, id: Leftovers.ProcID(startSec: 1792175495, uid: me, ppid: 1))]
+        var scanned = false, signalled = false
+        let elsewhereHolder = LaunchLock.acquire(at: lockURL)
+        let refused = Leftovers.endStale(dirs: [folder], grace: 0, lockAt: lockURL,
+                                         flag: { _ in scanned = true; return fake },
+                                         signal: { f, _ in signalled = true; return f.map(\.pid) })
+        checks.append(("b70: with the launch lock held by another holder, endStale scans and signals nothing",
+                       elsewhereHolder != nil && refused.isEmpty && !scanned && !signalled))
+        // Play's half: it holds the lock already and only flags; it signals from a task of its own.
+        let byPlay = Leftovers.flagStale(dirs: [folder], lockHeld: true, lockAt: lockURL, flag: { _ in fake })
+        checks.append(("b70: ... while Play, which holds it already, goes ahead", byPlay == fake))
+        if let elsewhereHolder { LaunchLock.release(elsewhereHolder) }
+        let afterRelease = Leftovers.endStale(dirs: [folder], grace: 0, lockAt: lockURL,
+                                              flag: { _ in fake }, signal: { f, _ in f.map(\.pid) })
+        checks.append(("b70: ... and so does a refresh once the lock is free; nothing at all without a folder",
+                       afterRelease == [77785]
+                           && Leftovers.flagStale(dirs: [], lockHeld: true, flag: { _ in fake }).isEmpty
+                           && Leftovers.endStale(dirs: [], lockAt: lockURL, flag: { _ in fake },
+                                                 signal: { f, _ in f.map(\.pid) }).isEmpty))
+        try? fm.removeItem(at: lockURL)
+
+        // The wineserver first seen holding the lock is then asked as a process (Leftovers.state).
+        let w1 = Leftovers.LockHolder(pid: 77771, startSec: 1792175493, startUsec: 0)
+        let w1ID = Leftovers.ProcID(startSec: 1792175493, uid: me, ppid: 1)
+        func stateOf(_ id: Leftovers.ProcID?, alive: Bool) -> Leftovers.ServerState {
+            Leftovers.state(of: w1, identity: { _ in id }, alive: { _ in alive })
+        }
+        checks.append(("b70 serverLost: the wineserver gone with the loader alive (2026-10-16 14:15:40)",
+                       stateOf(nil, alive: false) == .gone && MultiWorld.serverLost(first: w1, now: .gone, loaderAlive: true)))
+        checks.append(("b70 serverLost: another process under its pid (started later) counts as gone",
+                       stateOf(Leftovers.ProcID(startSec: 1792193859, uid: me, ppid: 1), alive: true) == .gone))
+        checks.append(("b70 serverLost: a read that fails while its pid lives says nothing (the lock file gone after 3 days, EMFILE)",
+                       stateOf(nil, alive: true) == .unknown && !MultiWorld.serverLost(first: w1, now: .unknown, loaderAlive: true)))
+        checks.append(("b70 serverLost: not while the same one runs, not once the loader is gone, not when none was ever seen",
+                       stateOf(w1ID, alive: true) == .running
+                           && !MultiWorld.serverLost(first: w1, now: .running, loaderAlive: true)
+                           && !MultiWorld.serverLost(first: w1, now: .gone, loaderAlive: false)
+                           && !MultiWorld.serverLost(first: w1, now: nil, loaderAlive: true)
+                           && !MultiWorld.serverLost(first: nil, now: .gone, loaderAlive: true)))
+
+        let livePaths = [
+            "HorizonXI": ["/Volumes/x10/Video Games/Mac/FFXI/FFXI on Mac/FFXI on Mac Wine.app/Contents/SharedSupport/prefix10",
+                          "/Volumes/x10/Video Games/Mac/FFXI/wine-coop/wine/bin/wine"],
+            "Local server": ["/Users/x/Library/Application Support/FFXI/prefix", "/Users/x/wine/bin/wine"],
+        ]
+        checks.append(("b70 sessionsOnVolume: the session whose prefix and wine are on /Volumes/x10, not the other",
+                       MultiWorld.sessionsOnVolume("/Volumes/x10", livePaths: livePaths) == ["HorizonXI"]
+                           && MultiWorld.sessionsOnVolume("/Volumes/x10/", livePaths: livePaths) == ["HorizonXI"]))
+        checks.append(("b70 sessionsOnVolume: /Volumes/x1 is not /Volumes/x10, nor is '/Volumes/x10 2'",
+                       MultiWorld.sessionsOnVolume("/Volumes/x1", livePaths: livePaths).isEmpty
+                           && MultiWorld.sessionsOnVolume("/Volumes/x10 2", livePaths: livePaths).isEmpty))
+        // The Games volume's wine-coop is a link into the x10 (live Mac, 2026-10-16): the path a
+        // session keeps is the link resolved, so the x10 going away names it, the Games volume
+        // does not. A temporary folder stands in for both volumes.
+        let vols = fm.temporaryDirectory.appendingPathComponent("hxi-volumes-\(UUID().uuidString)")
+        let x10 = vols.appendingPathComponent("x10"), games = vols.appendingPathComponent("Games")
+        try? fm.createDirectory(at: x10.appendingPathComponent("wine-coop/wine/bin"), withIntermediateDirectories: true)
+        try? fm.createDirectory(at: games.appendingPathComponent("FFXI"), withIntermediateDirectories: true)
+        try? fm.createSymbolicLink(atPath: games.appendingPathComponent("FFXI/wine-coop").path,
+                                   withDestinationPath: x10.appendingPathComponent("wine-coop").path)
+        let kept = ["HorizonXI": [OwnWine.resolve(games.appendingPathComponent("FFXI/wine-coop/wine/bin").path)]]
+        checks.append(("b70 sessionsOnVolume: the Games volume's wine-coop link resolves to the x10",
+                       MultiWorld.sessionsOnVolume(OwnWine.resolve(x10.path), livePaths: kept) == ["HorizonXI"]
+                           && MultiWorld.sessionsOnVolume(OwnWine.resolve(games.path), livePaths: kept).isEmpty))
+        try? fm.removeItem(at: vols)
+
+        let items = MultiWorld.stopItems([(session: "HorizonXI", serverLost: false, stopping: false),
+                                          (session: "Local server #2", serverLost: true, stopping: false)])
+        checks.append(("b70 Dock and Game menu: a Stop per playing session, Force Stop once its Wine is gone",
+                       items.map(\.title) == ["Stop HorizonXI", "Force Stop Local server #2"]
+                           && items.map(\.force) == [false, true] && items.map(\.session) == ["HorizonXI", "Local server #2"]
+                           && !items.contains(where: \.stopping)))
+        let stopping = MultiWorld.stopItems([(session: "HorizonXI", serverLost: false, stopping: true),
+                                             (session: "Local server", serverLost: true, stopping: true)])
+        checks.append(("b70 Dock and Game menu: a session whose Stop is under way shows \"Stopping …\", not pressable, even once its Wine is gone",
+                       stopping.map(\.title) == ["Stopping HorizonXI…", "Stopping Local server…"]
+                           && stopping.allSatisfy { $0.stopping && !$0.force }))
+        // Structural for a client elsewhere: stopItems is built from `live` alone.
+        checks.append(("b70 Dock and Game menu: nothing when nothing plays; a playing session gets one, an idle one none",
+                       MultiWorld.stopItems([]).isEmpty
+                           && sessions.stopItems.map(\.title) == ["Stop Local server"]))
 
         let failures = checks.filter { !$0.1 }.count
         for (name, passed) in checks {

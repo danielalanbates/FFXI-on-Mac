@@ -62,6 +62,7 @@ extension Headless {
             ("tag v4.0-rc1 refused", UpdateRules.version(fromTag: "v4.0-rc1") == nil, true),
             ("tag without v refused", UpdateRules.version(fromTag: "3.10") == nil, true),
             ("tag v4 refused", UpdateRules.version(fromTag: "v4") == nil, true),
+            ("tag with trailing newline refused", UpdateRules.version(fromTag: "v4.0\n") == nil, true),
         ]
 
         // URL checks: the first link must be github.com under this repo; redirects only to
@@ -90,11 +91,13 @@ extension Headless {
         ]
 
         // The /releases/latest shape (v3.9's real fields, the asset renamed to carry a build).
-        func api(tag: String, name: String, link: String = asset, prerelease: Bool = false) -> [String: Any] {
+        func api(tag: String, name: String, link: String? = nil, prerelease: Bool = false) -> [String: Any] {
             ["tag_name": tag, "draft": false, "prerelease": prerelease,
+             "published_at": "2026-10-20T12:00:00Z",
              "html_url": "https://github.com/danielalanbates/FFXI-on-Mac/releases/tag/\(tag)",
              "assets": [["name": "README.txt", "browser_download_url": "https://github.com/x"],
-                        ["name": name, "browser_download_url": link,
+                        ["name": name, "state": "uploaded",
+                         "browser_download_url": link ?? "https://github.com/danielalanbates/FFXI-on-Mac/releases/download/\(tag)/\(name)",
                          "digest": "sha256:629DFBC91A901EEC4FEF2EC488A9448B99D4DF6570944318DD7A53753E091191"]]]
         }
         let parsed = UpdateRules.release(fromAPI: api(tag: "v3.10", name: "FFXI-on-Mac-3.10-b60.dmg"))
@@ -113,7 +116,62 @@ extension Headless {
                                               link: "https://example.com/FFXI-on-Mac-3.10-b60.dmg")) == nil, true),
             ("API legacy v3.9 asset has build 0",
              UpdateRules.release(fromAPI: api(tag: "v3.9", name: "FFXI-on-Mac-3.9.dmg"))?.build.build == 0, true),
+            ("API unrelated version asset ignored",
+             UpdateRules.release(fromAPI: api(tag: "v3.10", name: "FFXI-on-Mac-3.9-b99.dmg")) == nil, true),
+            ("API beta-named asset attached to stable tag ignored",
+             UpdateRules.release(fromAPI: api(tag: "v3.10", name: "FFXI-on-Mac-3.10-beta-b99.dmg")) == nil, true),
+            ("API asset from another tag ignored",
+             UpdateRules.release(fromAPI: api(tag: "v3.10", name: "FFXI-on-Mac-3.10-b60.dmg",
+                                              link: asset.replacingOccurrences(of: "/v3.10/", with: "/v3.9/"))) == nil, true),
+            ("API overflowing build ignored",
+             UpdateRules.release(fromAPI: api(tag: "v3.10", name: "FFXI-on-Mac-3.10-b999999999999999999999.dmg")) == nil, true),
         ]
+
+        let fixture = api(tag: "v3.10", name: "FFXI-on-Mac-3.10-b60.dmg")
+        for field in ["draft", "prerelease", "published_at"] {
+            var missing = fixture
+            missing.removeValue(forKey: field)
+            checks.append(("API missing \(field) is not a published stable release",
+                           UpdateRules.release(fromAPI: missing) == nil, true))
+        }
+        var draft = fixture
+        draft["draft"] = true
+        checks.append(("API draft ignored", UpdateRules.release(fromAPI: draft) == nil, true))
+        var uploading = fixture
+        var uploadAssets = uploading["assets"] as! [[String: Any]]
+        uploadAssets[1]["state"] = "starter"
+        uploading["assets"] = uploadAssets
+        checks.append(("API unfinished upload ignored", UpdateRules.release(fromAPI: uploading) == nil, true))
+        var malformedDigest = fixture
+        var digestAssets = malformedDigest["assets"] as! [[String: Any]]
+        digestAssets[1]["digest"] = "sha256:broken"
+        malformedDigest["assets"] = digestAssets
+        checks.append(("API malformed sha256 ignored", UpdateRules.release(fromAPI: malformedDigest) == nil, true))
+        var multiple = fixture
+        let other = api(tag: "v3.10", name: "FFXI-on-Mac-3.10-b61.dmg")["assets"] as! [[String: Any]]
+        multiple["assets"] = (fixture["assets"] as! [[String: Any]]) + other
+        checks.append(("API chooses newest matching build independent of attachment order",
+                       UpdateRules.release(fromAPI: multiple)?.build.build == 61, true))
+
+        // An authoritative absence clears a staged offer; network/server failures preserve the
+        // last verified copy. No network requests are made by these response-policy checks.
+        do {
+            let absent = try UpdateWork.latestRelease(data: Data(), statusCode: 404)
+            checks.append(("HTTP 404 means no current published update", absent == nil, true))
+            let json = try JSONSerialization.data(withJSONObject: fixture)
+            let current = try UpdateWork.latestRelease(data: json, statusCode: 200)
+            checks.append(("HTTP 200 parses the published release", current == parsed, true))
+        } catch {
+            checks.append(("latest-release response parsing: \(error)", false, true))
+        }
+        for status in [403, 429, 500, -1] {
+            do {
+                _ = try UpdateWork.latestRelease(data: Data(), statusCode: status)
+                checks.append(("HTTP \(status) is transient, not a withdrawn release", false, true))
+            } catch {
+                checks.append(("HTTP \(status) is transient, not a withdrawn release", true, true))
+            }
+        }
 
         // Restart re-asks GitHub: only the release that is still exactly the latest installs.
         if let staged = parsed {
@@ -131,6 +189,37 @@ extension Headless {
                  UpdateRules.isStillLatest(staged, latest: latest("v3.10", "FFXI-on-Mac-3.10-b61.dmg")), false),
                 ("Restart: overtaken by v3.11, not installed (v3.11 is staged instead)",
                  UpdateRules.isStillLatest(staged, latest: latest("v3.11", "FFXI-on-Mac-3.11-b62.dmg")), false),
+            ]
+            let replaced = UpdateRelease(tag: staged.tag, build: staged.build, assetName: staged.assetName,
+                                         dmgURL: staged.dmgURL, pageURL: staged.pageURL,
+                                         sha256: String(repeating: "a", count: 64))
+            checks.append(("Restart: same name and build with a replacement digest, not installed",
+                           UpdateRules.isStillLatest(staged, latest: replaced), false))
+
+            // Checks continue after staging. Keep the same verified offer without repeating
+            // signature work; dismiss an authoritative withdrawal/replacement. A response
+            // arriving after Restart cannot clear the state or prune files under the helper.
+            let ready = Updater.State.ready(staged)
+            let failed = Updater.State.restartFailed(staged, .clientLive)
+            checks += [
+                ("ready offer participates in periodic revalidation", ready.releaseToRefresh == staged, true),
+                ("failed Restart offer participates in periodic revalidation", failed.releaseToRefresh == staged, true),
+                ("unchanged latest keeps the ready offer",
+                 ready.shouldWithdrawOffer(checked: staged, latest: staged), false),
+                ("withdrawn latest clears the ready offer",
+                 ready.shouldWithdrawOffer(checked: staged, latest: nil), true),
+                ("replaced asset clears the ready offer before restaging",
+                 ready.shouldWithdrawOffer(checked: staged, latest: replaced), true),
+                ("withdrawn latest clears a failed Restart offer",
+                 failed.shouldWithdrawOffer(checked: staged, latest: nil), true),
+                ("installing has no ordinary offer refresh",
+                 Updater.State.installing(staged).releaseToRefresh == nil, true),
+                ("response arriving during install cannot withdraw or prune it",
+                 Updater.State.installing(staged).shouldWithdrawOffer(checked: staged, latest: nil), false),
+                ("response for an older offer cannot clear its replacement",
+                 Updater.State.ready(replaced).shouldWithdrawOffer(checked: staged, latest: nil), false),
+                ("response arriving after the offer cleared does nothing",
+                 Updater.State.idle.shouldWithdrawOffer(checked: staged, latest: nil), false),
             ]
         }
 
@@ -179,6 +268,34 @@ extension Headless {
              UpdateRules.isInside(updates + "-old/FFXI-on-Mac.app", dir: updates), false),
             ("a path with .. is resolved first",
              UpdateRules.isInside(updates + "/../updates/previous-3.9-b59.app", dir: updates), true),
+        ]
+
+        let launcherPath = "/Applications/FFXI-on-Mac.app"
+        let embeddedGuide = launcherPath + "/Contents/Helpers/Vanaguide Server-Safe.app/Contents/MacOS/VanaguideCompanion"
+        func guideBlocks(_ id: String?, _ path: String?) -> Bool {
+            UpdateRules.embeddedCompanionIsRunning(in: launcherPath, applications: [
+                UpdateRules.RunningApplication(bundleIdentifier: id, executablePath: path),
+            ])
+        }
+        checks += [
+            ("running embedded guide blocks a launcher swap",
+             guideBlocks(UpdateRules.companionBundleID, embeddedGuide), true),
+            ("embedded guide executable blocks even without bundle metadata",
+             guideBlocks(nil, embeddedGuide), true),
+            ("known guide with unreadable process path stays conservative",
+             guideBlocks(UpdateRules.companionBundleID, nil), true),
+            ("independent Applications guide permits the launcher swap",
+             guideBlocks(UpdateRules.companionBundleID,
+                         "/Applications/Vanaguide Server-Safe.app/Contents/MacOS/VanaguideCompanion"), false),
+            ("guide under a lookalike launcher folder is independent",
+             guideBlocks(UpdateRules.companionBundleID,
+                         launcherPath + "-old/Contents/Helpers/Vanaguide.app/Contents/MacOS/VanaguideCompanion"), false),
+            ("ordinary launcher process is not its embedded guide",
+             guideBlocks(UpdateRules.bundleID, launcherPath + "/Contents/MacOS/FFXI-on-Mac"), false),
+            ("guide path normalizes dot components before matching",
+             guideBlocks(nil, launcherPath + "/Contents/Helpers/../Helpers/Vanaguide.app/Contents/MacOS/VanaguideCompanion"), true),
+            ("unknown process without a path does not invent a live guide",
+             guideBlocks(nil, nil), false),
         ]
 
         // The helper starts with a clean environment, through the launcher's real spawn path.
@@ -232,7 +349,7 @@ extension Headless {
     /// marker set in this process's own environment: neither may reach the probe.
     private static func updaterSpawnChecks() -> [(String, Bool, Bool)] {
         let fm = FileManager.default
-        let dir = fm.temporaryDirectory.appendingPathComponent("hxi-selftest-updater-spawn-\(getpid())")
+        let dir = fm.temporaryDirectory.appendingPathComponent("hxi-selftest-updater spawn '\"\\-\(getpid())")
         try? fm.removeItem(at: dir)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: dir) }

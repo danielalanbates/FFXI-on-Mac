@@ -10,6 +10,25 @@ extension Headless {
         let items = News.parse(fixture) ?? []
         func item(_ prefix: String) -> NewsItem? { items.first { $0.slug.hasPrefix(prefix) } }
 
+        // The population line's Discord fallback (b78).
+        checks.append(("Discord invite codes: discord.gg, discord.com/invite, vanity names; anything else refused",
+                       ServerFeeds.inviteCode("https://discord.gg/9KDDH3XQfY") == "9KDDH3XQfY"
+                           && ServerFeeds.inviteCode("https://discord.com/invite/DriftwoodGaming") == "DriftwoodGaming"
+                           && ServerFeeds.inviteCode("https://discord.gg/") == nil && ServerFeeds.inviteCode("https://evil.example/abc") == nil
+                           && ServerFeeds.inviteCode("https://discord.com/channels/1/2") == nil && ServerFeeds.inviteCode("") == nil))
+        checks.append(("Discord's invite answer: online of members; missing or impossible counts give nothing",
+                       ServerFeeds.parseInvite(Data(#"{"approximate_presence_count":36,"approximate_member_count":120,"guild":{"name":"Scythe"}}"#.utf8))
+                           == ServerFeeds.DiscordCount(online: 36, members: 120)
+                           && ServerFeeds.parseInvite(Data(#"{"approximate_member_count":120}"#.utf8)) == nil
+                           && ServerFeeds.parseInvite(Data(#"{"approximate_presence_count":9,"approximate_member_count":3}"#.utf8)) == nil))
+        let byName = Dictionary(Server.builtins.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
+        checks.append(("the Discord line only stands in where a world has no counter of its own; every other hosted world with a Discord gets it",
+                       byName["HorizonXI"].map(ServerFeeds.wantsDiscord) == false && byName["Scythe"].map(ServerFeeds.wantsDiscord) == true
+                           && byName["LevelDown 99"].map(ServerFeeds.wantsDiscord) == true && byName["Local server"].map(ServerFeeds.wantsDiscord) != true
+                           // OmicronXI publishes neither (no counter, no Discord link): no line, never a made-up 0.
+                           && byName["OmicronXI"].map(ServerFeeds.wantsDiscord) == false))
+        checks.append(("the Discord line says it is the Discord's", ContentView.discordLine(.init(online: 1234, members: 5678)).contains("in their Discord")))
+
         // Reading the real feed.
         checks.append(("the captured feed parses: 10 posts, every one with a slug, title and date",
                        items.count == 10 && items.allSatisfy { !$0.slug.isEmpty && !$0.title.isEmpty && $0.date != nil }))

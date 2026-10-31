@@ -115,6 +115,10 @@ extension Headless {
                   && ffxi?.achievements.first(where: { $0.id == 282752 })?.dateEarned == nil)
         let emptyArray = try? JSONDecoder().decode(RAUserProgress.self, from: Data(#"{"ID": 5, "Title": "t", "NumAchievements": 0, "Achievements": []}"#.utf8))
         check("PHP empty-array Achievements decodes as none", emptyArray?.achievements.isEmpty == true)
+        let currentType = try? JSONDecoder().decode(RAUserProgress.self, from: Data(#"{"ID":28275,"NumAchievements":1,"Achievements":{"9":{"ID":9,"Title":"One chance","Type":"missable"}}}"#.utf8))
+        let currentGame = currentType.map { RASnapshotGame($0, fallbackID: 28275, fallbackTitle: "x") }
+        check("current capitalized Type reaches the snapshot's missable metadata",
+              currentGame?.achievements["9"]?.type == "missable")
         check("RA dates become ISO 8601 UTC",
               RetroAchievements.isoDate("2016-03-12 17:47:29") == "2016-03-12T17:47:29Z"
                   && RetroAchievements.isoDate(nil) == nil && RetroAchievements.isoDate("") == nil
@@ -141,9 +145,12 @@ extension Headless {
         }
         check("snapshot path is config/addons/Vanaguide/retroachievements.json",
               snapURL.path.hasSuffix("HorizonXI/config/addons/Vanaguide/retroachievements.json"))
-        check("fetch of every built-in set succeeds", good.error == nil && good.snapshot?.games.count == 5)
+        let expectedIDs = [28275, 28303, 28317, 28359, 28547, 41186, 28409, 28414,
+                           28321, 28420, 28421, 28422]
+        check("fetch covers all 12 populated HorizonXI sets",
+              good.error == nil && good.snapshot?.games.map(\.gameID) == expectedIDs)
         check("one request per set, in order, to the progress endpoint with y/u/g",
-              seen.urls.count == 5 && zip(seen.urls, RetroAchievements.builtinSets).allSatisfy { u, s in
+              seen.urls.count == expectedIDs.count && zip(seen.urls, RetroAchievements.builtinSets).allSatisfy { u, s in
                   let q = URLComponents(url: u, resolvingAgainstBaseURL: false)?.queryItems ?? []
                   return u.path == "/API/API_GetGameInfoAndUserProgress.php" && u.host == "retroachievements.org"
                       && q.contains { $0.name == "y" && $0.value == key }
@@ -158,7 +165,7 @@ extension Headless {
         let ach = first?["achievements"] as? [String: [String: Any]]
         check("snapshot top level matches the contract",
               json?["source"] as? String == "RetroAchievements" && json?["user"] as? String == "Daniel"
-                  && json?["fetched_at"] as? Int == 1_790_000_000 && games?.count == 5)
+                  && json?["fetched_at"] as? Int == 1_790_000_000 && games?.count == expectedIDs.count)
         check("snapshot game matches the contract",
               first?["game_id"] as? Int == 28275 && first?["title"] as? String == "Final Fantasy XI"
                   && first?["earned"] as? Int == 1 && first?["total"] as? Int == 2 && ach?.count == 2)
@@ -214,10 +221,90 @@ extension Headless {
         }
         check("a server error part-way fails the fetch and keeps the file",
               rPart.error == .http(500) && (try? Data(contentsOf: snapURL)) == before)
+        let limitedSeen = Seen()
+        let limited = RAFetcher(clock: { t0.addingTimeInterval(45) }) { req in
+            limitedSeen.add(req.url!)
+            return (Data(), HTTPURLResponse(url: req.url!, statusCode: 429, httpVersion: nil,
+                                           headerFields: ["Retry-After": "120"])!)
+        }
+        let rLimited = runBlocking {
+            await RARefresh.run(user: "Daniel", key: key, sets: RetroAchievements.builtinSets,
+                                fetcher: limited, to: snapURL, registry: registry, now: t0)
+        }
+        check("429 carries Retry-After, stops immediately and preserves the snapshot",
+              rLimited.error == .rateLimited(retryNotBefore: t0.addingTimeInterval(165))
+                  && limitedSeen.urls.count == 1 && (try? Data(contentsOf: snapURL)) == before)
+        let missingBuiltin = RAFetcher { req in
+            let q = URLComponents(url: req.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            let g = Int(q.first { $0.name == "g" }?.value ?? "") ?? 0
+            if g == 28303 {
+                return (Data(), HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!)
+            }
+            return (Data(raFFXIFixture(id: g, title: "t").utf8),
+                    HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let rMissing = runBlocking {
+            await RARefresh.run(user: "Daniel", key: key, sets: RetroAchievements.builtinSets,
+                                fetcher: missingBuiltin, to: snapURL, registry: registry)
+        }
+        check("missing built-in cannot overwrite complete coverage with a partial snapshot",
+              rMissing.error == .unknownGame(28303) && (try? Data(contentsOf: snapURL)) == before)
+        let wrongID = RAFetcher { req in
+            (Data(raFFXIFixture(id: 1, title: "wrong game").utf8),
+             HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let rWrong = runBlocking {
+            await RARefresh.run(user: "Daniel", key: key, sets: RetroAchievements.builtinSets,
+                                fetcher: wrongID, to: snapURL, registry: registry)
+        }
+        check("a response for another game is rejected and preserves the snapshot",
+              rWrong.error == .badResponse("wrong game id for set 28275")
+                  && (try? Data(contentsOf: snapURL)) == before)
+        let emptyGame = RAFetcher { req in
+            (Data("[ ]".utf8), HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let emptyGameResult = runBlocking {
+            await RARefresh.run(user: "Daniel", key: key, sets: RetroAchievements.builtinSets,
+                                fetcher: emptyGame, to: snapURL, registry: registry)
+        }
+        check("current empty-array unknown built-in response preserves the snapshot",
+              emptyGameResult.error == .unknownGame(28275) && (try? Data(contentsOf: snapURL)) == before)
+        let incompleteBodies: [(String, String)] = [
+            ("missing achievement list", #"{"ID":28275,"NumAchievements":2}"#),
+            ("null achievement list", #"{"ID":28275,"NumAchievements":2,"Achievements":null}"#),
+            ("truncated achievement list", #"{"ID":28275,"NumAchievements":2,"Achievements":{"9":{"ID":9}}}"#),
+            ("missing achievement count", #"{"ID":28275,"Achievements":{"9":{"ID":9}}}"#),
+            ("duplicate achievement ids", #"{"ID":28275,"NumAchievements":2,"Achievements":[{"ID":9},{"ID":9}]}"#),
+            ("invalid achievement id", #"{"ID":28275,"NumAchievements":1,"Achievements":{"0":{"ID":0}}}"#),
+            ("empty populated built-in", #"{"ID":28275,"NumAchievements":0,"Achievements":[]}"#),
+        ]
+        for (name, body) in incompleteBodies {
+            let incomplete = RAFetcher { req in
+                (Data(body.utf8), HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+            let result = runBlocking {
+                await RARefresh.run(user: "Daniel", key: key, sets: RetroAchievements.builtinSets,
+                                    fetcher: incomplete, to: snapURL, registry: registry)
+            }
+            check("\(name) is rejected and preserves the snapshot",
+                  result.error == .badResponse("incomplete achievement list for set 28275")
+                      && result.snapshot == nil && (try? Data(contentsOf: snapURL)) == before)
+        }
+        let emptyExtra = RAFetcher { req in
+            (Data(#"{"ID":99998,"NumAchievements":0,"Achievements":[]}"#.utf8),
+             HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let emptyExtraResult = runBlocking {
+            await RARefresh.run(user: "Daniel", key: key,
+                                sets: [RetroAchievements.GameSet(id: 99998, title: "Empty future set")],
+                                fetcher: emptyExtra, to: dir.appendingPathComponent("empty-extra.json"), registry: nil)
+        }
+        check("explicitly empty extra set remains valid",
+              emptyExtraResult.error == nil && emptyExtraResult.snapshot?.games.first?.total == 0)
         let unknown = RAFetcher { req in
             let q = URLComponents(url: req.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
             let g = Int(q.first { $0.name == "g" }?.value ?? "") ?? 0
-            let body = g == 99999 ? #"{"ID": null, "Title": null, "Achievements": []}"# : raFFXIFixture(id: g, title: "t")
+            let body = g == 99999 ? "[]" : raFFXIFixture(id: g, title: "t")
             return (Data(body.utf8), HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         }
         let other = dir.appendingPathComponent("Local/config/addons/Vanaguide/retroachievements.json")
@@ -226,7 +313,7 @@ extension Headless {
                                 fetcher: unknown, to: other, registry: registry)
         }
         check("an unknown extra set is skipped with a note, the rest written",
-              rUnknown.error == nil && rUnknown.snapshot?.games.count == 5 && rUnknown.notes.count == 1)
+              rUnknown.error == nil && rUnknown.snapshot?.games.count == expectedIDs.count && rUnknown.notes.count == 1)
         let reg2 = (try? Data(contentsOf: registry)).flatMap { try? JSONDecoder().decode([String].self, from: $0) }
         check("registry lists the newest snapshot first", reg2 == [other.path, snapURL.path])
         let noKey = runBlocking {
@@ -254,14 +341,28 @@ extension Headless {
         check("play: refreshes a fresh snapshot", sf(.play, now, nil, ago(30)))
         check("play: not twice within a minute", !sf(.play, now, ago(30), nil) && sf(.play, now, ago(90), nil))
         check("manual: always", sf(.manual, now, ago(1), ago(1)))
+        let retryAt = now.addingTimeInterval(120)
+        check("rate limit cooldown is an independent gate for every refresh trigger",
+              !RetroAchievements.cooldownFinished(now: now, retryNotBefore: retryAt)
+                  && RetroAchievements.cooldownFinished(now: retryAt, retryNotBefore: retryAt)
+                  && RetroAchievements.cooldownFinished(now: now, retryNotBefore: nil))
+        check("Retry-After delta seconds and HTTP date parse",
+              RetroAchievements.retryDate("120", now: t0) == t0.addingTimeInterval(120)
+                  && RetroAchievements.retryDate("Wed, 28 Oct 2026 11:00:00 GMT", now: t0)
+                      == ISO8601DateFormatter().date(from: "2026-10-28T11:00:00Z"))
+        check("missing, invalid, zero or past Retry-After uses ten minutes",
+              [nil, "bad", "0", "-2", "nan", "inf", "Wed, 01 Jan 2020 00:00:00 GMT"].allSatisfy {
+                  RetroAchievements.retryDate($0, now: t0) == t0.addingTimeInterval(600)
+              })
 
         // 5. Sets, redaction, environment.
         check("set ids parse and de-duplicate",
               RetroAchievements.parseSetIDs("28275, 99999 x;123,99999") == [28275, 99999, 123])
         check("built-in sets are the known HorizonXI ids",
-              RetroAchievements.builtinSets.map(\.id) == [28275, 28303, 28317, 28359, 28547])
-        check("extra ids extend the built-in table once",
-              RetroAchievements.sets(extra: [28275, 99999]).map(\.id) == [28275, 28303, 28317, 28359, 28547, 99999])
+              RetroAchievements.builtinSets.map(\.id) == expectedIDs)
+        check("extra ids deduplicate against built-ins and each other, dropping invalid ids",
+              RetroAchievements.sets(extra: [28275, 41186, 28422, 99999, 99999, 0, -1, 123]).map(\.id)
+                  == expectedIDs + [99999, 123])
         check("redaction hides the key",
               RetroAchievements.redact("y=\(key)&u=x", key: key) == "y=***&u=x")
         setenv(RetroAchievements.envKey, "selftest-env-key", 1)

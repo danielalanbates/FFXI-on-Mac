@@ -38,6 +38,7 @@ extension Headless {
         var x = PrimaryInputs()
         x.world = server.name
         x.isLocal = server.local
+        x.launchUnavailableReason = server.launchUnavailableReason
         x.canDownload = server.local || server.installKind != .none
         x.hostEmpty = !server.local && server.host.trimmingCharacters(in: .whitespaces).isEmpty
         x.allowsMultipleClients = server.allowsMultipleClients
@@ -56,6 +57,7 @@ extension Headless {
         x.hasGame = p.hasGame
         x.patchedWineMissing = p.patchedWineMissing
         x.rosettaMissing = p.rosettaMissing
+        x.multiServerNeeded = p.multiServerNeeded
         x.horizonInstalled = p.horizonInstalled
         x.clientInstalled = p.clientInstalled
         x.clientRequired = server.requiredClient

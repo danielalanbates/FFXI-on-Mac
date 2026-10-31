@@ -199,6 +199,18 @@ struct ProgressSnapshot: Decodable, Equatable {
 
     func isStale(now: Date = Date()) -> Bool { now.timeIntervalSince(fetchedDate) > Self.staleAfter }
 
+    /// Why a snapshot path gave nothing, in words for the player; nil when it reads fine.
+    static func problem(_ path: String) -> String? {
+        let url = URL(fileURLWithPath: path)
+        do { _ = try Data(contentsOf: url) } catch let e as NSError {
+            if e.domain == NSCocoaErrorDomain && e.code == NSFileReadNoPermissionError {
+                return "macOS did not let VanaGuide Server-Safe read \(url.lastPathComponent) on that drive. Press Refresh achievements in FFXI on Mac once more (it now keeps a copy Server-Safe can read), or give Server-Safe Full Disk Access."
+            }
+            return FileManager.default.fileExists(atPath: path) ? "Could not read \(url.lastPathComponent): \(e.localizedDescription)" : nil
+        }
+        return read(url) == nil ? "\(url.lastPathComponent) is not a RetroAchievements progress file." : nil
+    }
+
     static func read(_ url: URL) -> ProgressSnapshot? {
         guard let d = try? Data(contentsOf: url),
               let s = try? JSONDecoder().decode(ProgressSnapshot.self, from: d),
@@ -219,10 +231,17 @@ struct ProgressSnapshot: Decodable, Equatable {
             .max { $0.1.fetchedAt < $1.1.fetchedAt }
     }
 
-    static func candidatePaths(registry: URL = registryURL, chosen: String?) -> [String] {
+    /// The launcher's copy in Server-Safe's own folder: always readable, unlike a game folder
+    /// on a drive that needs Full Disk Access.
+    static var ownCopyPath: String {
+        ProgressStore.directory.deletingLastPathComponent().appendingPathComponent("retroachievements.json").path
+    }
+
+    static func candidatePaths(registry: URL = registryURL, chosen: String?, ownCopy: String? = ownCopyPath) -> [String] {
         var paths: [String] = []
         if let env = ProcessInfo.processInfo.environment["VANAGUIDE_RA_SNAPSHOT"], !env.isEmpty { return [env] }
         if let chosen, !chosen.isEmpty { paths.append(chosen) }
+        if let ownCopy { paths.append(ownCopy) }
         if let d = try? Data(contentsOf: registry),
            let list = try? JSONDecoder().decode([String].self, from: d) { paths += list }
         return paths

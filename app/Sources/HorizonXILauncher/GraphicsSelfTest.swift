@@ -23,6 +23,13 @@ extension Headless {
         let fm = FileManager.default
         var checks: [(String, Bool)] = []
         func check(_ name: String, _ ok: Bool) { checks.append((name, ok)) }
+        check("window mode: borderless (AscensionXI's 2) and full screen made windowed; windowed left alone; added when absent",
+              GraphicsSettings.windowedOnMac("[ffxi.registry]\r\n0001=1648\r\n0034=2\r\n").map {
+                  BootProfile.value("0034", section: "ffxi.registry", in: $0) == "1" && BootProfile.value("0001", section: "ffxi.registry", in: $0) == "1648" } == true
+                && GraphicsSettings.windowedOnMac("[ffxi.registry]\n0034 = 0\n").map { BootProfile.value("0034", section: "ffxi.registry", in: $0) == "1" } == true
+                && GraphicsSettings.windowedOnMac("[ffxi.registry]\n0034 = 1\n") == nil
+                && GraphicsSettings.windowedOnMac("[ashita.boot]\nfile = x\n[ffxi.registry]\n0001 = 1280\n").map {
+                    BootProfile.value("0034", section: "ffxi.registry", in: $0) == "1" } == true)
         let env = ProcessInfo.processInfo.environment
         let tmp = fm.temporaryDirectory.appendingPathComponent("ffxi-graphics-\(UUID().uuidString)", isDirectory: true)
         try? fm.createDirectory(at: tmp, withIntermediateDirectories: true)

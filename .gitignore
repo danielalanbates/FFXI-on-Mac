@@ -52,3 +52,10 @@ last-spawn*.txt
 **/cmdpipe/cmd.txt
 **/cmdpipe/chat.txt
 imgui.ini
+
+# Personal achievement snapshots and optional local OCR diagnostics.
+retroachievements.json
+retroachievements-snapshots.json
+*.personal.json
+ocr-captures/
+screen-captures/

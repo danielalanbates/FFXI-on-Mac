@@ -10,8 +10,9 @@ import AppKit
 /// ghost-mounted.
 ///
 /// The button says one of Daniel's verbs: Setup, Update, Repair, Play, Stop (Play Another where
-/// a world allows two clients), or what is running ("Setting up… 42%"). Anything else the user
-/// needs to know is the one short line under it.
+/// a world allows two clients; Force Stop once Wine has died under the running game, b70), or
+/// what is running ("Setting up… 42%", "Stopping…"). Anything else the user needs to know is
+/// the one short line under it.
 ///
 /// Never a greyed-out PLAY (Daniel, 2026-10-15: "the user should never encounter a greyed out
 /// play button"). A game that cannot start is an enabled Setup, Update or Repair whose click
@@ -39,6 +40,8 @@ enum PrimaryAction: Equatable {
     /// No account typed, and the world's loader cannot ask for one (HorizonXI). PLAY, enabled:
     /// the click puts the cursor in the account fields.
     case enterAccount
+    /// Catalogued world whose Mac login is not implemented yet. Opens official setup info.
+    case serverInfo
 
     enum Work: String {
         case settingUp, updating, repairing, checking, starting, stopping, moving
@@ -90,6 +93,8 @@ enum PrimaryAction: Equatable {
         /// The patched game Wine (wine-coop) is not on this Mac: Setup downloads it
         /// (scripts/game-wine.sh). See docs/WINE-BUILD.md.
         case gameWine
+        /// An enabled world needs its own Windows environment before it can play alongside others.
+        case multiServer
         /// The local world's server is not built yet. `lowSpace`: the disk is below its floor
         /// and "Set up anyway" is not ticked, so the click asks first.
         case localServer(lowSpace: Bool)
@@ -119,6 +124,7 @@ enum PrimaryAction: Equatable {
         case .play: return "play"
         case .playAnother: return "play-another"
         case .enterAccount: return "account"
+        case .serverInfo: return "server-info"
         }
     }
 
@@ -136,6 +142,7 @@ enum PrimaryAction: Equatable {
             case .game(let partial): return partial ? "game-files" : "game"
             case .chooseFolder: return "choose-folder"
             case .gameWine: return "game-wine"
+            case .multiServer: return "multi-server"
             case .localServer: return "local-server"
             }
         case .repair(let n):
@@ -167,6 +174,7 @@ struct PrimaryInputs {
     var world = "HorizonXI"
     var isLocal = false
     var canDownload = true          // the world has a download route (installKind != .none)
+    var launchUnavailableReason: String? = nil
     var hostEmpty = false
     var allowsMultipleClients = false
     /// The world's loader window asks for (or creates) the account, so Play needs none typed.
@@ -182,6 +190,7 @@ struct PrimaryInputs {
     var hasGame = true
     var patchedWineMissing = false
     var rosettaMissing = false
+    var multiServerNeeded = false
 
     var restartingLauncher = false
     /// Setup's chain is running (it shows progress even between its jobs).
@@ -196,6 +205,14 @@ struct PrimaryInputs {
     var starting = false
     var runningElsewhere = false
     var wineStuck = false
+    /// The selected world's session lost its Wine under the running client (b70,
+    /// `Runner.serverLost`): Force Stop.
+    var serverLost = false
+    /// Its Stop is under way and the client not gone yet (b70, `Runner.stoppingGame`).
+    var stopping = false
+    /// When its GPU device was lost, "21:31:07" (b70, `Runner.renderStuckSince`): Stop, with
+    /// the line under it.
+    var renderStuckAt: String? = nil
 
     var horizonInstalled: String? = nil
     var horizonLatest: String? = nil
@@ -223,18 +240,25 @@ enum Primary {
 
     /// Every label the button may show when nothing is running. The progress labels are
     /// `Work.label`, with " 42%" when the job reports how far it is.
-    static let verbs: Set<String> = ["Setup", "Update", "Repair", "Play", "Stop", "Play Another"]
+    static let verbs: Set<String> = ["Setup", "Update", "Repair", "Play", "Stop", "Force Stop", "Play Another", "Server Info", "Connect Phoenix (Beta)"]
 
     static func decide(_ x: PrimaryInputs) -> PrimaryDecision {
         if x.restartingLauncher { return make(.working(.updating, progress: nil), x) }
         if x.setupRunning { return make(.working(.settingUp, progress: x.setupProgress), x) }
         if let job = x.ownJob { return make(.working(work(forJob: job), progress: x.ownProgress), x) }
+        // Stop pressed, the client not gone yet (b70): ahead of everything it would otherwise be.
+        if x.runningHere, x.stopping { return make(.working(.stopping, progress: nil), x) }
+        // Wine or the graphics gone under this world's client: its one way out, ahead of
+        // "Starting…" and of Play Another (a second client would start beside the frozen one).
+        if x.runningHere, x.serverLost || x.renderStuckAt != nil { return make(.stop, x) }
         if x.starting { return make(.working(.starting, progress: nil), x) }
         if x.runningHere, !x.allowsMultipleClients { return make(.stop, x) }
         if x.runningElsewhere, !x.allowsMultipleClients {
             return make(.working(.runningElsewhere, progress: nil), x)
         }
         if x.otherJob != nil { return make(.working(.waiting, progress: nil), x) }
+
+        if x.launchUnavailableReason != nil { return make(.serverInfo, x) }
 
         guard x.hasInstall else {
             if x.scanning { return make(.working(.checking, progress: nil), x) }
@@ -254,6 +278,7 @@ enum Primary {
         if x.rosettaMissing { return make(.setup(.rosetta), x) }
         if bad.contains(where: { $0.id == "wine" }) { return make(.setup(.wine), x) }
         if x.patchedWineMissing { return make(.setup(.gameWine), x) }
+        if x.multiServerNeeded { return make(.setup(.multiServer), x) }
         if !x.hasGame || bad.contains(where: { gameFiles.contains($0.id) }) {
             // Partial: Ashita or the base data is there, so this is a repair of the download, not
             // a first one.
@@ -301,6 +326,9 @@ enum Primary {
         return .settingUp
     }
 
+    /// The line under Stop once the game's GPU device is lost (b70): when, and what to press.
+    static func renderStuckReason(_ time: String) -> String { "The game's graphics stopped at \(time) — press Stop." }
+
     /// "2.0.5" > "2.0.4", numerically per part (same rule as Updater.isNewer, off the main actor).
     static func isNewer(_ a: String, than b: String) -> Bool {
         let pa = a.split(separator: ".").map { Int($0) ?? 0 }, pb = b.split(separator: ".").map { Int($0) ?? 0 }
@@ -344,6 +372,9 @@ enum Primary {
                 return .init(action: a, label: "Setup", enabled: true, reason: "Choose where \(w)'s game files are.")
             case .gameWine:
                 return .init(action: a, label: "Setup", enabled: true, reason: "The game's Wine isn't installed yet.")
+            case .multiServer:
+                return .init(action: a, label: "Setup", enabled: true,
+                             reason: "Set up multi-server play (about 1 GB extra).")
             case .localServer(let lowSpace):
                 return .init(action: a, label: "Setup", enabled: true,
                              reason: lowSpace ? "Not enough free space for the local server."
@@ -366,7 +397,10 @@ enum Primary {
                 return .init(action: a, label: "Repair", enabled: true, reason: line)
             }
         case .stop:
-            return .init(action: a, label: "Stop", enabled: true, reason: nil, destructive: true)
+            return .init(action: a, label: x.serverLost ? "Force Stop" : "Stop", enabled: true,
+                         reason: x.serverLost ? nil : x.renderStuckAt.map(renderStuckReason), destructive: true)
+        case .serverInfo:
+            return .init(action: a, label: x.world == "Phoenix XI" ? "Connect Phoenix (Beta)" : "Server Info", enabled: true, reason: x.world == "Phoenix XI" ? "Sign in to check account access. Game setup is pending." : x.launchUnavailableReason)
         case .enterAccount:
             return .init(action: a, label: "Play", enabled: true, reason: "Type your account name and password above.")
         case .play:
@@ -386,6 +420,7 @@ enum Primary {
         var clientInstalled: String?
         var patchedWineMissing = false
         var rosettaMissing = false
+        var multiServerNeeded = false
         var profileHasAccount = false
         /// The game's files are on (or link to) another drive than Wine, and every drive is there:
         /// the Setup line offers Move… (InstallMove.offered).
@@ -397,6 +432,7 @@ enum Primary {
                       loader: String = "", template: String = "") -> Probe {
         var p = Probe()
         p.checks = Preflight.run(i, profile: profile, loader: loader, template: template)
+        p.multiServerNeeded = !WorldPrefix.ready(i)
         for d in Set(p.checks.filter { $0.state == .bad }.compactMap(\.drive)) {
             p.driveStates[d] = Preflight.driveState(d)
         }

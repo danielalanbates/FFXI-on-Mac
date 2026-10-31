@@ -48,14 +48,22 @@ enum RetroAchievements {
         let title: String
     }
 
-    /// The HorizonXI sets known on 2026-09-26 (from RetroAch by lorinth, HorizonXI's approved
-    /// addon). Extend with `extraSetIDs` rather than by editing a release.
+    /// All populated HorizonXI sets in RA's official hub on 2026-10-27. These are legacy
+    /// web-API game ids, not the `set=` ids used by newer website subset URLs.
+    /// See docs/RETROACHIEVEMENTS.md for sources; future sets can use `extraSetIDs`.
     static let builtinSets: [GameSet] = [
         GameSet(id: 28275, title: "Final Fantasy XI"),
         GameSet(id: 28303, title: "Hero of Nations"),
         GameSet(id: 28317, title: "Rise of the Zilart"),
         GameSet(id: 28359, title: "Chains of Promathia"),
         GameSet(id: 28547, title: "Hardcore Hero"),
+        GameSet(id: 41186, title: "Treasures of Aht Urhgan"),
+        GameSet(id: 28409, title: "Paragon of Black Mage Excellence"),
+        GameSet(id: 28414, title: "Paragon of Monk Excellence"),
+        GameSet(id: 28321, title: "Paragon of Red Mage Excellence"),
+        GameSet(id: 28420, title: "Paragon of Thief Excellence"),
+        GameSet(id: 28421, title: "Paragon of Warrior Excellence"),
+        GameSet(id: 28422, title: "Paragon of White Mage Excellence"),
     ]
 
     /// Extra set ids, comma or space separated, in UserDefaults `ra.extraSetIDs`.
@@ -72,7 +80,8 @@ enum RetroAchievements {
     }
 
     static func sets(extra: [Int]) -> [GameSet] {
-        builtinSets + extra.filter { id in !builtinSets.contains { $0.id == id } }
+        var seen = Set(builtinSets.map(\.id))
+        return builtinSets + extra.filter { $0 > 0 && seen.insert($0).inserted }
             .map { GameSet(id: $0, title: "RetroAchievements set \($0)") }
     }
 
@@ -148,6 +157,27 @@ enum RetroAchievements {
             guard let n = newest else { return true }
             return now.timeIntervalSince(n) >= refreshInterval
         }
+    }
+
+    /// HTTP 429 cooldown applies even to manual/Play refreshes. No retry loop or sleeping task.
+    static func cooldownFinished(now: Date, retryNotBefore: Date?) -> Bool {
+        retryNotBefore.map { now >= $0 } ?? true
+    }
+
+    /// Retry-After permits delta seconds or an HTTP date. Missing/invalid/past values use
+    /// the normal ten-minute interval, so repeatedly clicking Refresh cannot hammer RA.
+    static func retryDate(_ value: String?, now: Date) -> Date {
+        if let value = value?.trimmingCharacters(in: .whitespacesAndNewlines) {
+            if let seconds = TimeInterval(value), seconds.isFinite, seconds > 0 {
+                return now.addingTimeInterval(seconds)
+            }
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.timeZone = TimeZone(secondsFromGMT: 0)
+            f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+            if let date = f.date(from: value), date > now { return date }
+        }
+        return now.addingTimeInterval(refreshInterval)
     }
 
     /// Replace every occurrence of the key in a string that is about to be shown or logged.
@@ -257,6 +287,7 @@ struct RAAchievementProgress: Decodable, Equatable {
 
     enum K: String, CodingKey {
         case ID, Title, Description, Points, type, DateEarned, DateEarnedHardcore
+        case achievementType = "Type"
     }
 
     init(from decoder: Decoder) throws {
@@ -268,7 +299,8 @@ struct RAAchievementProgress: Decodable, Equatable {
         title = c.flexString(.Title) ?? ""
         description = c.flexString(.Description) ?? ""
         points = c.flexInt(.Points) ?? 0
-        type = c.flexString(.type).flatMap { $0.isEmpty ? nil : $0 }
+        // The current endpoint uses Type; older API responses used lowercase type.
+        type = (c.flexString(.achievementType) ?? c.flexString(.type)).flatMap { $0.isEmpty ? nil : $0 }
         dateEarned = c.flexString(.DateEarned)
         dateEarnedHardcore = c.flexString(.DateEarnedHardcore)
     }
@@ -280,6 +312,7 @@ struct RAUserProgress: Decodable {
     var numAchievements: Int?
     var numAwardedToUser: Int?
     var achievements: [RAAchievementProgress]
+    var hasAchievementList = false
 
     enum K: String, CodingKey {
         case ID, Title, NumAchievements, NumAwardedToUser, Achievements
@@ -294,8 +327,10 @@ struct RAUserProgress: Decodable {
         // An object keyed by id; PHP serialises an empty one as `[]`.
         if let m = try? c.decodeIfPresent([String: RAAchievementProgress].self, forKey: .Achievements) {
             achievements = Array(m.values)
+            hasAchievementList = true
         } else if let a = try? c.decodeIfPresent([RAAchievementProgress].self, forKey: .Achievements) {
             achievements = a
+            hasAchievementList = true
         } else if c.contains(.Achievements), (try? c.decodeNil(forKey: .Achievements)) != true {
             throw DecodingError.dataCorruptedError(forKey: .Achievements, in: c,
                                                    debugDescription: "Achievements is neither a map nor a list")
@@ -421,7 +456,8 @@ enum RASnapshotStore {
 // MARK: - Fetching
 
 enum RAError: Error, Equatable {
-    case noUser, noKey, unauthorized, rateLimited, unknownGame(Int)
+    case noUser, noKey, unauthorized, unknownGame(Int)
+    case rateLimited(retryNotBefore: Date)
     case http(Int), offline(String), badResponse(String)
 
     var message: String {
@@ -441,6 +477,7 @@ enum RAError: Error, Equatable {
 typealias RATransport = @Sendable (URLRequest) async throws -> (Data, URLResponse)
 
 struct RAFetcher {
+    var clock: @Sendable () -> Date = { Date() }
     let transport: RATransport
 
     /// Ephemeral and cache-free: the request URL carries the key.
@@ -484,19 +521,36 @@ struct RAFetcher {
         case 200..<300: break
         case 401: throw RAError.unauthorized
         case 404: throw RAError.unknownGame(set.id)
-        case 429: throw RAError.rateLimited
+        case 429:
+            throw RAError.rateLimited(retryNotBefore: RetroAchievements.retryDate(
+                http.value(forHTTPHeaderField: "Retry-After"), now: clock()))
         default: throw RAError.http(http.statusCode)
+        }
+        // The current PHP endpoint returns [] for an unknown game (older versions returned
+        // an object with ID null). Both must follow the same built-in/extra policy below.
+        if let json = try? JSONSerialization.jsonObject(with: data),
+           let array = json as? [Any], array.isEmpty {
+            throw RAError.unknownGame(set.id)
         }
         let p: RAUserProgress
         do { p = try JSONDecoder().decode(RAUserProgress.self, from: data) }
         catch { throw RAError.badResponse("could not decode game \(set.id)") }
         // An id RA does not know comes back as an empty game, not an error status.
         guard let id = p.id, id > 0 else { throw RAError.unknownGame(set.id) }
+        guard id == set.id else { throw RAError.badResponse("wrong game id for set \(set.id)") }
+        let ids = p.achievements.map(\.id)
+        // A successful HTTP status can still carry partial data. Never replace a complete
+        // snapshot with missing rows, duplicate IDs or an empty formerly populated built-in.
+        guard let total = p.numAchievements, total >= 0, p.hasAchievementList,
+              ids.count == total, Set(ids).count == total, ids.allSatisfy({ $0 > 0 }),
+              total > 0 || !RetroAchievements.builtinSets.contains(where: { $0.id == set.id }) else {
+            throw RAError.badResponse("incomplete achievement list for set \(set.id)")
+        }
         return RASnapshotGame(p, fallbackID: set.id, fallbackTitle: set.title)
     }
 
-    /// Every set, one request at a time. An unknown set is skipped with a note; any other failure
-    /// fails the whole fetch, so the last good snapshot stays as it is.
+    /// Every set, one request at a time. An unknown extra is skipped with a note; a missing
+    /// built-in or any other failure keeps the last good snapshot, including its full coverage.
     func fetchAll(user: String, key: String, sets: [RetroAchievements.GameSet],
                   now: Date) async throws -> (RASnapshot, [String]) {
         let u = user.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -506,7 +560,12 @@ struct RAFetcher {
         var notes: [String] = []
         for s in sets {
             do { games.append(try await fetchGame(user: u, key: key, set: s)) }
-            catch RAError.unknownGame(let id) { notes.append("skipped set \(id) (\(s.title)): RetroAchievements does not know it") }
+            catch RAError.unknownGame(let id) {
+                guard !RetroAchievements.builtinSets.contains(where: { $0.id == id }) else {
+                    throw RAError.unknownGame(id)
+                }
+                notes.append("skipped set \(id) (\(s.title)): RetroAchievements does not know it")
+            }
         }
         guard !games.isEmpty else { throw RAError.badResponse("no set could be read") }
         return (RASnapshot(user: u, fetchedAt: Int(now.timeIntervalSince1970), games: games), notes)
@@ -546,7 +605,14 @@ enum RARefresh {
                 return Outcome(error: .badResponse("could not write \(url.lastPathComponent): \(error.localizedDescription)"),
                                notes: notes)
             }
-            if let registry { RASnapshotStore.register(url, registry: registry) }
+            if let registry {
+                RASnapshotStore.register(url, registry: registry)
+                // VanaGuide Server-Safe cannot read a game folder on a drive that needs Full Disk
+                // Access (x10, 2026-10-28: "No achievements to show"), so it gets its own copy.
+                if let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+                    try? RASnapshotStore.write(snap, to: base.appendingPathComponent("VanaGuide Server-Safe/\(RetroAchievements.snapshotFileName)"))
+                }
+            }
             return Outcome(snapshot: snap, notes: notes)
         } catch let e as RAError {
             return Outcome(error: e)
@@ -563,6 +629,7 @@ final class RAProgress: ObservableObject {
     @Published private(set) var status = ""
     @Published private(set) var lastError: String?
     private var lastAttempt: Date?
+    private var retryNotBefore: Date?
 
     init() {
         status = RetroAchievements.username.isEmpty ? "not set up" : "not fetched yet"
@@ -593,6 +660,7 @@ final class RAProgress: ObservableObject {
             return
         }
         let now = Date()
+        guard RetroAchievements.cooldownFinished(now: now, retryNotBefore: retryNotBefore) else { return }
         let previous = lastAttempt
         // Cheap gate first, without touching the disk.
         guard RetroAchievements.shouldFetch(trigger, now: now, lastAttempt: previous,
@@ -619,10 +687,12 @@ final class RAProgress: ObservableObject {
                 self.busy = false
                 for n in outcome.notes { log("i  retroachievements: \(n)") }
                 if let s = outcome.snapshot {
+                    self.retryNotBefore = nil
                     self.lastError = nil
                     self.show(s)
                     log("==> retroachievements: \(s.summary)")
                 } else if let e = outcome.error {
+                    if case .rateLimited(let date) = e { self.retryNotBefore = date }
                     let msg = RetroAchievements.redact(e.message, key: key)
                     self.lastError = msg + (existing != nil ? "; kept the last good snapshot" : "")
                     // Only a refresh the user asked for reaches the window; an automatic or

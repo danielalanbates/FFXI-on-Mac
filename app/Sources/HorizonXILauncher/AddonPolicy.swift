@@ -248,9 +248,18 @@ enum AddonPolicies {
         if let live = fetched[server.name] { return live }
         switch server.name {
         case "HorizonXI": return horizon
+        case "Phoenix XI":
+            // Approval covers exact versions. No Phoenix snapshot has been reviewed here yet.
+            return .allowlist(published: [], source: "phoenix-xi.com/approved-addons; integration pending")
         case "CatsEyeXI": return catseye
         case "FFEra": return ffera
         case "Gaia XI": return gaia
+        case AscensionChannel.worldName: return AscensionChannel.addonPolicy(clientRoot: server.dataPath)
+        // fairywitch.ca (2026-10-24): "your addons welcome".
+        case VanadreamsChannel.worldName: return .unrestricted(reason: "Vanadreams welcomes your own addons (fairywitch.ca).")
+        case DriftwoodChannel.worldName: return DriftwoodChannel.addonPolicy
+        case PegasusChannel.worldName: return PegasusChannel.addonPolicy
+        case RetailWorld.mist.world: return RetailWorld.mistPolicy
         // Eden publishes its rules only in its Discord's rules channel; Supernova, ValhallaXI,
         // OmicronXI, Gaia XI and Tabula Rasa XI publish none anywhere this project could find
         // (checked 2026-08-19). They stay .unknown — the addon screen shows everything and says
