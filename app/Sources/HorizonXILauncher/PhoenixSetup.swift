@@ -380,7 +380,7 @@ enum PhoenixInstaller {
             let records = saved?["packages"] as? [String: [String: Any]] ?? [:]
             if saved?["schema"] as? Int == 1,
                packages.allSatisfy({ records[$0.0]?["sha256"] as? String == $0.1.sha && records[$0.0]?["version"] as? String == $0.2["version"] as? String }), ready {
-                return "Phoenix client is current."
+                return "Phoenix base client is installed."
             }
             try? fm.removeItem(at: marker)
             let total = packages.reduce(Int64(0)) { $0 + $1.1.size }

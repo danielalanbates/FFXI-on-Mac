@@ -1,9 +1,9 @@
-# Phoenix native installation and launch — beta 119
+# Phoenix native installation and launch — beta 120
 
 Copyright (c) 2026 Daniel Bates / Bates LLC. All rights reserved.
 https://batesai.org · help@batesai.org
 
-## Verified contract (2026-10-30)
+## Verified contract (2026-10-31)
 
 Phoenix’s official Windows launcher 0.0.116 and its authenticated CDN manifests are the sources. No password or browser session is saved by this integration.
 
@@ -45,3 +45,22 @@ The initial direct Foundation injector probe returned 0 but left no game process
 The detached vendor loader reported that its JSON input did not exist: removing the token file on injector exit races the resumed loader. Beta 118 keeps the private JSON for 120 seconds instead. The injector’s successful exit must never trigger immediate token-file deletion.
 
 Read-only inspection of the vendor loader confirmed its autologin condition requires a non-empty username and either password or login token. An authenticated `/api/v1/auth/me` request supplies the username; no password is requested or stored. The previous token-only probe reached the loader menu, not FFXI, and that unlogged test loader was stopped before further work.
+
+
+## Beta 120: authenticated game startup
+
+The legacy root Ashita manifest supplies xiloader 2.1.1, which the live server explicitly rejects (requires 2.2.x). Preparation now installs the genuine official `phoenixffxi/xiloader` release `v2.2.0-phoenix.2`, not a version-string modification. The 1,303,040-byte release SHA-256 is `e1282885f668e3b099faae8eda061f8cdf144f855ab6be8c7ca1e954919b732c`; this also matches both loader aliases in the authenticated current stable Ashita manifest. Public GitHub downloads never receive the Phoenix browser session. Redirects are restricted to GitHub's HTTPS release hosts. The previous loader is archived locally.
+
+On 2026-10-31 at 09:51 PDT, the isolated native launch reported **Successfully logged in**, **Connected to server**, **Connected to profile server**, and **Profile loaded**. Read-only process inspection confirmed FFXi.dll, FFXiMain.dll, polcore.dll and Wine d3d8.dll loaded; MoltenVK initialized and the client remained running. The authenticated game was left open. No optional addon or bot was tested on Phoenix.
+
+This is evidence of authenticated client startup, **not verified character selection or world entry**. Native window inspection was unavailable. Ashita's resource update logged item-DAT file-size validation errors, so full playability remains unverified. Do not silently replace files underneath the running client, terminate it, or call the public server verified.
+
+### Current data investigation and safe continuation
+
+The install-complete receipt verifies the legacy/root manifest baseline only. Current metadata exists at gamefiles `/v2/stable/manifest.json` and ashita/eradats `/stable/manifest.json`. Snapshots are stored privately on the agreed external drive. Stable versions observed: game `01d04952ad73` (66,360 files), Ashita `7f51c79b1d33` (150 files), EraDATs `a96d2a913d98` (155 files). Compared with the baseline, 1,312 game files (~1.05 GB) and 90 EraDAT files (~346 MB) differ. The DLL hashes also differ. The current stable archive/object URL contract remains unresolved: attempted direct resolution returns HTTP 404. This does not prove the vendor CDN is broken.
+
+All 155 current EraDATs have been staged **separately** at `Phoenix/staging/eradats-a96d2a913d98` from the official `phoenixffxi/Era-DATs` repository at manifest source commit `a0069a335c7edc0b6712bc7542f27c573855124a`. Every size and SHA-256 matches the vendor manifest, including files reused from the verified baseline. The active client was not changed. The one-shot staging tool is in the private Downloads investigation workspace; it needs no credentials. This staged overlay is not yet applied or proven to resolve all resource errors.
+
+Next: wait for normal in-game `/shutdown`, resolve and verify current base-client files, apply a coherent verified update with backups, then perform one manual native launch and inspect character/world entry. Do not interrupt an authenticated game for installation, use Horizon as a mutable donor, substitute guessed DAT formats, or bypass the loader protocol.
+
+Beta 120 release compilation, local bundle signature verification and offline Phoenix checks passed. Existing primary-action checks passed 95/95 and catalog checks 19/19 earlier in the same investigation. Local beta installation is not a stable public release.

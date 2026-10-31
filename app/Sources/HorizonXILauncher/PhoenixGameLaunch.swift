@@ -59,9 +59,43 @@ enum PhoenixGameLaunch {
         return acceptedExitCodes.contains(process.terminationStatus)
     }
 
+    // Phoenix's legacy bootstrap manifest still names a 2.1.1 loader, which its live
+    // server rejects. This official release digest also matches the current stable manifest.
+    static let loaderSHA = "e1282885f668e3b099faae8eda061f8cdf144f855ab6be8c7ca1e954919b732c"
+    private static func ensureProtocolLoader(report: @escaping (String) -> Void) async -> Bool {
+        let fm = FileManager.default
+        let loader = client.appendingPathComponent("bootloader/phoenix-loader.exe")
+        if let data = try? Data(contentsOf: loader), SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == loaderSHA { return true }
+        guard !running else { return false }
+        report("Updating Phoenix’s required game loader…")
+        let source = URL(string: "https://github.com/phoenixffxi/xiloader/releases/download/v2.2.0-phoenix.2/xiloader.exe")!
+        // Public vendor download: never attach the Phoenix browser session to GitHub.
+        let session = URLSession(configuration: .ephemeral, delegate: PhoenixReleaseRedirect(), delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        do {
+            var request = URLRequest(url: source); request.timeoutInterval = 60
+            let (data, response) = try await session.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200, data.count == 1_303_040,
+                  SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == loaderSHA else { return false }
+            guard !running else { return false }
+            let archive = root.appendingPathComponent("archive/protocol-2.1.1")
+            try fm.createDirectory(at: archive, withIntermediateDirectories: true)
+            for name in ["phoenix-loader.exe", "xiloader.exe"] {
+                let target = client.appendingPathComponent("bootloader/" + name)
+                let previous = archive.appendingPathComponent(name)
+                if fm.fileExists(atPath: target.path), !fm.fileExists(atPath: previous.path) { try fm.copyItem(at: target, to: previous) }
+                try data.write(to: target, options: .atomic)
+            }
+            let receipt: [String: Any] = ["version": "v2.2.0-phoenix.2", "sha256": loaderSHA, "source": source.absoluteString]
+            try JSONSerialization.data(withJSONObject: receipt).write(to: root.appendingPathComponent("loader-release.json"), options: .atomic)
+            return true
+        } catch { return false }
+    }
+
     static func prepare(wine: URL, bootstrapWine: URL, report: @escaping (String) -> Void) async -> Bool {
         guard !running else { diagnostic("a Phoenix loader is already running"); return false }
         guard PhoenixInstaller.ready else { diagnostic("client installation is incomplete"); return false }
+        guard await ensureProtocolLoader(report: report) else { return false }
         let fm = FileManager.default
         func stopOwnServer() -> Bool {
             guard !running else { return false }
@@ -176,5 +210,17 @@ enum PhoenixGameLaunch {
             // single delayed cleanup preserves the handoff and still runs after this app quits.
             return pid
         } catch { try? fm.removeItem(at: config); throw error }
+    }
+}
+
+/// Only the vendor's public release redirect hosts are accepted, without account headers.
+private final class PhoenixReleaseRedirect: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        guard let url = request.url, url.scheme == "https", let host = url.host,
+              ["github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"].contains(host) else {
+            completionHandler(nil); return
+        }
+        completionHandler(request)
     }
 }
