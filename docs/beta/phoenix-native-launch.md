@@ -61,6 +61,17 @@ The install-complete receipt verifies the legacy/root manifest baseline only. Cu
 
 All 155 current EraDATs have been staged **separately** at `Phoenix/staging/eradats-a96d2a913d98` from the official `phoenixffxi/Era-DATs` repository at manifest source commit `a0069a335c7edc0b6712bc7542f27c573855124a`. Every size and SHA-256 matches the vendor manifest, including files reused from the verified baseline. The active client was not changed. The one-shot staging tool is in the private Downloads investigation workspace; it needs no credentials. This staged overlay is not yet applied or proven to resolve all resource errors.
 
-Next: wait for normal in-game `/shutdown`, resolve and verify current base-client files, apply a coherent verified update with backups, then perform one manual native launch and inspect character/world entry. Do not interrupt an authenticated game for installation, use Horizon as a mutable donor, substitute guessed DAT formats, or bypass the loader protocol.
+Next: wait for normal in-game `/shutdown`, apply the staged verified core update with backups, then perform one manual native launch and inspect character/world entry. Do not interrupt an authenticated game for installation, use Horizon as a mutable donor, substitute guessed DAT formats, or bypass the loader protocol.
 
 Beta 120 release compilation, local bundle signature verification and offline Phoenix checks passed. Existing primary-action checks passed 95/95 and catalog checks 19/19 earlier in the same investigation. Local beta installation is not a stable public release.
+
+
+### Completed staging and verification (2026-10-31)
+
+The base-client download blocker has been resolved for the actual FFXI game data. Square Enix's `pc001.pol.com:53001` patch service supplies version `30261006_0`, matching Phoenix's stable source metadata. A private, one-shot research helper fetched 1,112 changed files through the PlayOnline patch protocol. **Every decoded file matches Phoenix's independent SHA-256 and size**, with no mismatches. Staging: `Phoenix/staging/retail-01d04952ad73`. Protocol reference: [kuluu-ffxi ffxi-install](https://github.com/jondwillis/kuluu-ffxi/tree/1b611a74e0211892bf141ad849ebca175cb7ddee/ffxi-install), GPL-3.0; this research helper and reference source are outside the launcher repository/bundle.
+
+The 200 remaining stable-manifest differences all belong to `SquareEnix/PlayOnlineViewer/`; they are excluded from this FFXI-core update, not falsely marked current. The vendor optional `zonetrace.dll` is also unchanged and not loaded.
+
+A read-only complete proposed-data check passed: **65,255 manifest entries**, comprising the FFXI game core and the 155-file EraDAT overlay. It found **1,202 replacements** needed (1,112 core plus 90 overlay). Each target is already correct or has a verified staged replacement. The active game/client remains unchanged.
+
+Private continuation helper: `Downloads/ffxi-recovery-20261029/phoenix-lab/apply-staged-core.py`. `--verify-only` performs the above check without modifying the active installation. Normal mode refuses if any Phoenix loader is running, re-verifies before replacement, backs up changed files under `Phoenix/archive/stable-core-<timestamp>`, and writes `stable-core-overlay.json` separately from the legacy base archive receipt. It never kills a client or launches one. Running-client refusal was checked. **Application and a subsequent live game test have not happened.** The next agent must confirm normal game exit before running normal mode. Keep this an explicitly supervised local beta update; the public installer still uses the legacy baseline and needs a maintainable stable-data download integration before public verification.
