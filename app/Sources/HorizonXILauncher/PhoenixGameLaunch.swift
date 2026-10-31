@@ -29,26 +29,52 @@ enum PhoenixGameLaunch {
         check.waitUntilExit(); return check.terminationStatus == 0
     }
 
-    private static func run(_ executable: URL, _ args: [String], limit: TimeInterval = 300) -> Bool {
+    private static func diagnostic(_ text: String) {
+        guard ProcessInfo.processInfo.environment["PHOENIX_SETUP_DIAGNOSTICS"] == "1" else { return }
+        try? FileHandle.standardError.write(contentsOf: Data(("Phoenix setup: " + text + "\n").utf8))
+    }
+
+    private static func run(_ executable: URL, _ args: [String], limit: TimeInterval = 300, acceptedExitCodes: Set<Int32> = [0]) -> Bool {
         let process = Process(); process.executableURL = executable; process.arguments = args
         process.environment = environment(); process.currentDirectoryURL = root
         process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return false }
+        let diagnostics = ProcessInfo.processInfo.environment["PHOENIX_SETUP_DIAGNOSTICS"] == "1"
+        let errorFile = root.appendingPathComponent("setup-" + executable.lastPathComponent + ".log")
+        var errors: FileHandle?
+        if diagnostics, FileManager.default.createFile(atPath: errorFile.path, contents: nil, attributes: [.posixPermissions: 0o600]) {
+            errors = try? FileHandle(forWritingTo: errorFile); process.standardError = errors
+        }
+        defer {
+            try? errors?.close()
+            if diagnostics, let data = try? Data(contentsOf: errorFile), data.count < 32768,
+               let text = String(data: data, encoding: .utf8) { diagnostic(text) }
+        }
+        do { try process.run() } catch {
+            diagnostic("\(executable.lastPathComponent) failed to start, code \((error as NSError).code)"); return false
+        }
         let deadline = Date().addingTimeInterval(limit)
         while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.2) }
-        if process.isRunning { process.terminate(); return false }
-        return process.terminationStatus == 0
+        if process.isRunning { process.terminate(); diagnostic("\(executable.lastPathComponent) timed out"); return false }
+        diagnostic("\(executable.lastPathComponent) exited \(process.terminationStatus)")
+        return acceptedExitCodes.contains(process.terminationStatus)
     }
 
     static func prepare(wine: URL, bootstrapWine: URL, report: @escaping (String) -> Void) async -> Bool {
-        guard !running, PhoenixInstaller.ready else { return false }
+        guard !running else { diagnostic("a Phoenix loader is already running"); return false }
+        guard PhoenixInstaller.ready else { diagnostic("client installation is incomplete"); return false }
         let fm = FileManager.default
         func stopOwnServer() -> Bool {
             guard !running else { return false }
             // A prefix just initialized by the wrapper and one previously played through
             // CrossOver may have different wineserver protocols. Use the matching binary.
-            return run(wine.deletingLastPathComponent().appendingPathComponent("wineserver"), ["-k"], limit: 30)
-                || run(bootstrapWine.deletingLastPathComponent().appendingPathComponent("wineserver"), ["-k"], limit: 30)
+            for executable in [wine, bootstrapWine] {
+                let server = executable.deletingLastPathComponent().appendingPathComponent("wineserver")
+                // Wine returns 1 when -k finds no server. A following -w verifies the prefix is
+                // actually quiescent; an idle prefix must not be treated as failed setup.
+                if run(server, ["-k"], limit: 30, acceptedExitCodes: [0, 1]),
+                   run(server, ["-w"], limit: 30) { return true }
+            }
+            return false
         }
         let kernel = prefix.appendingPathComponent("drive_c/windows/syswow64/kernel32.dll")
         if !fm.fileExists(atPath: kernel.path) {

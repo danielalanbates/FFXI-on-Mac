@@ -1,4 +1,4 @@
-# Phoenix native installation and launch — beta 115
+# Phoenix native installation and launch — beta 116
 
 Copyright (c) 2026 Daniel Bates / Bates LLC. All rights reserved.
 https://batesai.org · help@batesai.org
@@ -33,4 +33,8 @@ Remaining limitations: account-specific 2FA launch flows are rejected with an ac
 
 ## Live test
 
-In progress: authenticated manifests, archive verification and baseline repairs completed/underway in a private lab helper. Sessions and launch tokens are never committed. Only one launch is queued, after all file verification and beta installation finish. No hosted addon or bot tests are authorized.
+Authenticated installation completed: all 66,382 files were verified, including 16,793 baseline repairs. The installed local client is separate from Horizon.
+
+The first native launch probe failed before game startup because an idle `wineserver -k` returns exit code 1. Confirmed in Wine’s `server/main.c` (`exit(!kill_lock_owner(...))`) and `server/request.c`: no lock owner returns zero from `kill_lock_owner`. The fix accepts 0/1 only for `-k`, followed by a bounded `-w` that must succeed. An offline native preparation probe now reaches `NATIVE_PREFIX_READY`.
+
+Callback/download/token checks and release compilation pass. Live game startup is being verified separately; a spawned injector is not evidence of gameplay. Sessions and launch tokens are never committed. No hosted addon or bot tests are authorized.
