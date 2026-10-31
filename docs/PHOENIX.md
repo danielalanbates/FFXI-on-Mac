@@ -1,4 +1,11 @@
-# Phoenix XI — catalog entry, Mac integration pending
+# Phoenix XI — Mac integration pending
+
+Beta 113 adds a native **Connect Phoenix (Beta)** account-access probe, not playable support.
+It opens Phoenix’s own browser sign-in and can inspect the sanitized game-manifest schema.
+The official Windows launcher route failed WebView2 compatibility tests and is archived.
+See [native sign-in status](PHOENIX-NATIVE-SIGNIN.md).
+
+## Historical catalogue behavior (build 101)
 
 Build 101 adds **Phoenix XI** to the world picker at Daniel's request. This is a catalog entry,
 **not playable Mac support**. Its subtitle says “Mac support pending”; the main button says

@@ -1990,6 +1990,10 @@ struct ContentView: View {
         guard let s = store.selected else { return }
         switch a {
         case .serverInfo:
+            if s.name == "Phoenix XI" {
+                PhoenixSetup.shared.begin { message in notice = message }
+                return
+            }
             if let url = URL(string: s.installURL) { NSWorkspace.shared.open(url) }
         case .setup(.localServer(lowSpace: true)):
             // Below the disk floor: say the numbers and set it up only on a yes ("Set up anyway").

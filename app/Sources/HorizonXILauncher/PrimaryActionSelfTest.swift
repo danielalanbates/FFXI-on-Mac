@@ -35,6 +35,9 @@ extension Headless {
         var pending = base; pending.launchUnavailableReason = "Mac login pending."
         expect("catalogued world with pending Mac support -> official information", pending, .serverInfo, enabled: true)
 
+        var phoenix = pending; phoenix.world = "Phoenix XI"
+        expect("Phoenix account probe is available without offering Play", phoenix, .serverInfo, enabled: true)
+
         // Drives. Daniel's Mac on 2026-10-15: SquareEnix links into a ghost-mounted 'Games'.
         var x = base; x.checks = [bad("squareenix", drive: "Games"), bad("reg32")]; x.driveStates = ["Games": .ghost]
         expect("ghost 'Games' (Daniel 2026-10-15) -> Setup, never Repair or restart", x, .setup(.dataDrive("Games")),

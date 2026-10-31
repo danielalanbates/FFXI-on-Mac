@@ -1,0 +1,117 @@
+diff --git a/app/Sources/HorizonXILauncher/App.swift b/app/Sources/HorizonXILauncher/App.swift
+index 0155d2f..0a3cf5c 100644
+--- a/app/Sources/HorizonXILauncher/App.swift
++++ b/app/Sources/HorizonXILauncher/App.swift
+@@ -1990,6 +1990,13 @@ struct ContentView: View {
+         guard let s = store.selected else { return }
+         switch a {
+         case .serverInfo:
++            if s.name == "Phoenix XI" {
++                guard let install = selected, FileManager.default.isExecutableFile(atPath: install.wine.path) else {
++                    notice = "Choose an existing Wine installation first."; return
++                }
++                runner.runPhoenixLauncher(install)
++                return
++            }
+             if let url = URL(string: s.installURL) { NSWorkspace.shared.open(url) }
+         case .setup(.localServer(lowSpace: true)):
+             // Below the disk floor: say the numbers and set it up only on a yes ("Set up anyway").
+diff --git a/app/Sources/HorizonXILauncher/PrimaryAction.swift b/app/Sources/HorizonXILauncher/PrimaryAction.swift
+index 24ea25a..fcdc0db 100644
+--- a/app/Sources/HorizonXILauncher/PrimaryAction.swift
++++ b/app/Sources/HorizonXILauncher/PrimaryAction.swift
+@@ -400,7 +400,7 @@ enum Primary {
+             return .init(action: a, label: x.serverLost ? "Force Stop" : "Stop", enabled: true,
+                          reason: x.serverLost ? nil : x.renderStuckAt.map(renderStuckReason), destructive: true)
+         case .serverInfo:
+-            return .init(action: a, label: "Server Info", enabled: true, reason: x.launchUnavailableReason)
++            return .init(action: a, label: x.world == "Phoenix XI" ? "Open Phoenix Launcher" : "Server Info", enabled: true, reason: x.world == "Phoenix XI" ? "Use Phoenix’s official launcher to sign in and install. Mac gameplay verification is pending." : x.launchUnavailableReason)
+         case .enterAccount:
+             return .init(action: a, label: "Play", enabled: true, reason: "Type your account name and password above.")
+         case .play:
+diff --git a/app/Sources/HorizonXILauncher/Runner.swift b/app/Sources/HorizonXILauncher/Runner.swift
+index e948b2f..a50c70f 100644
+--- a/app/Sources/HorizonXILauncher/Runner.swift
++++ b/app/Sources/HorizonXILauncher/Runner.swift
+@@ -1245,6 +1245,24 @@ final class Runner: ObservableObject {
+         }
+     }
+ 
++    func runPhoenixLauncher(_ install: Install) {
++        if refuseWhileBusy("Phoenix") { return }
++        let dev = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
++            .deletingLastPathComponent().appendingPathComponent("scripts/phoenix-launcher.sh")
++        guard let script = Bundle.main.url(forResource: "phoenix-launcher", withExtension: "sh")
++            ?? (FileManager.default.isExecutableFile(atPath: dev.path) ? dev : nil) else {
++            appendLine("!! Phoenix launcher helper is missing"); return
++        }
++        let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads/FFXI-Phoenix")
++        beginBusy("Phoenix official launcher")
++        jobWine = .init(server: install.wineserver, prefix: root.appendingPathComponent("prefix"))
++        spawn(URL(fileURLWithPath: "/bin/zsh"), args: [script.path, install.wine.path, root.path],
++              env: [:], cwd: Self.scratchDir) { [weak self] code in
++            self?.busy = false
++            self?.reportFailure(code, "Phoenix did not open. See Downloads/FFXI-Phoenix/logs.")
++        }
++    }
++
+     func runCatsEyeLauncher(_ gameInstall: Install, dataPath: String = "") {
+         Self.linkGamesFolder("CatsEyeXI", to: dataPath, in: gameInstall)
+         if refuseWhileBusy("the CatsEyeXI launcher") { return }
+diff --git a/app/Sources/HorizonXILauncher/ServerCatalogSelfTest.swift b/app/Sources/HorizonXILauncher/ServerCatalogSelfTest.swift
+index 1639eaf..57a94b9 100644
+--- a/app/Sources/HorizonXILauncher/ServerCatalogSelfTest.swift
++++ b/app/Sources/HorizonXILauncher/ServerCatalogSelfTest.swift
+@@ -34,7 +34,7 @@ extension Headless {
+         if let phoenix {
+             var x = PrimaryInputs(); x.world = phoenix.name; x.launchUnavailableReason = phoenix.launchUnavailableReason
+             let d = Primary.decide(x)
+-            check("ready files cannot offer Phoenix Play", d.action == .serverInfo && d.enabled && d.label == "Server Info")
++            check("ready files cannot offer Phoenix Play", d.action == .serverInfo && d.enabled && d.label == "Open Phoenix Launcher")
+             x.hasInstall = false; x.accountNeeded = true
+             check("no install cannot offer unsupported setup or account prompt", Primary.decide(x).action == .serverInfo)
+             check("headless fixer cannot bypass pending integration", !PrimaryFixer.isHeadlessFixable(d.action))
+diff --git a/app/Sources/HorizonXILauncher/Servers.swift b/app/Sources/HorizonXILauncher/Servers.swift
+index da15e56..2ce9b41 100644
+--- a/app/Sources/HorizonXILauncher/Servers.swift
++++ b/app/Sources/HorizonXILauncher/Servers.swift
+@@ -340,8 +340,8 @@ struct Server: Codable, Identifiable, Hashable {
+         // Catalogued 2026-10-28. Native Mac authentication is pending; never send a normal
+         // account/password to its custom launch-token loader. See docs/PHOENIX.md.
+         Server(name: "Phoenix XI", host: "play.phoenix-xi.com", bootProfile: "phoenix.ini",
+-               verified: false, note: "Mac login support pending.",
+-               era: "Treasures of Aht Urhgan · 75 cap · Mac support pending", population: 1110,
++               verified: false, note: "Official launcher via Wine · Mac beta.",
++               era: "Treasures of Aht Urhgan · 75 cap · official launcher (Mac beta)", population: 1110,
+                codebase: .landSandBoat,
+                installURL: "https://phoenix-xi.com/getting-started", installKind: .website,
+                installNote: "Phoenix's official launcher supports Windows and Linux. Mac login support is pending.",
+diff --git a/app/VERSION b/app/VERSION
+index 34c8710..13a70cd 100644
+--- a/app/VERSION
++++ b/app/VERSION
+@@ -1,2 +1,2 @@
+ SHORT=3.10
+-BUILD=112
++BUILD=113
+diff --git a/app/bundle.sh b/app/bundle.sh
+index 135831a..d822dbe 100755
+--- a/app/bundle.sh
++++ b/app/bundle.sh
+@@ -141,7 +141,7 @@ for required in \
+   "$WINECURSOR_SOURCE/winecursor.lua" \
+   "$REPO/scripts/install.sh" "$REPO/scripts/fix-wine-rpath.sh" \
+   "$REPO/scripts/lsb-server.sh" "$REPO/scripts/update-client.sh" "$REPO/scripts/game-wine.sh" \
+-  "$REPO/scripts/catseye-launcher.sh" "$REPO/scripts/retail-client.sh" \
++  "$REPO/scripts/phoenix-launcher.sh" "$REPO/scripts/catseye-launcher.sh" "$REPO/scripts/retail-client.sh" \
+   "$REPO/vendor/dxvk.conf" "$REPO/LICENSE" "$HERE/Resources/horizonxi-boot.ini" \
+   "$REPO/vendor/licenses/README.txt" "$REPO/vendor/licenses/d3d8to9-BSD-3-Clause.txt" \
+   "$REPO/vendor/licenses/DXVK-zlib.txt" "$REPO/vendor/licenses/MoltenVK-Apache-2.0.txt" \
+@@ -173,6 +173,7 @@ cp "$HERE/Resources/apply-update.sh" "$APP/Contents/Resources/apply-update.sh"
+ # HorizonXI's boot profile: their client ships none (their launcher writes it at Play), so a new
+ # horizonxi.ini is made from this one (BootProfile.swift). This project's own file.
+ cp "$HERE/Resources/horizonxi-boot.ini" "$APP/Contents/Resources/horizonxi-boot.ini"
++cp "$REPO/scripts/phoenix-launcher.sh" "$APP/Contents/Resources/phoenix-launcher.sh"
+ cp "$REPO/scripts/catseye-launcher.sh" "$APP/Contents/Resources/catseye-launcher.sh"
+ cp "$REPO/scripts/retail-client.sh"    "$APP/Contents/Resources/retail-client.sh"
+ chmod +x "$APP/Contents/Resources/"*.sh

@@ -240,7 +240,7 @@ enum Primary {
 
     /// Every label the button may show when nothing is running. The progress labels are
     /// `Work.label`, with " 42%" when the job reports how far it is.
-    static let verbs: Set<String> = ["Setup", "Update", "Repair", "Play", "Stop", "Force Stop", "Play Another", "Server Info"]
+    static let verbs: Set<String> = ["Setup", "Update", "Repair", "Play", "Stop", "Force Stop", "Play Another", "Server Info", "Connect Phoenix (Beta)"]
 
     static func decide(_ x: PrimaryInputs) -> PrimaryDecision {
         if x.restartingLauncher { return make(.working(.updating, progress: nil), x) }
@@ -400,7 +400,7 @@ enum Primary {
             return .init(action: a, label: x.serverLost ? "Force Stop" : "Stop", enabled: true,
                          reason: x.serverLost ? nil : x.renderStuckAt.map(renderStuckReason), destructive: true)
         case .serverInfo:
-            return .init(action: a, label: "Server Info", enabled: true, reason: x.launchUnavailableReason)
+            return .init(action: a, label: x.world == "Phoenix XI" ? "Connect Phoenix (Beta)" : "Server Info", enabled: true, reason: x.world == "Phoenix XI" ? "Sign in to verify Phoenix account access. Game setup and Play are still pending." : x.launchUnavailableReason)
         case .enterAccount:
             return .init(action: a, label: "Play", enabled: true, reason: "Type your account name and password above.")
         case .play:
