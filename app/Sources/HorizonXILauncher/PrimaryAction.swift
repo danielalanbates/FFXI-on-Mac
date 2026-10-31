@@ -400,7 +400,7 @@ enum Primary {
             return .init(action: a, label: x.serverLost ? "Force Stop" : "Stop", enabled: true,
                          reason: x.serverLost ? nil : x.renderStuckAt.map(renderStuckReason), destructive: true)
         case .serverInfo:
-            return .init(action: a, label: x.world == "Phoenix XI" ? "Connect Phoenix (Beta)" : "Server Info", enabled: true, reason: x.world == "Phoenix XI" ? "Sign in to check account access. Game setup is pending." : x.launchUnavailableReason)
+            return .init(action: a, label: x.world == "Phoenix XI" ? "Connect Phoenix (Beta)" : "Server Info", enabled: true, reason: x.world == "Phoenix XI" ? "Sign in to install or launch Phoenix." : x.launchUnavailableReason)
         case .enterAccount:
             return .init(action: a, label: "Play", enabled: true, reason: "Type your account name and password above.")
         case .play:

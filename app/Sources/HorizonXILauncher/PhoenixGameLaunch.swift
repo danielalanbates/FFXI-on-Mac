@@ -114,7 +114,7 @@ enum PhoenixGameLaunch {
 
     static func windowsPath(_ url: URL) -> String { "Z:" + url.path.replacingOccurrences(of: "/", with: "\\") }
 
-    static func start(gameToken: String, wine: URL) throws -> Process {
+    static func start(gameToken: String, wine: URL) throws -> pid_t {
         guard !running, PhoenixInstaller.ready else { throw PhoenixInstaller.SetupError.extraction }
         let fm = FileManager.default
         let privateDir = root.appendingPathComponent("private")
@@ -153,19 +153,19 @@ enum PhoenixGameLaunch {
             try text.write(to: client.appendingPathComponent("config/boot/phoenix-mac.ini"), atomically: true, encoding: .utf8)
             try "# Phoenix native launch; no optional addons.\n".write(to: client.appendingPathComponent("scripts/phoenix-mac.txt"), atomically: true, encoding: .utf8)
             try "[settings]\ndebug_log=false\n[overlays]\n0=EraDATs\n[cache]\nenabled=false\n".write(to: client.appendingPathComponent("config/pivot/pivot.ini"), atomically: true, encoding: .utf8)
-            let process = Process(); process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            // Match the existing launcher's measured working spawn path. Arguments are separate
-            // argv values; no account data or filesystem path is interpolated into shell code.
-            process.arguments = ["-c", "exec \"$@\" > /dev/null 2>&1", "phoenix-launch", wine.path,
-                                 windowsPath(client.appendingPathComponent("Ashita-cli.exe")), "phoenix-mac.ini"]
-            process.environment = environment(); process.currentDirectoryURL = client
-            // Loader diagnostics can contain authentication material; never pipe these into UI logs.
-            process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
-            process.terminationHandler = { _ in try? fm.removeItem(at: config) }
-            try process.run()
-            // The injector may stay alive after the loader has read the token. Bound its lifetime on disk.
-            DispatchQueue.global().asyncAfter(deadline: .now() + 120) { try? fm.removeItem(at: config) }
-            return process
+            let log = privateDir.appendingPathComponent("game-\(UUID().uuidString).log")
+            guard fm.createFile(atPath: log.path, contents: nil, attributes: [.posixPermissions: 0o600]) else { throw PhoenixInstaller.SetupError.extraction }
+            var env = environment()
+            env["PHOENIX_LAUNCH_CONFIG"] = config.path
+            // Reuse the launcher's established detached bridge, including a real disk file for
+            // output. Foundation ancestry and /dev/null are not the measured working path.
+            let script = "( /bin/sleep 120; /bin/rm -f -- \"$PHOENIX_LAUNCH_CONFIG\" ) >/dev/null 2>&1 & exec \"$@\""
+            guard let pid = Detach.spawn(URL(fileURLWithPath: "/bin/sh"), args: ["-c", script, "phoenix-launch", wine.path,
+                    windowsPath(client.appendingPathComponent("Ashita-cli.exe")), "phoenix-mac.ini"],
+                    env: env, cwd: client, stdoutPath: log.path) else { throw PhoenixInstaller.SetupError.extraction }
+            // The injector exits before the resumed loader necessarily reads JSON. A detached,
+            // single delayed cleanup preserves the handoff and still runs after this app quits.
+            return pid
         } catch { try? fm.removeItem(at: config); throw error }
     }
 }

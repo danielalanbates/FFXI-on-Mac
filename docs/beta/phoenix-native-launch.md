@@ -1,4 +1,4 @@
-# Phoenix native installation and launch — beta 116
+# Phoenix native installation and launch — beta 118
 
 Copyright (c) 2026 Daniel Bates / Bates LLC. All rights reserved.
 https://batesai.org · help@batesai.org
@@ -23,7 +23,7 @@ Everything substantial is stored in the agreed Phoenix folder on x10. Archives s
 
 Microsoft’s x86 VC runtime is downloaded from its official endpoint and checked against a pinned size/digest. A changed package fails closed. Only the isolated Phoenix wineserver may be stopped for preparation, after checking no Phoenix loader is running. A character/game is never stopped to install this feature.
 
-The launch uses the repository’s documented shell/file-redirection method, with separate argv values, to avoid the known Foundation spawn issue. No optional addons, VanaGuide or narration are loaded by the Phoenix profile. The short-lived launch-token JSON is mode 0600 under a mode 0700 directory, removed after injector exit or 120 seconds. Browser credentials remain in memory only.
+The launch reuses `Detach.spawn`, the repository’s established detached bridge and regular-file output handling, to avoid the documented Foundation ancestry and external-volume launch issues. Private vendor output is kept under the Phoenix private directory, outside the repository. No optional addons, VanaGuide or narration are loaded by the Phoenix profile. The short-lived launch-token JSON is mode 0600 under a mode 0700 directory, removed after 120 seconds by a single detached cleanup command, even if the launcher quits. Browser credentials remain in memory only.
 
 ## Validation and limits
 
@@ -38,3 +38,7 @@ Authenticated installation completed: all 66,382 files were verified, including 
 The first native launch probe failed before game startup because an idle `wineserver -k` returns exit code 1. Confirmed in Wine’s `server/main.c` (`exit(!kill_lock_owner(...))`) and `server/request.c`: no lock owner returns zero from `kill_lock_owner`. The fix accepts 0/1 only for `-k`, followed by a bounded `-w` that must succeed. An offline native preparation probe now reaches `NATIVE_PREFIX_READY`.
 
 Callback/download/token checks and release compilation pass. Live game startup is being verified separately; a spawned injector is not evidence of gameplay. Sessions and launch tokens are never committed. No hosted addon or bot tests are authorized.
+
+The initial direct Foundation injector probe returned 0 but left no game process. That was not a successful game launch. The beta 118 path now uses the same Detach bridge as the existing launcher; its live result remains to be recorded.
+
+The detached vendor loader reported that its JSON input did not exist: removing the token file on injector exit races the resumed loader. Beta 118 keeps the private JSON for 120 seconds instead. The injector’s successful exit must never trigger immediate token-file deletion.

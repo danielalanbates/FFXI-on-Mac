@@ -12,7 +12,7 @@ import CryptoKit
     private var connections: [UUID: NWConnection] = [:]
     private var timeout: DispatchWorkItem?
     private var working = false
-    private var gameProcess: Process?
+    private var gamePID: pid_t?
     private var wine: URL?
     private var bootstrapWine: URL?
     private var state = ""
@@ -57,7 +57,7 @@ import CryptoKit
     }
 
     func begin(wine: URL? = nil, bootstrapWine: URL? = nil, report: @escaping (String) -> Void) {
-        guard gameProcess?.isRunning != true, !PhoenixGameLaunch.running else {
+        guard gamePID.map(Detach.isAlive) != true, !PhoenixGameLaunch.running else {
             report("Phoenix is already running. Use the existing game window."); return
         }
         guard !working else {
@@ -215,11 +215,11 @@ import CryptoKit
                   let gameToken = PhoenixGameLaunch.token(from: launchData, response: launchResponse) else {
                 finish("Phoenix did not issue a game session. Check account approval or two-factor requirements on its website."); return
             }
-            gameProcess = try PhoenixGameLaunch.start(gameToken: gameToken, wine: wine)
+            gamePID = try PhoenixGameLaunch.start(gameToken: gameToken, wine: wine)
             self.report?("Phoenix is starting…")
             try await Task.sleep(nanoseconds: 10_000_000_000)
             if PhoenixGameLaunch.running { finish("Phoenix game process is running.") }
-            else if gameProcess?.isRunning == true { finish("Phoenix is still starting. Check the game window.") }
+            else if gamePID.map(Detach.isAlive) == true { finish("Phoenix is still starting. Check the game window.") }
             else { finish("Phoenix exited before the game started. Its client remains installed; retry sign-in to launch again.") }
 
         } catch { finish("Phoenix sign-in could not complete. Check your connection and retry.") }
