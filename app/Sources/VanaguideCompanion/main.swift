@@ -470,6 +470,7 @@ final class CompanionState: ObservableObject {
                 guides = (Features.screenReading ? [LogSurvey.guide] : []) + loaded.map { var g = $0; g.name = QuestCatalogue.displayName(g.name); return g }
                 catalogue = entries
                 let references = QuestCatalogue.referenceGuides(catalogue, walkthroughs: QuestCatalogue.walkthroughs(at: root))
+                guides += [PartyLevelingGuide.guide]
                 guides += (QuestCatalogue.jobUnlockGuide(from: references).map { [$0] } ?? []) + references
                 guides = QuestCatalogue.contentOrder(guides)
                 sourceNote = root.path.contains("/Resources/") ? "bundled guides" : "development checkout"
@@ -642,7 +643,7 @@ struct CompanionView: View {
     // --tab <n> (test hook) opens on another tab, 1 Gear, 2 Skills, 3 Achievements, 4 Server, for --snapshot.
     @State var tab = CommandLine.arguments.firstIndex(of: "--tab")
         .flatMap { CommandLine.arguments.indices.contains($0 + 1) ? Int(CommandLine.arguments[$0 + 1]) : nil } ?? 0
-    @State var expandedContent: Set<String> = ["Start Here"]
+    @State var expandedContent: Set<String> = ["Starting Out"]
     @State var globalSearch = ""
     @State var showSearch = false
     @State var searchPage: GuideSearchTarget?
@@ -672,7 +673,7 @@ struct CompanionView: View {
         if layoutTest && completedFixture {
             _ = initialState.finishGuideStep()
             if completedStepFixture { initialState.openGuide(0) }
-            _expandedContent = State(initialValue: ["Start Here", "Completed"])
+            _expandedContent = State(initialValue: ["Starting Out", "Completed"])
         }
         if layoutTest, let root = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"] {
             initialState.zones = WorldMap.load(root: URL(fileURLWithPath: root))
@@ -847,7 +848,7 @@ struct CompanionView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(QuestCatalogue.sectionOrder + ["Completed"], id: \.self) { section in
                                 let rows = state.guides.indices.filter { state.guides[$0].available(on: state.world) && (section == "Completed" ? state.progress.completed(state.guides[$0]) : QuestCatalogue.section(of: state.guides[$0]) == section) }
-                                let articles = section == "Start Here" ? wiki.notes : wiki.quests.filter { article in
+                                let articles = section == "Starting Out" ? wiki.notes : wiki.quests.filter { article in
                                     section == "Jobs" ? article.group.lowercased().contains("job") : section == "Missions" ? article.group.lowercased().contains("mission") : section == "Quests" && !article.group.lowercased().contains("job") && !article.group.lowercased().contains("mission")
                                 }
                                 if !rows.isEmpty || !articles.isEmpty {

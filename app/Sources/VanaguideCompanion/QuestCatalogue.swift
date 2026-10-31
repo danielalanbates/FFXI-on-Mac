@@ -101,10 +101,11 @@ enum QuestCatalogue {
     static func section(of g: Guide) -> String {
         if g.name.hasSuffix(" Missions") { return "Missions" }
         if g.name.hasSuffix(" Quests") { return "Quests" }
+        if g.name.localizedCaseInsensitiveContains("solo guide") || g.name.localizedCaseInsensitiveContains("party guide") { return "Leveling" }
         if g.name == "Job Unlocks" || g.name.localizedCaseInsensitiveContains("job") { return "Jobs" }
-        return "Start Here"
+        return "Starting Out"
     }
-    static let sectionOrder = ["Start Here", "Jobs", "Missions", "Quests"]
+    static let sectionOrder = ["Starting Out", "Leveling", "Jobs", "Missions", "Quests"]
 
     /// Within Missions and Quests: the three nations, then the expansions in release order.
     static let storyOrder = ["San d'Oria", "Bastok", "Windurst", "Jeuno", "Rise of the Zilart", "Other Areas",
