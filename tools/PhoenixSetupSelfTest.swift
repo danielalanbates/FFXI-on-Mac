@@ -51,7 +51,12 @@ import Foundation
         precondition(PhoenixGameLaunch.token(from: Data(#"{"data":{"token":""}}"#.utf8), response: plain) == nil)
         precondition(PhoenixGameLaunch.token(from: Data(#"{"data":{"token":"bad\nvalue"}}"#.utf8), response: plain) == nil)
         precondition(PhoenixGameLaunch.windowsPath(URL(fileURLWithPath: "/Volumes/Games Drive/Phoenix")) == "Z:\\Volumes\\Games Drive\\Phoenix")
-        let downloads = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads/ffxi-recovery-20261029/phoenix-lab/download-fixtures")
+        let profile = Data(#"{"data":{"username":"fixture-user","email":"do-not-persist@example.test"}}"#.utf8)
+        precondition(PhoenixGameLaunch.username(from: profile, response: plain) == "fixture-user")
+        precondition(PhoenixGameLaunch.username(from: profile, response: bad) == nil)
+        precondition(PhoenixGameLaunch.username(from: Data(#"{"data":{"username":""}}"#.utf8), response: plain) == nil)
+        precondition(PhoenixGameLaunch.username(from: Data(#"{"data":{"username":"bad\nvalue"}}"#.utf8), response: plain) == nil)
+        let downloads = ProcessInfo.processInfo.environment["PHOENIX_TEST_DIR"].map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads/FFXI-on-Mac-build/phoenix-selftest-fixtures")
         try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [FixtureProtocol.self]

@@ -174,6 +174,13 @@ import CryptoKit
             guard let response = response as? HTTPURLResponse, let token = Self.sessionToken(data, response: response) else {
                 finish("Phoenix did not verify sign-in. Retry, or use its website to check your account."); return
             }
+            var profile = URLRequest(url: URL(string: "https://api.phoenix-xi.com/api/v1/auth/me")!)
+            profile.timeoutInterval = 30; profile.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            let (profileData, profileResponse) = try await session.data(for: profile)
+            guard let profileResponse = profileResponse as? HTTPURLResponse,
+                  let username = PhoenixGameLaunch.username(from: profileData, response: profileResponse) else {
+                finish("Phoenix could not provide your game account name. Check account setup on its website."); return
+            }
             var request = URLRequest(url: URL(string: "https://gamefiles.phoenix-xi.com/manifest.json")!)
             request.timeoutInterval = 30; request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             let (manifest, result) = try await session.data(for: request)
@@ -215,7 +222,7 @@ import CryptoKit
                   let gameToken = PhoenixGameLaunch.token(from: launchData, response: launchResponse) else {
                 finish("Phoenix did not issue a game session. Check account approval or two-factor requirements on its website."); return
             }
-            gamePID = try PhoenixGameLaunch.start(gameToken: gameToken, wine: wine)
+            gamePID = try PhoenixGameLaunch.start(gameToken: gameToken, username: username, wine: wine)
             self.report?("Phoenix is starting…")
             try await Task.sleep(nanoseconds: 10_000_000_000)
             if PhoenixGameLaunch.running { finish("Phoenix game process is running.") }

@@ -1,4 +1,4 @@
-# Phoenix native installation and launch — beta 118
+# Phoenix native installation and launch — beta 119
 
 Copyright (c) 2026 Daniel Bates / Bates LLC. All rights reserved.
 https://batesai.org · help@batesai.org
@@ -11,8 +11,9 @@ Phoenix’s official Windows launcher 0.0.116 and its authenticated CDN manifest
 - Game, Ashita and EraDAT manifests are at `https://{gamefiles,ashita,eradats}.phoenix-xi.com/manifest.json`. The archive URLs are **relative** to these endpoints; the older beta assumed absolute URLs and therefore never installed anything.
 - Game baseline archive: 5,992,098,554 bytes; Ashita: 53,801,222; EraDATs: 218,027,878. Verify archive SHA-256, extract, then verify **every file**. This baseline required 16,793 file updates/additions. Verified replacements come from `/files/<manifest path>`, authenticated to the corresponding CDN.
 - Game and Ashita share `client/`. EraDATs belongs at `client/polplugins/DATs/EraDATs`, enabled through the vendor’s Pivot polplugin.
+- `GET /api/v1/auth/me` returns `data.username`. The loader requires this non-empty account name alongside the token to activate automatic login; a token-only payload opens its interactive menu. The profile stays in memory, and only the required username goes into the private loader JSON.
 - `POST /api/v1/auth/game/launch-token`, JSON `additionalClient: false`, returns `data.token`, `data.expiresAt`, `data.multiClientAllowed`. The token is requested after installation and prefix preparation, so a long download does not consume its lifetime.
-- Phoenix’s vendor loader accepts `--json <file>` with `login_token`, `server`, `authport`, `dataport`, `viewport`, `profileport`, `hide`, `language`. The exact token values are never logged.
+- Phoenix’s vendor loader accepts `--json <file>` with `username`, `login_token`, `server`, `authport`, `dataport`, `viewport`, `profileport`, `hide`, `language`. The exact token values are never logged.
 - The vendor Ashita profile’s `ashita.boot.file` points to `bootloader/phoenix-loader.exe`; `gamemodule` remains `ffximain.dll`. Sandbox paths point exclusively to the Phoenix client.
 
 ## Isolation and runtime
@@ -27,7 +28,7 @@ The launch reuses `Detach.spawn`, the repository’s established detached bridge
 
 ## Validation and limits
 
-Pure checks cover callback state/host/duplicate parameters, manual callback validation, token redaction and launch-token parsing, relative URLs, host boundaries, sizes, and streaming success/HTTP/oversize/truncation failures. Release compilation is required. Live test results must be appended below; compilation and a spawned injector alone are not evidence of gameplay.
+Run `tools/test-phoenix-setup.sh` for the offline checks (build products and fixtures stay in Downloads). Pure checks cover callback state/host/duplicate parameters, manual callback validation, token redaction and launch-token parsing, relative URLs, host boundaries, sizes, and streaming success/HTTP/oversize/truncation failures. Release compilation is required. Live test results must be appended below; compilation and a spawned injector alone are not evidence of gameplay.
 
 Remaining limitations: account-specific 2FA launch flows are rejected with an account requirement message; they are not guessed or bypassed. UI cancellation/resume and full integration with the generic launcher session/Stop controls need follow-up. Completed client installations are keyed by all three manifest versions and archive digests. Do not enable public Play verification or mark this server verified without evidence from the real game.
 
@@ -39,6 +40,8 @@ The first native launch probe failed before game startup because an idle `winese
 
 Callback/download/token checks and release compilation pass. Live game startup is being verified separately; a spawned injector is not evidence of gameplay. Sessions and launch tokens are never committed. No hosted addon or bot tests are authorized.
 
-The initial direct Foundation injector probe returned 0 but left no game process. That was not a successful game launch. The beta 118 path now uses the same Detach bridge as the existing launcher; its live result remains to be recorded.
+The initial direct Foundation injector probe returned 0 but left no game process. That was not a successful game launch. The beta 119 path now uses the same Detach bridge as the existing launcher; its live result remains to be recorded.
 
 The detached vendor loader reported that its JSON input did not exist: removing the token file on injector exit races the resumed loader. Beta 118 keeps the private JSON for 120 seconds instead. The injector’s successful exit must never trigger immediate token-file deletion.
+
+Read-only inspection of the vendor loader confirmed its autologin condition requires a non-empty username and either password or login token. An authenticated `/api/v1/auth/me` request supplies the username; no password is requested or stored. The previous token-only probe reached the loader menu, not FFXI, and that unlogged test loader was stopped before further work.

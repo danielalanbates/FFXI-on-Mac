@@ -112,9 +112,18 @@ enum PhoenixGameLaunch {
         return token
     }
 
+    static func username(from data: Data, response: HTTPURLResponse) -> String? {
+        guard response.statusCode == 200,
+              let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let profile = body["data"] as? [String: Any], let username = profile["username"] as? String,
+              !username.isEmpty, username.utf8.count <= 128,
+              !username.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return nil }
+        return username
+    }
+
     static func windowsPath(_ url: URL) -> String { "Z:" + url.path.replacingOccurrences(of: "/", with: "\\") }
 
-    static func start(gameToken: String, wine: URL) throws -> pid_t {
+    static func start(gameToken: String, username: String, wine: URL) throws -> pid_t {
         guard !running, PhoenixInstaller.ready else { throw PhoenixInstaller.SetupError.extraction }
         let fm = FileManager.default
         let privateDir = root.appendingPathComponent("private")
@@ -122,7 +131,7 @@ enum PhoenixGameLaunch {
         try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: privateDir.path)
         let config = privateDir.appendingPathComponent("launch-\(UUID().uuidString).json")
         let payload: [String: Any] = ["server": "play.phoenix-xi.com", "authport": 54231, "dataport": 54230,
-            "viewport": 54001, "profileport": 51220, "hide": true, "login_token": gameToken, "language": 1]
+            "viewport": 54001, "profileport": 51220, "hide": true, "login_token": gameToken, "username": username, "language": 1]
         try fm.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
         guard fm.createFile(atPath: config.path, contents: try JSONSerialization.data(withJSONObject: payload), attributes: [.posixPermissions: 0o600]) else { throw PhoenixInstaller.SetupError.extraction }
         do {
