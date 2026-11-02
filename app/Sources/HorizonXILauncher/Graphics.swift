@@ -319,12 +319,15 @@ struct GraphicsSettings: Codable, Equatable {
     /// Swapped by `--selftest-graphics`, so it never reads or writes the real preferences.
     static var defaults: UserDefaults = .standard
 
-    /// Stored per world, not globally.
-    ///
-    /// One stored value shared by every world means the local test world and HorizonXI fight
-    /// over the same keys: set one to 640x480 for testing and the next Apply on the other
-    /// writes 1920x1080 over it, or the reverse — and whichever was written last wins, which
-    /// from the user's chair looks like the launcher forgetting settings at random.
+    /// The latest explicit Apply is shared across server selections. Legacy per-world
+    /// choices remain available until the user applies a shared choice.
+    static var shared: GraphicsSettings? { decoded(defaults.data(forKey: key + ".shared")) }
+
+    func saveShared() {
+        guard let data = try? JSONEncoder().encode(self) else { return }
+        Self.defaults.set(data, forKey: Self.key + ".shared")
+    }
+
     static func key(for world: String) -> String {
         let slug = world.lowercased().filter { $0.isLetter || $0.isNumber }
         return slug.isEmpty ? key : "\(key).\(slug)"
@@ -332,6 +335,7 @@ struct GraphicsSettings: Codable, Equatable {
 
     /// - Parameter world: the world's name; nil falls back to the old shared value.
     static func load(world: String? = nil) -> GraphicsSettings {
+        if let shared { return shared }
         if let s = stored(forWorld: world) { return s }
         // No per-world value yet. The local world starts small (see lowSpec); everything else
         // inherits whatever was stored before this became per-world, so nobody's settings

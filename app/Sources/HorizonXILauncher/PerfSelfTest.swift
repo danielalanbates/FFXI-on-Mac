@@ -11,6 +11,18 @@ extension Headless {
         let fm = FileManager.default
         var checks: [(String, Bool)] = []
 
+        // Every listed world uses the same performance defaults with explicit compatibility pins.
+        var shared = PerfSettings()
+        shared.renderer = .metal
+        shared.msync = true
+        for server in Server.builtins {
+            let effective = shared.forServer(server)
+            checks.append(("shared performance policy: \(server.name)",
+                           effective.renderer == (server.renderer ?? .metal)
+                           && effective.msync == server.msync
+                           && effective.fpsDivisorOne && effective.largeAddressAware))
+        }
+
         // x87: on by default everywhere; the environment override and a recorded failure.
         checks.append(("x87 on by default on every macOS version",
                        X87Guard.enabled(worldAllows: true, override: nil, brokenHere: false)))

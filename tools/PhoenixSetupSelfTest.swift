@@ -58,6 +58,41 @@ import Foundation
         precondition(PhoenixGameLaunch.username(from: Data(#"{"data":{"username":"bad\nvalue"}}"#.utf8), response: plain) == nil)
         let downloads = ProcessInfo.processInfo.environment["PHOENIX_TEST_DIR"].map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads/FFXI-on-Mac-build/phoenix-selftest-fixtures")
         try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
+        let performanceRoot = downloads.appendingPathComponent("performance-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: performanceRoot) }
+        let system = performanceRoot.appendingPathComponent("prefix/drive_c/windows/syswow64")
+        try FileManager.default.createDirectory(at: system, withIntermediateDirectories: true)
+        let native = performanceRoot.appendingPathComponent("native.dll")
+        let dxvkConfig = performanceRoot.appendingPathComponent("dxvk.conf")
+        try Data("native".utf8).write(to: native)
+        try Data("dxvk".utf8).write(to: dxvkConfig)
+        let original = system.appendingPathComponent("d3d8.dll")
+        try Data("builtin".utf8).write(to: original)
+        let prefix = performanceRoot.appendingPathComponent("prefix")
+        let plan = PhoenixPerformance(environment: ["WINEPREFIX": "/wrong-prefix", "WINEMSYNC": "1",
+            "ROSETTA_X87_PATH": "/fixture/x87", "ROSETTA_DISABLE_AOT": "1",
+            "DYLD_FALLBACK_LIBRARY_PATH": "/fixture/libs", "WINE_DISABLE_NX_COMPAT": "1"],
+            renderer: "metal", rendererTitle: "Metal", dlls: ["d3d8.dll": native, "d3d9.dll": native], dxvkConfig: dxvkConfig)
+        let gameEnv = plan.gameEnvironment(prefix: prefix)
+        precondition(gameEnv["WINEPREFIX"] == prefix.path && gameEnv["WINEMSYNC"] == "1")
+        precondition(gameEnv["ROSETTA_X87_PATH"] == "/fixture/x87" && gameEnv["ROSETTA_DISABLE_AOT"] == nil)
+        precondition(gameEnv["DYLD_FALLBACK_LIBRARY_PATH"] == "/fixture/libs" && gameEnv["WINE_DISABLE_NX_COMPAT"] == "1")
+        precondition(gameEnv["WINEDLLOVERRIDES"] == "mscoree,mshtml=;d3d8,d3d9=n")
+        try plan.prepareFiles(prefix: prefix)
+        try plan.prepareFiles(prefix: prefix)
+        let originalBackup = try Data(contentsOf: prefix.appendingPathComponent("drive_c/dll-backup/phoenix-performance/d3d8.dll"))
+        precondition(String(decoding: originalBackup, as: UTF8.self) == "builtin")
+        precondition(FileManager.default.contentsEqual(atPath: native.path, andPath: original.path))
+        precondition(FileManager.default.contentsEqual(atPath: dxvkConfig.path, andPath: prefix.appendingPathComponent("drive_c/dxvk-cache/dxvk.conf").path))
+        var classic = plan
+        classic.renderer = "openGL"
+        precondition(classic.gameEnvironment(prefix: prefix)["WINEDLLOVERRIDES"] == "mscoree,mshtml=;d3d8,d3d9=b")
+        var missing = plan
+        missing.dlls = [:]
+        var refusedMissing = false
+        do { try missing.prepareFiles(prefix: prefix) } catch { refusedMissing = true }
+        precondition(refusedMissing)
+        print("PASS: isolated Metal files, original backups, fallback and shared performance environment")
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [FixtureProtocol.self]
         let file = downloads.appendingPathComponent("archive.part")

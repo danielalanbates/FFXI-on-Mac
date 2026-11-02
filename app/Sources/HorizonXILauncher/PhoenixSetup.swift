@@ -4,17 +4,21 @@ import AppKit
 import Foundation
 import Network
 import CryptoKit
+import Combine
 
 /// Browser authentication and isolated installation. Session credentials remain in memory.
-@MainActor final class PhoenixSetup {
+@MainActor final class PhoenixSetup: ObservableObject {
     static let shared = PhoenixSetup()
     private var listener: NWListener?
     private var connections: [UUID: NWConnection] = [:]
     private var timeout: DispatchWorkItem?
+    @Published private(set) var launching = false
     private var working = false
     private var gamePID: pid_t?
     private var wine: URL?
     private var bootstrapWine: URL?
+    private var performance: PhoenixPerformance?
+    private var graphicsOverrides: [String: String] = [:]
     private var state = ""
     private var report: ((String) -> Void)?
 
@@ -56,7 +60,7 @@ import CryptoKit
         return "unknown"
     }
 
-    func begin(wine: URL? = nil, bootstrapWine: URL? = nil, report: @escaping (String) -> Void) {
+    func begin(wine: URL? = nil, bootstrapWine: URL? = nil, graphicsOverrides: [String: String] = [:], performance: PhoenixPerformance? = nil, report: @escaping (String) -> Void) {
         guard gamePID.map(Detach.isAlive) != true, !PhoenixGameLaunch.running else {
             report("Phoenix is already running. Use the existing game window."); return
         }
@@ -66,6 +70,8 @@ import CryptoKit
             return
         }
         working = true; self.report = report
+        self.graphicsOverrides = graphicsOverrides
+        self.performance = performance
         self.wine = wine; self.bootstrapWine = bootstrapWine
         state = UUID().uuidString + UUID().uuidString
         do {
@@ -105,13 +111,31 @@ import CryptoKit
     private func offerManualCallback(port: UInt16) {
         let alert = NSAlert()
         alert.messageText = "Finish Phoenix sign-in"
-        alert.informativeText = "If Phoenix approved sign-in but the browser blocked 127.0.0.1, paste that page’s full address here. It contains a temporary sign-in code; it is never saved."
+        alert.informativeText = "Reopen the sign-in page, or paste the return address if your browser blocked it. Start a new sign-in if you canceled the previous attempt."
         let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 420, height: 24))
         field.placeholderString = "http://127.0.0.1:…/callback?…"
         alert.accessoryView = field
+        alert.addButton(withTitle: "Open Sign-in Page")
         alert.addButton(withTitle: "Finish Sign-in")
+        alert.addButton(withTitle: "Start New Sign-in")
         alert.addButton(withTitle: "Keep Waiting")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            guard let url = URL(string: "https://phoenix-xi.com/launcher-auth?port=\(port)&state=\(state)") else { return }
+            if !NSWorkspace.shared.open(url) { report?("Could not open the Phoenix sign-in page.") }
+            return
+        }
+        if response == .alertThirdButtonReturn {
+            let previousReport = report
+            let previousWine = wine, previousBootstrap = bootstrapWine
+            let previousGraphics = graphicsOverrides, previousPerformance = performance
+            finish("Starting a new Phoenix sign-in…")
+            begin(wine: previousWine, bootstrapWine: previousBootstrap,
+                  graphicsOverrides: previousGraphics, performance: previousPerformance,
+                  report: previousReport ?? { _ in })
+            return
+        }
+        guard response == .alertSecondButtonReturn else { return }
         guard let token = Self.manualCallbackToken(field.stringValue, port: port, state: state) else {
             report?("That address does not match this Phoenix sign-in. Use the newest browser page."); return
         }
@@ -163,6 +187,7 @@ import CryptoKit
     }
 
     private func checkAccess(oneTimeToken: String) async {
+        launching = true
         let session = URLSession(configuration: .ephemeral, delegate: PhoenixNoRedirect(), delegateQueue: nil)
         defer { session.invalidateAndCancel() }
         do {
@@ -206,8 +231,9 @@ import CryptoKit
             guard let wine = self.wine, let bootstrapWine = self.bootstrapWine else {
                 finish("Phoenix is installed. Select your Wine installation before launching."); return
             }
+            let performance = self.performance
             let prepared = await Task.detached {
-                await PhoenixGameLaunch.prepare(wine: wine, bootstrapWine: bootstrapWine, report: { message in
+                await PhoenixGameLaunch.prepare(wine: wine, bootstrapWine: bootstrapWine, performance: performance, report: { message in
                     Task { @MainActor in report?(message) }
                 })
             }.value
@@ -222,7 +248,7 @@ import CryptoKit
                   let gameToken = PhoenixGameLaunch.token(from: launchData, response: launchResponse) else {
                 finish("Phoenix did not issue a game session. Check account approval or two-factor requirements on its website."); return
             }
-            gamePID = try PhoenixGameLaunch.start(gameToken: gameToken, username: username, wine: wine)
+            gamePID = try PhoenixGameLaunch.start(gameToken: gameToken, username: username, wine: wine, graphicsOverrides: graphicsOverrides, performance: performance)
             self.report?("Phoenix is starting…")
             try await Task.sleep(nanoseconds: 10_000_000_000)
             if PhoenixGameLaunch.running { finish("Phoenix game process is running.") }
@@ -233,6 +259,7 @@ import CryptoKit
     }
 
     private func finish(_ message: String) {
+        launching = false
         timeout?.cancel(); timeout = nil; listener?.cancel(); listener = nil
         for connection in connections.values { connection.cancel() }; connections.removeAll()
         working = false; state = ""; report?(message); report = nil

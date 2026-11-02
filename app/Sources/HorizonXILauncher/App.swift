@@ -22,6 +22,7 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         watchSleep()
+        PhoenixWindowMemory.shared.start()
         DispatchQueue.main.async { Self.recenterOffscreenWindows() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             guard !SingleInstance.terminating else { return }
@@ -286,6 +287,7 @@ struct ContentView: View {
     @StateObject private var local = LocalServer()
     @StateObject private var feeds = ServerFeeds()
     /// One for the whole process (see Updater.shared), not one per window.
+    @ObservedObject private var phoenixSetup = PhoenixSetup.shared
     @ObservedObject private var updater = Updater.shared
     @StateObject private var ra = RAProgress()
     /// One timer for the life of the view: built inline in `body`, which re-evaluates on every
@@ -393,7 +395,13 @@ struct ContentView: View {
     private var missingDrive: String? { checks.first { $0.state == .bad && $0.drive != nil }?.drive }
 
     /// The main button: the next thing that has to happen. See PrimaryAction.swift.
-    private var primary: PrimaryDecision { Primary.decide(primaryInputs) }
+    private var primary: PrimaryDecision {
+        if store.selected?.name == "Phoenix XI", phoenixSetup.launching {
+            return .init(action: .serverInfo, label: "Launching…", enabled: false,
+                         reason: "Phoenix sign-in received. Preparing the game…")
+        }
+        return Primary.decide(primaryInputs)
+    }
 
     private var primaryInputs: PrimaryInputs {
         var x = PrimaryInputs()
@@ -1207,8 +1215,7 @@ struct ContentView: View {
     private var graphicsSheet: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Graphics").font(.headline)
-            Text("Applied to \(store.selected?.bootProfile ?? "the boot profile") the next time "
-                 + "you press Play.")
+            Text("Remembered across servers. Takes effect the next time you launch the game.")
                 .font(.system(size: 12)).foregroundStyle(Vana.muted)
 
             Picker("Resolution", selection: Binding(
@@ -1222,10 +1229,10 @@ struct ContentView: View {
                 }
             }
             .help("World rendering size. Higher values look sharper and use more GPU power.")
-            Picker("Texture resolution", selection: $graphics.textureResolution) {
+            Picker("Background resolution", selection: $graphics.textureResolution) {
                 ForEach([512, 1024, 2048, 4096], id: \.self) { Text(String($0)).tag($0) }
             }
-            .help("Detail of world textures. Higher values use more graphics memory.")
+            .help("Resolution of the 3D background render buffer. Higher values look sharper and use more graphics memory.")
             Picker("Mip mapping", selection: $graphics.mipMapping) {
                 ForEach(GraphicsSettings.mipMappingChoices, id: \.1) { Text($0.0).tag($0.1) }
             }
@@ -1277,8 +1284,8 @@ struct ContentView: View {
                 Spacer()
                 Button("Cancel") { showGraphics = false }
                 Button("Apply") {
-                    graphics.save(world: store.selected?.name)
-                    if let i = selected, let s = store.selected {
+                    graphics.saveShared()
+                    if let i = selected, let s = store.selected, s.name != "Phoenix XI" {
                         Credentials.ensureProfile(s.bootProfile, in: i, loader: s.loader,
                                                   template: s.bootTemplate, host: s.host, world: s.name)
                         graphics.write(to: i, profile: s.bootProfile)
@@ -1991,7 +1998,7 @@ struct ContentView: View {
         switch a {
         case .serverInfo:
             if s.name == "Phoenix XI" {
-                PhoenixSetup.shared.begin(wine: X87Sidecar.patchedWine() ?? selected?.wine, bootstrapWine: selected?.wine) { message in notice = message }
+                PhoenixSetup.shared.begin(wine: X87Sidecar.patchedWine() ?? selected?.wine, bootstrapWine: selected?.wine, graphicsOverrides: GraphicsSettings.load(world: s.name).iniOverrides, performance: selected.map { perf.phoenixPerformance(install: $0, server: s) }) { message in notice = message }
                 return
             }
             if let url = URL(string: s.installURL) { NSWorkspace.shared.open(url) }
@@ -2999,14 +3006,12 @@ struct ContentView: View {
         // A world may need a different renderer than the global preference (Gaia XI: DXVK kills
         // its client, OpenGL boots it). Applied here rather than by mutating the user's setting,
         // so switching worlds never silently rewrites what they chose.
-        var effective = perf
-        if !server.msync, effective.msync {
-            effective.msync = false
+        let effective = perf.forServer(server)
+        if !server.msync, perf.msync {
             r.appendLine("i  \(server.name) runs with msync off — its client exits about a "
                          + "second after login with it on.")
         }
         if let pinned = server.renderer, pinned != perf.renderer {
-            effective.renderer = pinned
             r.appendLine("i  \(server.name) is pinned to the \(pinned.title) renderer "
                          + "(your setting, \(perf.renderer.title), is left alone). "
                          + "Clear it in the server's settings to override.")
@@ -3260,15 +3265,12 @@ struct ContentView: View {
         if left != playWarnings { playWarnings = left }
     }
 
-    /// Open the panel on whatever the profile actually says, not on this app's last write —
-    /// the boot .ini is a plain text file the user may well have edited by hand.
+    /// Show the shared applied choice across servers. Until the first shared Apply,
+    /// preserve the selected profile's existing settings, including hand edits.
     private func openGraphics() {
-        // Prefer what the profile actually says; fall back to this world's stored value, not
-        // to a value some other world last wrote. A key the profile lacks, or holds a value the
-        // game does not have (an older build's 0018 = 4), shows the stored value.
         if let s = store.selected {
             graphics = GraphicsSettings.load(world: s.name)
-            if let i = active, let onDisk = GraphicsSettings.read(from: i, profile: s.bootProfile, fallback: graphics) {
+            if s.name != "Phoenix XI", GraphicsSettings.shared == nil, let i = active, let onDisk = GraphicsSettings.read(from: i, profile: s.bootProfile, fallback: graphics) {
                 graphics = onDisk
             }
         }

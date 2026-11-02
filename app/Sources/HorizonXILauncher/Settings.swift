@@ -82,6 +82,34 @@ struct PerfSettings: Codable {
     /// drawing correctly, so it is the default; Vulkan and Classic are fallbacks.
     var renderer: Renderer = .metal
 
+    /// One policy for every server, including integrations with their own launch path.
+    func forServer(_ server: Server) -> PerfSettings {
+        var effective = self
+        if !server.msync { effective.msync = false }
+        if let renderer = server.renderer { effective.renderer = renderer }
+        return effective
+    }
+
+    func phoenixPerformance(install: Install, server: Server) -> PhoenixPerformance {
+        let effective = forServer(server)
+        let override = ProcessInfo.processInfo.environment["FFXI_ON_MAC_X87"]
+        let broken = X87Sidecar.coopBinary().map { X87Guard.isBroken(sidecar: $0) } ?? false
+        let x87 = X87Guard.enabled(worldAllows: server.x87, override: override, brokenHere: broken)
+            && X87Sidecar.patchedWine() != nil
+        let graphics = GraphicsSettings.load(world: server.name)
+        var env = effective.environment(for: install, x87: x87, world: server.name,
+                                        gameWine: X87Sidecar.patchedWine() != nil,
+                                        gameSize: .init(width: graphics.width, height: graphics.height))
+        // A shared profile is never used for Phoenix's cache or runtime state.
+        env["WINEPREFIX"] = PhoenixGameLaunch.prefix.path
+        var dlls: [String: URL] = [:]
+        if let d3d8 = Bundle.main.url(forResource: "d3d8to9", withExtension: "dll") { dlls["d3d8.dll"] = d3d8 }
+        if let d3d9 = Bundle.main.url(forResource: "dxvk-1.10.3-x32-d3d9-horizonxi", withExtension: "dll") { dlls["d3d9.dll"] = d3d9 }
+        return PhoenixPerformance(environment: env, renderer: effective.renderer.rawValue,
+                                  rendererTitle: effective.renderer.title, dlls: dlls,
+                                  dxvkConfig: RendererSetup.bundledDXVKConfig())
+    }
+
     static let key = "perf.settings"
 
     init() { }

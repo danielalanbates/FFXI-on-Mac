@@ -92,7 +92,7 @@ enum PhoenixGameLaunch {
         } catch { return false }
     }
 
-    static func prepare(wine: URL, bootstrapWine: URL, report: @escaping (String) -> Void) async -> Bool {
+    static func prepare(wine: URL, bootstrapWine: URL, performance: PhoenixPerformance? = nil, report: @escaping (String) -> Void) async -> Bool {
         guard !running else { diagnostic("a Phoenix loader is already running"); return false }
         guard PhoenixInstaller.ready else { diagnostic("client installation is incomplete"); return false }
         guard await ensureProtocolLoader(report: report) else { return false }
@@ -134,7 +134,15 @@ enum PhoenixGameLaunch {
         // Wine versions cannot share a live wineserver. Only this isolated prefix is stopped;
         // no game has been launched in it, and the running-loader guard precedes all maintenance.
         guard stopOwnServer() else { return false }
-        return run(wine, ["wineboot", "-u"])
+        guard run(wine, ["wineboot", "-u"]), stopOwnServer() else { return false }
+        if let performance {
+            report("Preparing Phoenix: \(performance.rendererTitle), shared performance settings…")
+            do { try performance.prepareFiles(prefix: prefix) }
+            catch { report("Phoenix renderer setup failed: \(error.localizedDescription)"); return false }
+            guard run(wine, ["reg", "add", #"HKCU\Software\Wine\Direct3D"#, "/v", "renderer", "/t", "REG_SZ", "/d",
+                             performance.renderer == "vulkan" ? "vulkan" : "gl", "/f"]), stopOwnServer() else { return false }
+        }
+        return true
     }
 
     static func token(from data: Data, response: HTTPURLResponse) -> String? {
@@ -157,7 +165,7 @@ enum PhoenixGameLaunch {
 
     static func windowsPath(_ url: URL) -> String { "Z:" + url.path.replacingOccurrences(of: "/", with: "\\") }
 
-    static func start(gameToken: String, username: String, wine: URL) throws -> pid_t {
+    static func start(gameToken: String, username: String, wine: URL, graphicsOverrides: [String: String] = [:], performance: PhoenixPerformance? = nil) throws -> pid_t {
         guard !running, PhoenixInstaller.ready else { throw PhoenixInstaller.SetupError.extraction }
         let fm = FileManager.default
         let privateDir = root.appendingPathComponent("private")
@@ -193,18 +201,24 @@ enum PhoenixGameLaunch {
             section("ashita.polplugins", ["sandbox": "1", "pivot": "1"])
             section("sandbox.paths", ["ffxi": windowsPath(client.appendingPathComponent("SquareEnix/FINAL FANTASY XI")), "pol": windowsPath(client.appendingPathComponent("SquareEnix/PlayOnlineViewer")), "common": "C:\\Program Files (x86)\\Common Files"])
             section("ffxi.registry", ["0001": "1280", "0002": "720", "0003": "1280", "0004": "720"])
+            if performance?.usesDXVK == true { section("ffxi.direct3d8", ["behaviorflags.fpu_preserve": "1"]) }
+            if !graphicsOverrides.isEmpty { section("ffxi.registry", graphicsOverrides) }
             try text.write(to: client.appendingPathComponent("config/boot/phoenix-mac.ini"), atomically: true, encoding: .utf8)
             try "# Phoenix native launch; no optional addons.\n".write(to: client.appendingPathComponent("scripts/phoenix-mac.txt"), atomically: true, encoding: .utf8)
             try "[settings]\ndebug_log=false\n[overlays]\n0=EraDATs\n[cache]\nenabled=false\n".write(to: client.appendingPathComponent("config/pivot/pivot.ini"), atomically: true, encoding: .utf8)
             let log = privateDir.appendingPathComponent("game-\(UUID().uuidString).log")
             guard fm.createFile(atPath: log.path, contents: nil, attributes: [.posixPermissions: 0o600]) else { throw PhoenixInstaller.SetupError.extraction }
-            var env = environment()
+            var env = performance?.gameEnvironment(prefix: prefix) ?? environment()
             env["PHOENIX_LAUNCH_CONFIG"] = config.path
             // Reuse the launcher's established detached bridge, including a real disk file for
             // output. Foundation ancestry and /dev/null are not the measured working path.
-            let script = "( /bin/sleep 120; /bin/rm -f -- \"$PHOENIX_LAUNCH_CONFIG\" ) >/dev/null 2>&1 & exec \"$@\""
-            guard let pid = Detach.spawn(URL(fileURLWithPath: "/bin/sh"), args: ["-c", script, "phoenix-launch", wine.path,
-                    windowsPath(client.appendingPathComponent("Ashita-cli.exe")), "phoenix-mac.ini"],
+            // Schedule credential cleanup separately, then exec Wine directly. An extra
+            // system-shell exec strips DYLD_* and loses the shared runtime's library paths.
+            guard Detach.spawn(URL(fileURLWithPath: "/bin/sh"),
+                    args: ["-c", "sleep 120; rm -f -- \"$PHOENIX_LAUNCH_CONFIG\""],
+                    env: ["PHOENIX_LAUNCH_CONFIG": config.path], cwd: nil, stdoutPath: nil) != nil,
+                  let pid = Detach.spawn(wine,
+                    args: [windowsPath(client.appendingPathComponent("Ashita-cli.exe")), "phoenix-mac.ini"],
                     env: env, cwd: client, stdoutPath: log.path) else { throw PhoenixInstaller.SetupError.extraction }
             // The injector exits before the resumed loader necessarily reads JSON. A detached,
             // single delayed cleanup preserves the handoff and still runs after this app quits.

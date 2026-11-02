@@ -8,6 +8,6 @@ TEST_OUT="${1:-$HOME/Downloads/FFXI-on-Mac-build/phoenix-selftest}"
 mkdir -p "$TEST_OUT"
 SOURCES="$REPO/app/Sources/HorizonXILauncher"
 swiftc "$SOURCES/PhoenixSetup.swift" "$SOURCES/PhoenixGameLaunch.swift" \
-  "$SOURCES/Detach.swift" "$SOURCES/Bridge.swift" "$REPO/tools/PhoenixSetupSelfTest.swift" \
+  "$SOURCES/PhoenixPerformance.swift" "$SOURCES/Detach.swift" "$SOURCES/Bridge.swift" "$REPO/tools/PhoenixSetupSelfTest.swift" \
   -o "$TEST_OUT/checks"
 PHOENIX_TEST_DIR="$TEST_OUT/fixtures" "$TEST_OUT/checks"

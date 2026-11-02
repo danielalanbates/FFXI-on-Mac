@@ -75,3 +75,32 @@ The 200 remaining stable-manifest differences all belong to `SquareEnix/PlayOnli
 A read-only complete proposed-data check passed: **65,255 manifest entries**, comprising the FFXI game core and the 155-file EraDAT overlay. It found **1,202 replacements** needed (1,112 core plus 90 overlay). Each target is already correct or has a verified staged replacement. The active game/client remains unchanged.
 
 Private continuation helper: `Downloads/ffxi-recovery-20261029/phoenix-lab/apply-staged-core.py`. `--verify-only` performs the above check without modifying the active installation. Normal mode refuses if any Phoenix loader is running, re-verifies before replacement, backs up changed files under `Phoenix/archive/stable-core-<timestamp>`, and writes `stable-core-overlay.json` separately from the legacy base archive receipt. It never kills a client or launches one. Running-client refusal was checked. **Application and a subsequent live game test have not happened.** The next agent must confirm normal game exit before running normal mode. Keep this an explicitly supervised local beta update; the public installer still uses the legacy baseline and needs a maintainable stable-data download integration before public verification.
+
+
+## 2026-11-01 local beta follow-up
+
+The performance update had remained staged while the installed beta used Phoenix's older,
+independent launch path. A selected Metal preference therefore did not configure Phoenix.
+The shared policy now supplies its renderer DLLs, synchronization, x87 environment, DXVK
+configuration and graphics overrides; compatibility exceptions remain authoritative. The
+isolated syswow64 DLLs are backed up before replacement. Files are prepared only while
+Phoenix is idle. No optional addon is introduced.
+
+Read-only inspection of the new Phoenix process confirmed the installed native d3d8/d3d9
+DLLs and MoltenVK loaded together. This establishes the intended renderer path, not a measured
+FPS improvement or a completed in-world acceptance run. The previous run used Wine's built-in
+D3D8/OpenGL; MoltenVK initialization alone was insufficient evidence of DXVK use.
+
+Phoenix bypasses Runner's window monitor. The local beta now samples its sole loader's
+window and saves resize deltas to graphics preferences while it runs, leaving the active
+profile untouched. The next authenticated launch regenerates the profile from those settings.
+Multiple Phoenix loaders are not sampled. The initial frame is the baseline, protecting
+against title-bar/border drift. Resizing back to the initial size restores that choice, and
+Remember window size remains optional. The installed beta passed all 80 graphics checks;
+manual resize/relaunch acceptance is still pending.
+
+Canceling the website approval leaves the loopback listener waiting until its five-minute
+expiry. The follow-up candidate gives a repeated Connect an explicit Open Sign-in Page action,
+a Start New Sign-in action that replaces the old listener/state, and the existing manual
+return-address handoff. No browser session is persisted. UI acceptance of these actions is
+pending; preserve those limits in the PR and public release notes.
