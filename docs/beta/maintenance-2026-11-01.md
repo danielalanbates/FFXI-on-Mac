@@ -154,3 +154,32 @@ The target NPC was not reached, so new audible narration and sequential quest co
 unverified. No hosted addon or bot was tested. Next work remains the collision/first-waypoint
 failure, Phoenix isolated-session command identity, optional approved-addon integration, manual
 sign-in/resize/vendor startup acceptance, and measured server-by-server playability/performance.
+
+
+## Beta 122: route-corner steering checkpoint
+
+VanaGuide PR #40 (commit 4d85b3b) fixes two verified steering defects: skipping nearby mesh
+corners and turning toward the prior vertex on a long segment. The private route replay now
+aims at its first visible corner rather than a shortcut the grid itself marks blocked.
+The full guide offline suite passed 2,137/0, and new near-corner/forward-segment plus existing
+walking regressions passed. The same walking checks also passed against the signed app's
+packaged Lua resources.
+
+The finite strict local retest still failed within 120 seconds, farther along the wall around
+(-16.9, -125.3). No new quest was accepted and no teleport/server nudge/forced completion was
+used. A bounded alternate AutoFollow-axis probe produced more wall bounce and no Z travel;
+that rejected code is archived privately and was not merged. Original axis mapping was
+restored. Raw evidence and the result JSON remain outside Git in the private fixture.
+
+The character exited through guarded /shutdown. Only then were the owned holder and narrator
+stopped; the four private server processes and database exited 0. No hosted addon/bot test
+occurred. Generic narration was running at 20%, but the target NPC was never reached, so no
+new audible acceptance is claimed.
+
+The signed local beta 122 bundles guide core/walk.lua and routing/path.lua from 4d85b3b. Its
+native executable is unchanged from the verified beta 121 build (f4bab55). Signature checks
+and packaged walking tests passed. The Applications app was replaced transactionally while
+no game or Wine process was live, the previous playable beta was archived, and the launcher
+was reopened once in the background. No public binary release. Full collision, sequential
+quest, client-resource alignment, audible narration and server-by-server acceptance remain
+open; do not repeat the unchanged failing scenario as an automatic test loop.
