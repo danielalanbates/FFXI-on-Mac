@@ -471,12 +471,11 @@ final class CompanionState: ObservableObject {
         for root in Self.vanaguideRoots {
             let g = root.appendingPathComponent("guides")
             guard fm.fileExists(atPath: g.path) else { continue }
-            let loaded = GuideParser.loadAll(from: g)
+            let loaded = ClassicSoloGuide.addingReference(to: GuideParser.loadAll(from: g))
             let entries = QuestCatalogue.entries(at: root)
             if !loaded.isEmpty || !entries.isEmpty {
                 zones = WorldMap.load(root: root)
                 guides = (Features.screenReading ? [LogSurvey.guide] : []) + loaded.map { var g = $0; g.name = QuestCatalogue.displayName(g.name); return g }
-                guides = ClassicSoloGuide.addingReference(to: guides)
                 catalogue = entries
                 let references = QuestCatalogue.referenceGuides(catalogue, walkthroughs: QuestCatalogue.walkthroughs(at: root))
                 guides += (QuestCatalogue.jobUnlockGuide(from: references).map { [$0] } ?? []) + references
