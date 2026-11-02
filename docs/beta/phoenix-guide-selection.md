@@ -56,3 +56,32 @@ a local beta and source PR, not verified gameplay or a stable public release.
 
 Copyright (c) 2026 Daniel Bates / Bates LLC. All rights reserved.
 https://batesai.org · help@batesai.org
+
+## Installed beta evidence
+
+- Final immutable code head 8f6b6de compiled in release configuration (166.91 seconds).
+  Swift's default build system reported out/Products/Release via --show-bin-path; the deprecated
+  native build-system option reports a different path and was not the build system used here.
+- All 236 parser/catalogue checks passed against the source assets and again against the
+  installed standalone bundle's assets. All 32 hidden layout scenarios passed, including
+  compact and expanded solo-goal views. The compact rendered solo-goal layout was inspected.
+- Developer ID-signed candidate and installed standalone beta 123 passed deep/strict signature
+  verification. The former standalone beta 112 was archived under Downloads/FFXI-on-Mac-build/
+  archive-apps/Vanaguide-Server-Safe-20261101-200713-67694.app for rollback.
+- The playable launcher remains beta 122, with its existing helper and runtime untouched.
+  Its resolver supports preferring the newer standalone beta. The companion was opened once
+  in the background with Phoenix XI and the shared classic route requested; capture stays idle.
+- Source PR: https://github.com/danielalanbates/FFXI-on-Mac/pull/86 (stacked on
+  phoenix-native-sign-in / PR 84). No public binary release or tag was published.
+
+All logs, fixtures and layout images are private Downloads artifacts, outside this repository.
+The first attempted test command referenced the native-build-system path rather than the
+actual default-build-system output; it launched no test process. The corrected commands above
+completed successfully. No failed code experiment or hosted addon test was introduced.
+
+The bounded running-app observation passed: at 23 seconds and again at 78 seconds after the
+single background launch, progress.world remained Phoenix XI while launcher.lastObservedWorld
+remained HorizonXI. Exactly one installed companion process (PID 67952 during this observation)
+remained running. This exercises the stale-Horizon case beyond the reported 60-second reset;
+restart behavior is additionally covered by offline regression checks. No screenshot capture,
+game command or hosted addon test was used for this observation.
