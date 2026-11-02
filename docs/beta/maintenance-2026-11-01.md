@@ -84,3 +84,9 @@ add-solo-guides-food) contains only README.md as of this checkpoint. There are n
 Lua improvements to incorporate. VanaVoice silent delegate regressions passed: nine ownership,
 12 paused fallback/playback and 352 backlog checks. This did not play speech or prove live
 cutscene narration. The read-only Software Update scan reported no new software available.
+
+
+The sign-in recovery follow-up is assigned local beta build 121 (3.10). This is source/bundle
+metadata only until the signed candidate is installed. It is not a published GitHub release.
+The installed build 120 retains the verified renderer/resize changes while the hosted game
+is active. Updater offline regressions passed on that installed signed beta.
