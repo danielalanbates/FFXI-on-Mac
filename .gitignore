@@ -63,3 +63,7 @@ screen-captures/
 # Private Phoenix login handoffs and local acceptance artifacts.
 **/private/launch-*.json
 **/game-*.log
+
+# Local credential stores are never source artifacts.
+**/CREDENTIALS.md
+**/secrets.json
