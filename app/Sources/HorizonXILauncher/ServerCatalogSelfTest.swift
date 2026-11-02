@@ -34,7 +34,7 @@ extension Headless {
         if let phoenix {
             var x = PrimaryInputs(); x.world = phoenix.name; x.launchUnavailableReason = phoenix.launchUnavailableReason
             let d = Primary.decide(x)
-            check("ready files cannot offer Phoenix Play", d.action == .serverInfo && d.enabled && d.label == "Server Info")
+            check("ready files cannot offer Phoenix Play", d.action == .serverInfo && d.enabled && d.label == "Connect Phoenix (Beta)")
             x.hasInstall = false; x.accountNeeded = true
             check("no install cannot offer unsupported setup or account prompt", Primary.decide(x).action == .serverInfo)
             check("headless fixer cannot bypass pending integration", !PrimaryFixer.isHeadlessFixable(d.action))

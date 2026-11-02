@@ -64,6 +64,14 @@ extension Headless {
         }
         typealias G = GraphicsSettings
 
+        G.max4K.saveShared()
+        check("Apply carries graphics across servers, including local and Phoenix",
+              ["HorizonXI", "Phoenix XI", "Local"].allSatisfy { G.load(world: $0) == .max4K })
+        G.lowSpec.save(world: "HorizonXI")
+        check("legacy per-world settings cannot replace the shared choice", G.load(world: "HorizonXI") == .max4K)
+        d.removeObject(forKey: G.key + ".shared")
+        d.removeObject(forKey: G.key(for: "HorizonXI"))
+
         // MARK: 1. The keys, against Ashita's documentation
         let docURL: URL? = {
             if let p = env["HXI_ASHITA_DOC"] { return URL(fileURLWithPath: p) }
@@ -347,6 +355,23 @@ extension Headless {
         check("a size-only write (the remembered window) changes 0001/0002 and nothing else: 0018 = 4 and 0021 = 0 stay",
               changed(damaged, sizeOnly).map { $0.map { registryKeyOf($0.0) ?? "" }.sorted() } == ["0001", "0002"]
                 && lines(sizeOnly).contains("0018 = 4") && lines(sizeOnly).contains("0021 = 0"))
+        var phoenix = G()
+        phoenix.width = 1280; phoenix.height = 720
+        phoenix.textureResolution = 2048
+        let phoenixResize = PhoenixWindowMemory.resized(phoenix,
+            first: .init(width: 1282, height: 718), last: .init(width: 1602, height: 898))
+        check("Phoenix resize uses the launch-size delta and preserves graphics settings",
+              phoenixResize?.width == 1600 && phoenixResize?.height == 900
+                && phoenixResize?.textureResolution == 2048)
+        check("Phoenix resizing back restores the launch size; undersized windows are ignored",
+              PhoenixWindowMemory.resized(phoenix, first: .init(width: 1280, height: 720),
+                last: .init(width: 1280, height: 720))?.width == 1280
+                && PhoenixWindowMemory.resized(phoenix, first: .init(width: 1280, height: 720),
+                last: .init(width: 300, height: 200)) == nil)
+        phoenix.rememberWindowSize = false
+        check("Phoenix respects Remember window size being disabled",
+              PhoenixWindowMemory.resized(phoenix, first: .init(width: 1280, height: 720),
+                last: .init(width: 1600, height: 900)) == nil)
         let wm = client("windowmemory")
         write(damaged, profileURL(wm))
         d.set(Data(danielJSON.utf8), forKey: G.key(for: "HorizonXI"))

@@ -1465,6 +1465,7 @@ final class Runner: ObservableObject {
         // prefix's DXVK state cache before DXVK reads it. Only with no client running anywhere:
         // a running DXVK appends to that file. See DXVKStateCache.
         if !clientsLive, perf.renderer == .metal { warmDXVKCache(install, exe: gameExe) }
+        GraphicsSettings.shared?.write(to: install, profile: profile)
         Credentials.applyIniOverrides(perf.renderer.iniOverrides, to: install, profile: profile)
         // Launching with Sandbox loaded and its interface bypass off produces the worst failure
         // this project has: a clean login followed by a silent exit, no window, no error. Put it

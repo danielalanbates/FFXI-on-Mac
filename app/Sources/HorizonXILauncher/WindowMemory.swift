@@ -88,10 +88,11 @@ enum WindowMemory {
         // Only a value the user saved for this world is updated. `stored` may be the fallback
         // (the shared value, the defaults, the local world's Low); saving it here would make it
         // this world's own choice, which a new profile is then made with.
-        if var s = GraphicsSettings.stored(forWorld: world) {
+        if var s = GraphicsSettings.shared ?? GraphicsSettings.stored(forWorld: world) {
             s.width = w
             s.height = h
-            s.save(world: world)
+            if GraphicsSettings.shared != nil { s.saveShared() }
+            else { s.save(world: world) }
         }
         return "==> window size remembered for \(world): \(w)x\(h) (was \(old)); next Play opens at that size"
     }

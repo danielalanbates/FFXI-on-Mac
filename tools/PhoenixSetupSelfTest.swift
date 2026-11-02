@@ -1,0 +1,142 @@
+// Copyright (c) 2026 Daniel Bates / Bates LLC. All rights reserved.
+import Foundation
+@main struct Checks {
+    @MainActor static func main() async throws {
+        let state = "fixture-state"
+        func head(_ path: String, _ host: String = "127.0.0.1:23456", _ method: String = "GET") -> String {
+            "\(method) \(path) HTTP/1.1\r\nHost: \(host)\r\n\r\n"
+        }
+        func token(_ value: String) -> String? { PhoenixSetup.callbackToken(value, port: 23456, state: state) }
+        precondition(token(head("/callback?token=fixture&state=fixture-state")) == "fixture")
+        precondition(token(head("/callback?token=fixture&state=wrong")) == nil)
+        precondition(token(head("/callback?token=one&token=two&state=fixture-state")) == nil)
+        precondition(token(head("/callback?token=fixture&state=fixture-state&state=wrong")) == nil)
+        precondition(token(head("/callback?token=fixture&state=fixture-state", "evil.example")) == nil)
+        precondition(token(head("/callback?token=fixture&state=fixture-state", "127.0.0.1:23456", "POST")) == nil)
+        precondition(token(head("/callback?token=%0D%0Ainjection&state=fixture-state")) == nil)
+        precondition(token(head("/callback?token=fixture&state=fixture-state#fragment")) == nil)
+        precondition(token(head("https://evil.example/callback?token=fixture&state=fixture-state")) == nil)
+        precondition(token(head("/callback?token=fixture&state=fixture-state") + String(repeating: "X", count: 17000)) == nil)
+        let good = HTTPURLResponse(url: URL(string: "https://api.phoenix-xi.com/")!, statusCode: 200, httpVersion: nil, headerFields: ["set-auth-token":"fixture-session"])!
+        let bad = HTTPURLResponse(url: good.url!, statusCode: 401, httpVersion: nil, headerFields: ["set-auth-token":"fixture-session"])!
+        precondition(PhoenixSetup.sessionToken(Data(), response: good) == "fixture-session")
+        precondition(PhoenixSetup.sessionToken(Data(), response: bad) == nil)
+        let body = Data(#"{"session":{"token":"body-session"}}"#.utf8)
+        let plain = HTTPURLResponse(url: good.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        precondition(PhoenixSetup.sessionToken(body, response: plain) == "body-session")
+        let shape = PhoenixSetup.shape(["archive":["url":"SECRET_SIGNED_URL","size":123],"files":[["name":"PRIVATE_FILE"]]])
+        let text = String(decoding: try JSONSerialization.data(withJSONObject: shape), as: UTF8.self)
+        precondition(!text.contains("SECRET") && !text.contains("PRIVATE") && !text.contains("123") && text.contains("archive"))
+        let callback = "http://127.0.0.1:23456/callback?token=fixture&state=fixture-state"
+        precondition(PhoenixSetup.manualCallbackToken(callback, port: 23456, state: state) == "fixture")
+        for badURL in [callback.replacingOccurrences(of: "23456", with: "23457"), callback.replacingOccurrences(of: "127.0.0.1", with: "evil.example"), callback + "&token=other", callback + "#fragment", callback.replacingOccurrences(of: "http:", with: "https:")] {
+            precondition(PhoenixSetup.manualCallbackToken(badURL, port: 23456, state: state) == nil)
+        }
+        let sha = String(repeating: "a", count: 64)
+        let valid: [String: Any] = ["archive": ["url": "https://gamefiles.phoenix-xi.com/stable/game.zip", "size": 100, "sha256": sha]]
+        precondition((try? PhoenixInstaller.Archive(valid)) != nil)
+        let relative: [String: Any] = ["archive": ["url": "archive/game-client-v1.zip", "size": 100, "sha256": sha]]
+        let resolved = try PhoenixInstaller.Archive(relative, base: URL(string: "https://gamefiles.phoenix-xi.com/manifest.json"))
+        precondition(resolved.url.absoluteString == "https://gamefiles.phoenix-xi.com/archive/game-client-v1.zip")
+        precondition((try? PhoenixInstaller.Archive(["archive": ["url": "//evil.example/file", "size": 100, "sha256": sha]], base: URL(string: "https://gamefiles.phoenix-xi.com/manifest.json"))) == nil)
+        for badURL in ["https://evilphoenix-xi.com/file", "https://phoenix-xi.com.evil.example/file", "http://gamefiles.phoenix-xi.com/file", "https://user:pass@gamefiles.phoenix-xi.com/file", "https://gamefiles.phoenix-xi.com:444/file"] {
+            precondition((try? PhoenixInstaller.Archive(["archive": ["url": badURL, "size": 100, "sha256": sha]])) == nil)
+        }
+        for badSize: Any in [0, -1, true, 1.5, 2_000_000_000_000] {
+            precondition((try? PhoenixInstaller.Archive(["archive": ["url": "https://gamefiles.phoenix-xi.com/file", "size": badSize, "sha256": sha]])) == nil)
+        }
+        let launch = Data(#"{"data":{"token":"fixture-game-token","expiresAt":"fixture","multiClientAllowed":false}}"#.utf8)
+        precondition(PhoenixGameLaunch.token(from: launch, response: plain) == "fixture-game-token")
+        precondition(PhoenixGameLaunch.token(from: launch, response: bad) == nil)
+        precondition(PhoenixGameLaunch.token(from: Data(#"{"data":{"token":""}}"#.utf8), response: plain) == nil)
+        precondition(PhoenixGameLaunch.token(from: Data(#"{"data":{"token":"bad\nvalue"}}"#.utf8), response: plain) == nil)
+        precondition(PhoenixGameLaunch.windowsPath(URL(fileURLWithPath: "/Volumes/Games Drive/Phoenix")) == "Z:\\Volumes\\Games Drive\\Phoenix")
+        let profile = Data(#"{"data":{"username":"fixture-user","email":"do-not-persist@example.test"}}"#.utf8)
+        precondition(PhoenixGameLaunch.username(from: profile, response: plain) == "fixture-user")
+        precondition(PhoenixGameLaunch.username(from: profile, response: bad) == nil)
+        precondition(PhoenixGameLaunch.username(from: Data(#"{"data":{"username":""}}"#.utf8), response: plain) == nil)
+        precondition(PhoenixGameLaunch.username(from: Data(#"{"data":{"username":"bad\nvalue"}}"#.utf8), response: plain) == nil)
+        let downloads = ProcessInfo.processInfo.environment["PHOENIX_TEST_DIR"].map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads/FFXI-on-Mac-build/phoenix-selftest-fixtures")
+        try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
+        let performanceRoot = downloads.appendingPathComponent("performance-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: performanceRoot) }
+        let system = performanceRoot.appendingPathComponent("prefix/drive_c/windows/syswow64")
+        try FileManager.default.createDirectory(at: system, withIntermediateDirectories: true)
+        let native = performanceRoot.appendingPathComponent("native.dll")
+        let dxvkConfig = performanceRoot.appendingPathComponent("dxvk.conf")
+        try Data("native".utf8).write(to: native)
+        try Data("dxvk".utf8).write(to: dxvkConfig)
+        let original = system.appendingPathComponent("d3d8.dll")
+        try Data("builtin".utf8).write(to: original)
+        let prefix = performanceRoot.appendingPathComponent("prefix")
+        let plan = PhoenixPerformance(environment: ["WINEPREFIX": "/wrong-prefix", "WINEMSYNC": "1",
+            "ROSETTA_X87_PATH": "/fixture/x87", "ROSETTA_DISABLE_AOT": "1",
+            "DYLD_FALLBACK_LIBRARY_PATH": "/fixture/libs", "WINE_DISABLE_NX_COMPAT": "1"],
+            renderer: "metal", rendererTitle: "Metal", dlls: ["d3d8.dll": native, "d3d9.dll": native], dxvkConfig: dxvkConfig)
+        let gameEnv = plan.gameEnvironment(prefix: prefix)
+        precondition(gameEnv["WINEPREFIX"] == prefix.path && gameEnv["WINEMSYNC"] == "1")
+        precondition(gameEnv["ROSETTA_X87_PATH"] == "/fixture/x87" && gameEnv["ROSETTA_DISABLE_AOT"] == nil)
+        precondition(gameEnv["DYLD_FALLBACK_LIBRARY_PATH"] == "/fixture/libs" && gameEnv["WINE_DISABLE_NX_COMPAT"] == "1")
+        precondition(gameEnv["WINEDLLOVERRIDES"] == "mscoree,mshtml=;d3d8,d3d9=n")
+        try plan.prepareFiles(prefix: prefix)
+        try plan.prepareFiles(prefix: prefix)
+        let originalBackup = try Data(contentsOf: prefix.appendingPathComponent("drive_c/dll-backup/phoenix-performance/d3d8.dll"))
+        precondition(String(decoding: originalBackup, as: UTF8.self) == "builtin")
+        precondition(FileManager.default.contentsEqual(atPath: native.path, andPath: original.path))
+        precondition(FileManager.default.contentsEqual(atPath: dxvkConfig.path, andPath: prefix.appendingPathComponent("drive_c/dxvk-cache/dxvk.conf").path))
+        var classic = plan
+        classic.renderer = "openGL"
+        precondition(classic.gameEnvironment(prefix: prefix)["WINEDLLOVERRIDES"] == "mscoree,mshtml=;d3d8,d3d9=b")
+        var missing = plan
+        missing.dlls = [:]
+        var refusedMissing = false
+        do { try missing.prepareFiles(prefix: prefix) } catch { refusedMissing = true }
+        precondition(refusedMissing)
+        print("PASS: isolated Metal files, original backups, fallback and shared performance environment")
+        let vendorProfile = "[ashita.boot]\nfile=old.exe\ncommand=old\nscript=vendor-startup.txt\n[ashita.plugins]\nexample=unchanged\n[ffxi.registry]\n0001=1920\n0002=1080\n[ffxi.direct3d8]\nbehaviorflags.fpu_preserve=0\n"
+        let bootProfile = PhoenixGameLaunch.bootProfile(template: vendorProfile,
+            config: URL(fileURLWithPath: "/fixture/launch.json"),
+            graphicsOverrides: ["0001": "1600", "0002": "900"], usesDXVK: true)
+        precondition(bootProfile.contains("script=vendor-startup.txt"))
+        precondition(bootProfile.contains("[ashita.plugins]\nexample=unchanged"))
+        precondition(bootProfile.contains("file = .\\bootloader\\phoenix-loader.exe"))
+        precondition(bootProfile.contains("command = --json \"Z:\\fixture\\launch.json\""))
+        precondition(bootProfile.contains("0001 = 1600") && bootProfile.contains("0002 = 900"))
+        precondition(bootProfile.contains("behaviorflags.fpu_preserve = 1"))
+        precondition(!bootProfile.contains("phoenix-mac.txt"))
+        print("PASS: vendor startup script and plugin policy preserved with native loader/graphics overrides")
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [FixtureProtocol.self]
+        let file = downloads.appendingPathComponent("archive.part")
+        for (status, bytes, expected, succeeds) in [(200, 4, 4, true), (200, 5, 4, false), (200, 3, 4, false), (403, 4, 4, false)] {
+            FixtureProtocol.status = status; FixtureProtocol.bytes = bytes
+            do {
+                try await PhoenixArchiveDownload.fetch(URLRequest(url: URL(string: "https://gamefiles.phoenix-xi.com/fixture")!), to: file, expected: Int64(expected), configuration: config)
+                precondition(succeeds)
+                let written = try Data(contentsOf: file)
+                precondition(written.count == expected)
+                try FileManager.default.removeItem(at: file)
+            } catch {
+                precondition(!succeeds)
+                precondition(!FileManager.default.fileExists(atPath: file.path))
+            }
+        }
+        print("PASS: callback validation, manual handoff, redaction archive trust/size and launch-token checks")
+
+    }
+}
+
+private final class FixtureProtocol: URLProtocol {
+    static var status = 200
+    static var bytes = 4
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let response = HTTPURLResponse(url: request.url!, statusCode: Self.status, httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(repeating: 65, count: Self.bytes))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}

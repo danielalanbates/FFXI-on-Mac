@@ -147,7 +147,7 @@ struct Server: Codable, Identifiable, Hashable {
     var newsPageURL: String = ""
 
     var launchUnavailableReason: String? {
-        name == "Phoenix XI" ? "Mac login support and Phoenix tool approval are pending." : nil
+        name == "Phoenix XI" ? "Use Connect Phoenix (Beta) for native sign-in, installation and launch." : nil
     }
 
     /// A pure sort shared by the picker, companion world list and offline checks.
@@ -344,9 +344,9 @@ struct Server: Codable, Identifiable, Hashable {
                era: "Treasures of Aht Urhgan · 75 cap · Mac support pending", population: 1110,
                codebase: .landSandBoat,
                installURL: "https://phoenix-xi.com/getting-started", installKind: .website,
-               installNote: "Phoenix's official launcher supports Windows and Linux. Mac login support is pending.",
+               installNote: "Use Connect Phoenix (Beta) to install its official client in a separate folder.",
                accountURL: "https://phoenix-xi.com/register",
-               accountHow: "Create a Phoenix account on their website. Mac login support is pending.",
+               accountHow: "Create and approve your Phoenix account on their website, then use Connect Phoenix (Beta).",
                discordURL: "https://discord.gg/phoenix-xi", maxClients: 1),
         Server(name: "Local server", host: "127.0.0.1", bootProfile: "lsb.ini",
                verified: true,

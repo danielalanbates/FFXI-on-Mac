@@ -217,7 +217,7 @@ enum Credentials {
             // 2026-10-15 got the template's 1920 × 1080 and 4096 textures while Daniel's own saved
             // 1280 × 720 / 512 never reached it, and the 8 GB Mac swapped. Only here, where the
             // file is being made: a profile that exists is the user's, and is not rewritten.
-            if let g = GraphicsSettings.stored(forWorld: world) { text = g.applied(to: text) }
+            if let g = GraphicsSettings.shared ?? GraphicsSettings.stored(forWorld: world) { text = g.applied(to: text) }
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
             if writeFile(text, to: target) {
                 fixBootLoader(profile, in: install, loader: loader)
