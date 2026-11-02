@@ -36,6 +36,7 @@ struct Guide {
     var steps: [GuideStep]
     /// Database reference lists group independent targets; their indices are not route progress.
     var isReference = false
+    var excludedServers: [String] = []
     var server: String? = nil
     var progressID: String? = nil
     var legacyProgressID: String? = nil
@@ -44,10 +45,11 @@ struct Guide {
     var startingLocationLabel = "Starting location"
 
     func available(on world: String) -> Bool {
-        guard let server, !server.isEmpty else { return true }
         func key(_ value: String) -> String {
             value.lowercased().filter { $0.isLetter || $0.isNumber }
         }
+        guard !excludedServers.contains(where: { key($0) == key(world) }) else { return false }
+        guard let server, !server.isEmpty else { return true }
         return key(server) == key(world)
     }
 }

@@ -111,10 +111,17 @@ final class CompanionState: ObservableObject {
     var requestDiscovery: (() -> Void)?
     var discoveryDone: (() -> Void)?
 
-    /// Fill World from the launcher's session file when it names a different one.
+    private var launcherSelection = LauncherWorldSelection(
+        lastWorld: UserDefaults.standard.string(forKey: "launcher.lastObservedWorld"))
+
+    /// Consume a changed launcher selection once; unchanged session data cannot undo a
+    /// server the player selected here, including after restarting the companion.
     func applyLauncherWorld() {
-        guard let w = CharacterDiscovery.launcherWorld(), w != world else { return }
-        selectWorld(w)
+        let target = launcherSelection.observe(CharacterDiscovery.launcherWorld(), current: world)
+        if let observed = launcherSelection.lastWorld {
+            UserDefaults.standard.set(observed, forKey: "launcher.lastObservedWorld")
+        }
+        if let target { selectWorld(target) }
     }
 
     /// Reading just started: use the window title if it is the name, else search the status box.
@@ -193,12 +200,12 @@ final class CompanionState: ObservableObject {
         // for manual reference must not spend CPU loading the recognizer, even after prior use.
         if !Features.screenReading { devMode = false }
         reload()
-        if let w = CharacterDiscovery.launcherWorld(), w != world {
+        applyLauncherWorld()
+        // Test hook: --world <name> picks the server, as the Server list would (for --snapshot).
+        if let w = DevTrace.value("--world") {
             world = w
             character = Self.lastCharacter(on: w)
         }
-        // Test hook: --world <name> picks the server, as the Server list would (for --snapshot).
-        if let w = DevTrace.value("--world") { world = w }
         loadCharacter()
         // A character with nothing recorded starts on Getting started; others on their guides.
         openInitialGuide()
@@ -233,6 +240,7 @@ final class CompanionState: ObservableObject {
     /// Choosing a server switches to the character last played there.
     func selectWorld(_ w: String) {
         guard w != world else { return }
+        currentZone = nil
         world = w
         character = Self.lastCharacter(on: w)
         loadCharacter()
@@ -468,6 +476,7 @@ final class CompanionState: ObservableObject {
             if !loaded.isEmpty || !entries.isEmpty {
                 zones = WorldMap.load(root: root)
                 guides = (Features.screenReading ? [LogSurvey.guide] : []) + loaded.map { var g = $0; g.name = QuestCatalogue.displayName(g.name); return g }
+                guides = ClassicSoloGuide.addingReference(to: guides)
                 catalogue = entries
                 let references = QuestCatalogue.referenceGuides(catalogue, walkthroughs: QuestCatalogue.walkthroughs(at: root))
                 guides += (QuestCatalogue.jobUnlockGuide(from: references).map { [$0] } ?? []) + references

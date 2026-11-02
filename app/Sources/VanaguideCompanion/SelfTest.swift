@@ -123,6 +123,20 @@ enum CompanionSelfTest {
                 checks.append(("every actual leveling step has two separate goals", solo.steps.filter { $0.tags["LV"] != nil }.allSatisfy { $0.goals.count == 2 }))
                 checks.append(("unified guide retains 30 steps for each origin", ["Windurst", "San d'Oria", "Bastok"].allSatisfy { solo.activeStepIndices(startingLocation: $0).count == 30 }))
             }
+            let sharedLibrary = ClassicSoloGuide.addingReference(to: library)
+            let phoenix = sharedLibrary.filter { $0.available(on: "Phoenix XI") }
+            let classic = phoenix.first { $0.name == "Solo Guide - Classic FFXI" }
+            checks.append(("Phoenix has the complete solo EXP/gil route for each starting city",
+                           ["Windurst", "San d'Oria", "Bastok"].allSatisfy {
+                               classic?.activeStepIndices(startingLocation: $0).count == 30
+                           }))
+            checks.append(("Phoenix retains starting and support-job basics",
+                           phoenix.contains { $0.name == "Starting out" } && phoenix.contains { $0.name == "Support jobs" }))
+            checks.append(("Phoenix solo gil materials are searchable",
+                           GuideSearch.hits(query: "Silk Thread", guides: sharedLibrary, world: "Phoenix XI",
+                                            wiki: WikiState(), zones: WorldMap()).contains {
+                               $0.title.contains("Crawler") || $0.subtitle.contains("Classic FFXI")
+                           }))
             checks.append(("real authored guide library loads", library.count >= 2))
             let support = library.filter { $0.name == "Support jobs" }
             checks.append(("one Support Jobs guide covers both towns", support.count == 1 && !library.contains { $0.name == "Support jobs - Mhaura" }))
@@ -153,6 +167,7 @@ enum CompanionSelfTest {
         }
 
         checks += achievementChecks(guides: guides)
+        checks += worldSelectionChecks()
         checks += screenshotChecks()
         checks += guideProgressChecks()
         if let directory = ProcessInfo.processInfo.environment["VANAGUIDE_TEST_DIRECTORY"] {
