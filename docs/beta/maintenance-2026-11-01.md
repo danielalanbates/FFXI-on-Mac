@@ -90,3 +90,13 @@ The sign-in recovery follow-up is assigned local beta build 121 (3.10). This is 
 metadata only until the signed candidate is installed. It is not a published GitHub release.
 The installed build 120 retains the verified renderer/resize changes while the hosted game
 is active. Updater offline regressions passed on that installed signed beta.
+
+
+Normal logout limitation found during this pass: the installed `--send-ashita /shutdown
+--world "Phoenix XI"` command refused with "no Phoenix XI client is running" while a Phoenix
+loader was active. No command was sent. The general resolver does not yet bind the isolated
+JSON-auth launch to its world/prefix. Do not bypass this with process termination, another
+world's prefix, installing a plugin into a hosted client, or unverified command injection.
+Keep the hosted game and current Applications beta running; defer local-client tests and app
+replacement until normal shutdown is possible. A future fix needs explicit isolated-session
+identity rather than inferring the endpoint from a deleted short-lived credential JSON.
