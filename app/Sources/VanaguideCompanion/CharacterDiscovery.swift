@@ -67,7 +67,23 @@ enum CharacterDiscovery {
     /// the worlds it ships with (Servers.swift `Server.builtins`, ordered; change both together).
     static func launcherWorlds(at url: URL = sessionURL) -> [String] {
         if let w = session(url)["worlds"] as? [String], !w.isEmpty { return w }
-        return ["HorizonXI", "CatsEyeXI", "AscensionXI", "Vanadreams", "DriftwoodXI", "PegasusXI", "MistXI",
+        return ["HorizonXI", "Phoenix XI", "CatsEyeXI", "AscensionXI", "Vanadreams", "DriftwoodXI", "PegasusXI", "MistXI",
                 "Moghouse XI", "LevelDown 99", "Scythe", "Olympus XI", "Legendary Relaunch", "Local server"]
+    }
+}
+
+/// Tracks the launcher's world value, rather than treating its stale session file as a
+/// command on every timer tick. Catalogue-only rewrites do not change this value.
+struct LauncherWorldSelection {
+    var lastWorld: String?
+
+    mutating func observe(_ world: String?, current: String) -> String? {
+        guard let world, !world.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let previous = lastWorld
+        lastWorld = world
+        guard world != current, previous != world else { return nil }
+        // Migration: an existing manual selection wins over an unobserved old session.
+        guard previous != nil || current.isEmpty else { return nil }
+        return world
     }
 }
