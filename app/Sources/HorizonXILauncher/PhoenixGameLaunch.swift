@@ -165,6 +165,39 @@ enum PhoenixGameLaunch {
 
     static func windowsPath(_ url: URL) -> String { "Z:" + url.path.replacingOccurrences(of: "/", with: "\\") }
 
+    /// Build from the official template without replacing its startup script or plugin policy.
+    /// Pure text transformation: fixture tests never launch a client or touch a hosted install.
+    static func bootProfile(template: String, config: URL, graphicsOverrides: [String: String] = [:],
+                            usesDXVK: Bool = false) -> String {
+        var text = template
+        func section(_ name: String, _ values: [String: String]) {
+            // Replace only keys in this section; leave the remainder of the vendor template intact.
+            var lines = text.components(separatedBy: .newlines)
+            let header = "[\(name)]"
+            guard let first = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == header }) else {
+                text += "\n\(header)\n" + values.keys.sorted().map { "\($0) = \(values[$0]!)" }.joined(separator: "\n") + "\n"; return
+            }
+            let end = lines.indices.dropFirst(first + 1).first { lines[$0].hasPrefix("[") } ?? lines.count
+            var used = Set<String>()
+            for index in (first + 1)..<end {
+                let key = lines[index].split(separator: "=", maxSplits: 1).first.map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+                if let value = values[key] { lines[index] = "\(key) = \(value)"; used.insert(key) }
+            }
+            lines.insert(contentsOf: values.keys.sorted().filter { !used.contains($0) }.map { "\($0) = \(values[$0]!)" }, at: end)
+            text = lines.joined(separator: "\n")
+        }
+        section("ashita.launcher", ["name": "Phoenix XI on Mac"])
+        // Keep the vendor template's startup script. Replacing it with an empty Mac
+        // script disabled Phoenix's own Thirdparty, Addons and Screenshot bootstrap.
+        section("ashita.boot", ["file": ".\\bootloader\\phoenix-loader.exe", "command": "--json \"\(windowsPath(config))\""])
+        section("ashita.polplugins", ["sandbox": "1", "pivot": "1"])
+        section("sandbox.paths", ["ffxi": windowsPath(client.appendingPathComponent("SquareEnix/FINAL FANTASY XI")), "pol": windowsPath(client.appendingPathComponent("SquareEnix/PlayOnlineViewer")), "common": "C:\\Program Files (x86)\\Common Files"])
+        section("ffxi.registry", ["0001": "1280", "0002": "720", "0003": "1280", "0004": "720"])
+        if usesDXVK { section("ffxi.direct3d8", ["behaviorflags.fpu_preserve": "1"]) }
+        if !graphicsOverrides.isEmpty { section("ffxi.registry", graphicsOverrides) }
+        return text
+    }
+
     static func start(gameToken: String, username: String, wine: URL, graphicsOverrides: [String: String] = [:], performance: PhoenixPerformance? = nil) throws -> pid_t {
         guard !running, PhoenixInstaller.ready else { throw PhoenixInstaller.SetupError.extraction }
         let fm = FileManager.default
@@ -177,34 +210,11 @@ enum PhoenixGameLaunch {
         try fm.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
         guard fm.createFile(atPath: config.path, contents: try JSONSerialization.data(withJSONObject: payload), attributes: [.posixPermissions: 0o600]) else { throw PhoenixInstaller.SetupError.extraction }
         do {
-            // Start from the vendor's installed profile, preserving its documented graphics defaults.
             let template = client.appendingPathComponent("config/boot/example-privateserver.ini")
-            var text = try String(contentsOf: template, encoding: .utf8)
-            func section(_ name: String, _ values: [String: String]) {
-                // Replace only keys in this section; leave the remainder of the vendor template intact.
-                var lines = text.components(separatedBy: .newlines)
-                let header = "[\(name)]"
-                guard let first = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == header }) else {
-                    text += "\n\(header)\n" + values.keys.sorted().map { "\($0) = \(values[$0]!)" }.joined(separator: "\n") + "\n"; return
-                }
-                let end = lines.indices.dropFirst(first + 1).first { lines[$0].hasPrefix("[") } ?? lines.count
-                var used = Set<String>()
-                for index in (first + 1)..<end {
-                    let key = lines[index].split(separator: "=", maxSplits: 1).first.map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
-                    if let value = values[key] { lines[index] = "\(key) = \(value)"; used.insert(key) }
-                }
-                lines.insert(contentsOf: values.keys.sorted().filter { !used.contains($0) }.map { "\($0) = \(values[$0]!)" }, at: end)
-                text = lines.joined(separator: "\n")
-            }
-            section("ashita.launcher", ["name": "Phoenix XI on Mac"])
-            section("ashita.boot", ["file": ".\\bootloader\\phoenix-loader.exe", "command": "--json \"\(windowsPath(config))\"", "script": "phoenix-mac.txt"])
-            section("ashita.polplugins", ["sandbox": "1", "pivot": "1"])
-            section("sandbox.paths", ["ffxi": windowsPath(client.appendingPathComponent("SquareEnix/FINAL FANTASY XI")), "pol": windowsPath(client.appendingPathComponent("SquareEnix/PlayOnlineViewer")), "common": "C:\\Program Files (x86)\\Common Files"])
-            section("ffxi.registry", ["0001": "1280", "0002": "720", "0003": "1280", "0004": "720"])
-            if performance?.usesDXVK == true { section("ffxi.direct3d8", ["behaviorflags.fpu_preserve": "1"]) }
-            if !graphicsOverrides.isEmpty { section("ffxi.registry", graphicsOverrides) }
+            let text = Self.bootProfile(template: try String(contentsOf: template, encoding: .utf8),
+                                        config: config, graphicsOverrides: graphicsOverrides,
+                                        usesDXVK: performance?.usesDXVK == true)
             try text.write(to: client.appendingPathComponent("config/boot/phoenix-mac.ini"), atomically: true, encoding: .utf8)
-            try "# Phoenix native launch; no optional addons.\n".write(to: client.appendingPathComponent("scripts/phoenix-mac.txt"), atomically: true, encoding: .utf8)
             try "[settings]\ndebug_log=false\n[overlays]\n0=EraDATs\n[cache]\nenabled=false\n".write(to: client.appendingPathComponent("config/pivot/pivot.ini"), atomically: true, encoding: .utf8)
             let log = privateDir.appendingPathComponent("game-\(UUID().uuidString).log")
             guard fm.createFile(atPath: log.path, contents: nil, attributes: [.posixPermissions: 0o600]) else { throw PhoenixInstaller.SetupError.extraction }

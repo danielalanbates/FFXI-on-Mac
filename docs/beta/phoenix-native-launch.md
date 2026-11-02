@@ -104,3 +104,14 @@ expiry. The follow-up candidate gives a repeated Connect an explicit Open Sign-i
 a Start New Sign-in action that replaces the old listener/state, and the existing manual
 return-address handoff. No browser session is persisted. UI acceptance of these actions is
 pending; preserve those limits in the PR and public release notes.
+
+
+### Vendor startup script preservation
+
+The Mac profile previously replaced the vendor's `ashita.boot.script = default.txt` with
+an empty `phoenix-mac.txt`. That suppressed Phoenix's own baseline `/load thirdparty`,
+`/load addons` and `/load screenshot`, not just optional Lua addons. The follow-up preserves
+the vendor template's script and does not overwrite it. It does not add VanaGuide/VanaVoice
+or load experimental addons. Official startup initialization and the pending optional-addon
+management integration are separate. No addon test is performed on the hosted server.
+The active game/profile is untouched; this applies on a subsequent normal launch.

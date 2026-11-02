@@ -93,6 +93,19 @@ import Foundation
         do { try missing.prepareFiles(prefix: prefix) } catch { refusedMissing = true }
         precondition(refusedMissing)
         print("PASS: isolated Metal files, original backups, fallback and shared performance environment")
+        let vendorProfile = "[ashita.boot]\nfile=old.exe\ncommand=old\nscript=vendor-startup.txt\n[ashita.plugins]\nexample=unchanged\n[ffxi.registry]\n0001=1920\n0002=1080\n[ffxi.direct3d8]\nbehaviorflags.fpu_preserve=0\n"
+        let bootProfile = PhoenixGameLaunch.bootProfile(template: vendorProfile,
+            config: URL(fileURLWithPath: "/fixture/launch.json"),
+            graphicsOverrides: ["0001": "1600", "0002": "900"], usesDXVK: true)
+        precondition(bootProfile.contains("script=vendor-startup.txt"))
+        precondition(bootProfile.contains("[ashita.plugins]\nexample=unchanged"))
+        precondition(bootProfile.contains("file = .\\bootloader\\phoenix-loader.exe"))
+        precondition(bootProfile.contains("command = --json \"Z:\\fixture\\launch.json\""))
+        precondition(bootProfile.contains("0001 = 1600") && bootProfile.contains("0002 = 900"))
+        precondition(bootProfile.contains("behaviorflags.fpu_preserve = 1"))
+        precondition(!bootProfile.contains("phoenix-mac.txt"))
+        print("PASS: vendor startup script and plugin policy preserved with native loader/graphics overrides")
+
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [FixtureProtocol.self]
         let file = downloads.appendingPathComponent("archive.part")

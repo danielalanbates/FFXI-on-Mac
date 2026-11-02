@@ -105,7 +105,7 @@ identity rather than inferring the endpoint from a deleted short-lived credentia
 ## Phoenix addon-policy correction
 
 The live official approved-addons page was rechecked on 2026-11-01 via its public website
-bundle. It contains 465 listed tool entries (including Ashita, Windower and standalone
+bundle. It contains hundreds of listed tool entries (including Ashita, Windower and standalone
 programs). Examples include Affinity, AHColors, allmaps, Ashitacast and Balloon. Phoenix does
 not ban all addons. Its conditions cover particular settings, and modified tools need review.
 
@@ -118,3 +118,12 @@ approved by the existence of this list, nor does a screenshot-only app receive a
 exemption. No hosted addon test was performed.
 
 Primary source: https://phoenix-xi.com/approved-addons.
+
+
+A concrete startup defect was also identified: the Mac-specific profile selected an empty
+script, suppressing the vendor's baseline Thirdparty/Addons/Screenshot plugin loads. Beta 121
+preserves the script specified by the official template instead of writing/selecting that
+empty script. The vendor script remains user/vendor-owned; no custom guide or narrator addon
+is added. This is separate from importing the optional approved-addon catalog. It needs
+normal next-launch acceptance; no hosted addon test was run. An in-progress owned build was
+canceled before this source change; rebuild from the now-frozen source before staging.
