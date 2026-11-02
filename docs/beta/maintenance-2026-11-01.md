@@ -100,3 +100,21 @@ world's prefix, installing a plugin into a hosted client, or unverified command 
 Keep the hosted game and current Applications beta running; defer local-client tests and app
 replacement until normal shutdown is possible. A future fix needs explicit isolated-session
 identity rather than inferring the endpoint from a deleted short-lived credential JSON.
+
+
+## Phoenix addon-policy correction
+
+The live official approved-addons page was rechecked on 2026-11-01 via its public website
+bundle. It contains 465 listed tool entries (including Ashita, Windower and standalone
+programs). Examples include Affinity, AHColors, allmaps, Ashitacast and Balloon. Phoenix does
+not ban all addons. Its conditions cover particular settings, and modified tools need review.
+
+The launcher's currently empty Phoenix allowlist is an unimplemented integration placeholder,
+not a representation of an empty official list. Do not tell users that no addons are allowed.
+Next policy work should preserve official platform distinctions and item-specific conditions,
+and wire approved-addon management into the isolated Phoenix launch path. A generic name-only
+import of every entry would lose those distinctions. VanaGuide/VanaVoice are not implied to be
+approved by the existence of this list, nor does a screenshot-only app receive an automatic
+exemption. No hosted addon test was performed.
+
+Primary source: https://phoenix-xi.com/approved-addons.
