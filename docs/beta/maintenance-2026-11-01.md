@@ -127,3 +127,30 @@ empty script. The vendor script remains user/vendor-owned; no custom guide or na
 is added. This is separate from importing the optional approved-addon catalog. It needs
 normal next-launch acceptance; no hosted addon test was run. An in-progress owned build was
 canceled before this source change; rebuild from the now-frozen source before staging.
+
+
+## Completed beta 121 checkpoint
+
+Immutable launcher source f4bab55 compiled successfully (455 seconds). The Developer ID-signed
+candidate passed strict/deep signature verification, all 80 graphics checks, and performance
+checks. It was installed transactionally in Applications after normal local-game shutdown;
+previous apps were archived in Downloads. The launcher was reopened once in the background.
+The bundled guide navigation diagnostic asset additionally matches vanaguide f02ff02, which
+preserves fractional grid sizes in status output; it was re-signed and verified after copying.
+No public binary release was published. Existing unrelated party-guide drafts remain unmodified.
+
+The hosted Phoenix session exited before the private fixture was started. One isolated client
+reached the loopback world with the local-only guide, cmdpipe and voice addons. A private
+screenshot confirmed the textured scene, guide UI, direction arrow and ground route line.
+Strict movement toward the second authored NPC acceptance step failed at 120 seconds near
+the same Port San d'Oria wall. No arrival, new quest acceptance, teleport, server nudge or
+forced completion occurred. The actual file header was 0.5-yalm; its 1-yalm UI label was a
+rounding bug, now fixed in diagnostic output. The failed file and raw screenshot are archived
+privately. Do not claim the center-only navigation experiment succeeded.
+
+One guarded /shutdown ended the local client. Then only the owned fixture holder and generic
+20%-volume narrator were stopped; all four server processes and the private database exited 0.
+The target NPC was not reached, so new audible narration and sequential quest completion remain
+unverified. No hosted addon or bot was tested. Next work remains the collision/first-waypoint
+failure, Phoenix isolated-session command identity, optional approved-addon integration, manual
+sign-in/resize/vendor startup acceptance, and measured server-by-server playability/performance.
