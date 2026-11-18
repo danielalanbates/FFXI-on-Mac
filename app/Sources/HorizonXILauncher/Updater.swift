@@ -27,7 +27,7 @@ import Security
 /// by short version alone, so no 3.9 build is ever offered v3.9.
 ///
 /// Ours means the staged app satisfies `UpdateRules.requirement` (Apple-anchored, this bundle id,
-/// this team), passes Gatekeeper (notarized), and carries the version and build the release
+/// this team) and carries the version and build the release
 /// names. An ad-hoc or other-team build of the launcher never checks at all.
 ///
 /// Restart hands over to `apply-update.sh`, started detached so it survives this process. It
@@ -277,7 +277,7 @@ final class Updater: ObservableObject {
 
     /// Only a downloaded and verified copy is ever suggested. A copy that can't replace itself
     /// gets the Download link; it still stages first (in the work dir, which is always
-    /// writable), so a release Gatekeeper would block is never offered there either.
+    /// writable), so a release that fails verification is never offered there either.
     private func offer(_ release: UpdateRelease) {
         guard UpdateWork.canSelfUpdate else {
             UpdateWork.note("\(release.tag) verified; this copy can't replace itself")
@@ -792,8 +792,9 @@ enum UpdateWork {
         return dest
     }
 
-    /// Accept only this project's notarized build, at exactly the version (and build) the release
-    /// names. Reads Info.plist directly: `Bundle(url:)` caches and can return a stale copy.
+    /// Accept only this project's signed build, at exactly the version (and build) the release
+    /// names. Releases stopped being notarized with 3.11 (no Apple developer membership), so
+    /// Gatekeeper is no longer asked: the pinned signing requirement and GitHub's digest decide. Reads Info.plist directly: `Bundle(url:)` caches and can return a stale copy.
     static func verify(app: URL, release r: UpdateRelease) throws {
         guard let info = NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist")) as? [String: Any],
               info["CFBundleIdentifier"] as? String == UpdateRules.bundleID else {
@@ -813,12 +814,6 @@ enum UpdateWork {
             throw UpdateRules.isRefusal(codesign: sig)
                 ? UpdateFailure.rejected("signature does not meet the release requirement")
                 : UpdateFailure.transient("codesign did not finish (\(sig))")
-        }
-        let gk = run("/usr/sbin/spctl", ["-a", "-t", "execute", app.path], timeout: 180)
-        guard gk == 0 else {
-            throw UpdateRules.isRefusal(spctl: gk)
-                ? UpdateFailure.rejected("Gatekeeper rejected it (not notarized?)")
-                : UpdateFailure.transient("spctl did not finish (\(gk))")
         }
     }
 

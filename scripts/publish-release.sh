@@ -79,8 +79,12 @@ need "release notes given ($notes)" "[[ -s '$notes' ]]"
 
 # --- the image and the app inside it ---------------------------------------------------------
 print "disk image"
-need "disk image is stapled" "/usr/bin/xcrun stapler validate '$DMG'"
-need "disk image passes Gatekeeper" "/usr/sbin/spctl -a -t open --context context:primary-signature '$DMG'"
+if [[ -z "${HXI_UNNOTARIZED:-}" ]]; then
+  need "disk image is stapled" "/usr/bin/xcrun stapler validate '$DMG'"
+  need "disk image passes Gatekeeper" "/usr/sbin/spctl -a -t open --context context:primary-signature '$DMG'"
+else
+  print "  skip notarization checks (HXI_UNNOTARIZED)"
+fi
 mkdir -p "$MNT"
 if ! /usr/bin/hdiutil attach "$DMG" -nobrowse -readonly -noautoopen -mountpoint "$MNT" -quiet < /dev/null; then
   bad "disk image mounts"; print "$fails check(s) failed"; exit 1
@@ -98,8 +102,12 @@ need "CFBundleVersion is $BUILD" "[[ \$(/usr/bin/plutil -extract CFBundleVersion
 need "signature meets the updater's pinned requirement" "/usr/bin/codesign --verify --strict --deep -R '=$REQ' '$APP'"
 team="$(/usr/bin/codesign -dv --verbose=2 "$APP" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
 need "TeamIdentifier is $TEAM (got ${team:-none})" "[[ '$team' == '$TEAM' ]]"
-need "app is stapled" "/usr/bin/xcrun stapler validate '$APP'"
-need "app passes Gatekeeper (notarized)" "/usr/sbin/spctl -a -t execute '$APP'"
+if [[ -z "${HXI_UNNOTARIZED:-}" ]]; then
+  need "app is stapled" "/usr/bin/xcrun stapler validate '$APP'"
+  need "app passes Gatekeeper (notarized)" "/usr/sbin/spctl -a -t execute '$APP'"
+else
+  print "  skip notarization checks (HXI_UNNOTARIZED)"
+fi
 # Only a binary that has the test is run: an older one would not know the flag.
 if /usr/bin/grep -q -- "--selftest-updater" "$APP/Contents/MacOS/FFXI-on-Mac"; then
   need "the new updater stages this image (--selftest-updater --dmg)" \

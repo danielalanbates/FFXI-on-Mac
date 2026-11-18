@@ -48,6 +48,17 @@ app copied back out of the image. It lives only in Downloads under `horizonxi-wo
 the GitHub v3.9 asset remains the earlier unnotarized download. This checks the release pipeline,
 not the gameplay stability gates above.
 
+## From 3.11: releases are not notarized (Daniel, 2026-11-18)
+
+Daniel is no longer in the Apple Developer Program, so `notarytool` answers HTTP 403 and the
+paragraphs above about notarization are history. Package and publish with `HXI_UNNOTARIZED=1`
+(both scripts): the app and image are still Developer ID signed. Consequences: 3.10 and older
+clients reject 3.11 in their own updater (they require Gatekeeper), so their users download the
+image by hand; a first open needs System Settings → Privacy & Security → Open Anyway; and from
+3.11 the updater no longer asks Gatekeeper (`Updater.verify`: pinned signing requirement plus
+GitHub's digest). The Developer ID certificate has an expiry date; after it, signing needs a
+new plan.
+
 ## The local .app is a different thing from the release
 `/Applications/FFXI-on-Mac.app` must stay playable at ALL times — Daniel plays on it
 during development. It tracks the working tree: rebuild and reinstall it

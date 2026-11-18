@@ -5,8 +5,8 @@ tells you when there is something else to press.
 
 ## The short version
 
-1. **Drag *FFXI on Mac* into your Applications folder** and open it. It is signed and notarized
-   by Apple, so it opens with no warning.
+1. **Drag *FFXI on Mac* into your Applications folder** and open it.
+   macOS asks before the first open because the app is signed but not notarized by Apple: open it once, then allow it under **System Settings → Privacy & Security → Open Anyway**.
 2. **Pick your world** from the **CHANGE WORLD** menu.
 3. **Press *Setup*** — the big button where PLAY will be. It asks where to put everything first:
    choose a folder on any Mac-formatted drive with room (about 28 GB for HorizonXI). Then it

@@ -96,13 +96,19 @@ mkdir -p "$OUT"
 # Notarise and staple the .app BEFORE it goes into the image. Stapling the disk image alone is
 # not enough: an app dragged out of it carries no ticket of its own, so the first launch has to
 # ask Apple over the network and fails closed if the machine is offline.
-echo "notarising the app (a few minutes)"
-ditto -c -k --keepParent "$APP" "$WORK/app.zip"
-xcrun notarytool submit "$WORK/app.zip" --keychain-profile "$PROFILE" --wait
-xcrun stapler staple "$APP"
-xcrun stapler validate "$APP"
+# HXI_UNNOTARIZED=1 (3.11 on: no Apple developer membership) skips Apple's notary service. The
+# app and image are still Developer ID signed; first open then needs "Open Anyway".
+if [[ -z "${HXI_UNNOTARIZED:-}" ]]; then
+  echo "notarising the app (a few minutes)"
+  ditto -c -k --keepParent "$APP" "$WORK/app.zip"
+  xcrun notarytool submit "$WORK/app.zip" --keychain-profile "$PROFILE" --wait
+  xcrun stapler staple "$APP"
+  xcrun stapler validate "$APP"
+  spctl -a -t execute -v "$APP"
+else
+  echo "HXI_UNNOTARIZED: not notarising"
+fi
 codesign --verify --strict --deep "$APP"
-spctl -a -t execute -v "$APP"
 
 mkdir -p "$STAGE"
 ditto "$APP" "$STAGE/FFXI-on-Mac.app"
@@ -128,13 +134,14 @@ hdiutil create -quiet -volname "FFXI on Mac" -srcfolder "$STAGE" -format UDZO "$
 echo "signing the disk image"
 codesign --force -s "$HXI_SIGN_ID" "$CANDIDATE"
 
-echo "submitting to Apple's notary service (a few minutes)"
-xcrun notarytool submit "$CANDIDATE" --keychain-profile "$PROFILE" --wait
-
-xcrun stapler staple "$CANDIDATE"
-xcrun stapler validate "$CANDIDATE"
+if [[ -z "${HXI_UNNOTARIZED:-}" ]]; then
+  echo "submitting to Apple's notary service (a few minutes)"
+  xcrun notarytool submit "$CANDIDATE" --keychain-profile "$PROFILE" --wait
+  xcrun stapler staple "$CANDIDATE"
+  xcrun stapler validate "$CANDIDATE"
+  spctl -a -t open --context context:primary-signature -v "$CANDIDATE"
+fi
 codesign --verify "$CANDIDATE"
-spctl -a -t open --context context:primary-signature -v "$CANDIDATE"
 
 # Keep a failed or interrupted attempt from replacing the last known release image.
 FINAL_STAGE="$OUT/.$NAME.staging-$$"

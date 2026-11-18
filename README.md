@@ -9,7 +9,7 @@ no Terminal.
 
 [![Download](https://img.shields.io/badge/Download-FFXI%20on%20Mac-2ea44f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/danielalanbates/FFXI-on-Mac/releases/latest)
 
-Apple Silicon · macOS 13 or later · signed and notarized by Apple
+Apple Silicon · macOS 13 or later · signed with a Developer ID (not notarized from 3.11)
 
 </div>
 
@@ -22,8 +22,8 @@ It can also run a server on your own Mac if you want to play offline.
 
 ## How to play — the whole thing
 
-1. **Open the `.dmg` and drag *FFXI on Mac* into Applications,** then open it. It is signed and
-   notarized by Apple, so it opens with no warning.
+1. **Open the `.dmg` and drag *FFXI on Mac* into Applications,** then open it.
+   macOS asks before the first open because the app is signed but not notarized by Apple: open it once, then allow it under **System Settings → Privacy & Security → Open Anyway**.
 2. **Pick the world you want** from the **CHANGE WORLD** menu (HorizonXI is first).
 3. **Press *Setup*** — the big button. First it asks where to put everything: choose a folder on
    any Mac-formatted drive with room (about 28 GB for HorizonXI). Wine, its Windows drive, the
@@ -222,7 +222,7 @@ Building it yourself needs only Apple's Command Line Tools:
 
 ```sh
 ./app/bundle.sh ~/Downloads/FFXI-build    # build the .app (an output folder is required)
-./scripts/package.sh                      # signed + notarised .dmg; needs HXI_SIGN_ID, see CONTRIBUTING
+./scripts/package.sh                      # signed .dmg; needs HXI_SIGN_ID (HXI_UNNOTARIZED=1 since 3.11), see CONTRIBUTING
 ```
 
 Tested on: MacBook Pro M1, 8 GB, macOS 27.0.1, athei's patched `wine-cx-26.3.0-1` (*Setup* downloads it
