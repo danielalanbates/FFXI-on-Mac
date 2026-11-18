@@ -19,6 +19,8 @@ New here? Download the `.dmg`, drag **FFXI on Mac** into Applications, open it a
 ### What has been tested
 One Mac: an M1 MacBook Pro with 8 GB on macOS 27.2. Phoenix was played there on an existing install. Not yet tried: a first Phoenix install into a newly chosen folder, and Phoenix on any other Mac. Phoenix publishes an approved-tools list; this launcher has not been reviewed by Phoenix staff. Updating from 3.11 to a later version inside the launcher has not been tried yet. Reports are welcome in [Issues](https://github.com/danielalanbates/FFXI-on-Mac/issues).
 
+Built from launcher 670a0c6, Vanaguide 4d85b3b and VanaVoice bd0c4a2.
+
 ---
 
 Apple Silicon · macOS 13 or later · Developer ID signed, not notarized. No Square Enix data is redistributed here.
