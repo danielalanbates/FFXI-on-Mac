@@ -466,10 +466,18 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             Vana.backdrop
-            HStack(spacing: 0) {
-                hero
-                Rectangle().fill(Vana.stroke).frame(width: 1)
-                sidebar.frame(width: 372)
+            VStack(spacing: 0) {
+                if let warning = store.selected?.launcherApprovalWarning {
+                    Text(warning).font(.system(size: 12, weight: .semibold)).foregroundStyle(Vana.night)
+                        .lineLimit(1).minimumScaleFactor(0.8)
+                        .frame(maxWidth: .infinity).padding(.vertical, 5).padding(.horizontal, 12)
+                        .background(Vana.ember)
+                }
+                HStack(spacing: 0) {
+                    hero
+                    Rectangle().fill(Vana.stroke).frame(width: 1)
+                    sidebar.frame(width: 372)
+                }
             }
         }
         // The window opens with no field focused when an account name is remembered, and with

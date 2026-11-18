@@ -4,6 +4,7 @@ New here? Download the `.dmg` below, drag **FFXI on Mac** into Applications, ope
 
 ### New
 - **Phoenix XI.** Pick it in the world list and press **Connect Phoenix**. You sign in on Phoenix's own website, and the launcher installs Phoenix's official client into its own folder and starts it. You need an approved Phoenix account first. One client only, as Phoenix's rules require. Guide and voice addons stay off on Phoenix.
+- A line at the top of the window says when the selected world has not approved this launcher. No world has yet, so it shows on every hosted world.
 - More LandSandBoat worlds in the list, sorted by how many players are online.
 - Optional multi-server play: a separate Windows environment per world, off by default.
 - VanaGuide Server-Safe, a separate guide window for worlds that do not allow guide addons.

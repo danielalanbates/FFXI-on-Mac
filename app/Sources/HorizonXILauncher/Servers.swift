@@ -146,6 +146,17 @@ struct Server: Codable, Identifiable, Hashable {
     var newsURL: String = ""
     var newsPageURL: String = ""
 
+    /// Worlds whose staff have said, in writing, that this launcher may be used there. None yet
+    /// (2026-11-18): add a world's exact name only with that ruling recorded in docs/LSB-SERVERS.md.
+    static let launcherApprovedWorlds: Set<String> = []
+
+    /// The window's top line on a hosted world that has not approved this launcher. Servers can
+    /// tell it apart from their own launcher, so the player is told before signing in.
+    var launcherApprovalWarning: String? {
+        if local || Self.launcherApprovedWorlds.contains(name) { return nil }
+        return "Use of this launcher is not yet approved by \(name)."
+    }
+
     var launchUnavailableReason: String? {
         name == "Phoenix XI" ? "Use Connect Phoenix to sign in, install and play." : nil
     }

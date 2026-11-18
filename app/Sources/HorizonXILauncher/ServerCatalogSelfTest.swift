@@ -9,6 +9,10 @@ extension Headless {
         let phoenix = Server.builtins.first { $0.name == "Phoenix XI" }
         check("Phoenix is catalogued once as LSB", Server.builtins.filter { $0.name == "Phoenix XI" }.count == 1
               && phoenix?.codebase == .landSandBoat && phoenix?.verified == true)
+        check("hosted worlds carry the not-yet-approved line by name; the local world none",
+              phoenix?.launcherApprovalWarning == "Use of this launcher is not yet approved by Phoenix XI."
+              && Server.builtins.filter { !$0.local }.allSatisfy { $0.launcherApprovalWarning?.contains($0.name) == true }
+              && Server.builtins.filter { $0.local }.allSatisfy { $0.launcherApprovalWarning == nil })
         check("Phoenix official signup and install information; one client only", phoenix?.accountURL == "https://phoenix-xi.com/register"
               && phoenix?.installURL == "https://phoenix-xi.com/getting-started" && phoenix?.maxClients == 1
               && phoenix?.createsAccountAtLogin == false)
