@@ -277,3 +277,32 @@ read-back wall is now optimized to its floor on this stack. Remaining upside liv
 elsewhere: Metal completion-handler latency inside MoltenVK (needs a CI-built patched
 MoltenVK) or making the client's x87 math faster (sidecar upstream). Sample saved
 paths + probe tooling: /tmp/game-sample.txt (transient), mvkprobe.c in session notes.
+
+## 2026-09-04: live moving-camera A/B — NOWAIT confirmed unshippable, FENCE baseline clean
+
+The NOWAIT glitch had only ever been shown two ways: `blinkprobe.py`'s static frame-diff
+spikes (17/39 pairs) and Daniel's minute of play. This is the first confirmation under a
+**live, moving camera**, and it also re-verifies that the shipped FENCE path is visually clean
+under the same stress. Run on the local Docker world (`docs/LOCAL-TEST-SERVER.md`) via
+`menu-run.py`, human at the screen. Both arms had `D3D9_RT_READBACK_FENCE=32` (the shipped
+default); the only variable was `D3D9_RT_READBACK_NOWAIT` layered on top — so this is
+*shipped baseline* vs *shipped baseline + NOWAIT*, not vs raw stock.
+
+- **NOWAIT on** (`D3D9_RT_READBACK_NOWAIT=16`): the sun-flare **strobes** — not the predicted
+  subtle one-frame brightness lag — whenever the sun is in front of *or* behind the camera
+  (lens-flare ghosts throw to the opposite side, so "behind" flickers too). Mob models
+  **blink in and out** at certain camera angles. Indoor zones are clean (no sky/sun test).
+- **NOWAIT off** (FENCE only, the shipped default): at the identical spots and camera angles,
+  both artifacts are gone. Flare brightness tracks occlusion correctly; mobs are stable.
+
+Same corruption class as documented above — skip-the-wait hands the game a half-written
+visibility buffer, and that buffer governs whether entities draw, not just flare brightness.
+Nothing new mechanically; the value is (a) first confirmation under motion, (b) confirmation
+the FENCE default is clean under motion, and (c) a method note below.
+
+**Method note, worth keeping.** `launchctl setenv` bakes the env into the client at `open`
+launch, so NOWAIT **cannot be toggled in a running client** — each arm is a fresh launch.
+And static per-stage screenshots **cannot** catch this: it is a temporal, frame-to-frame
+artifact. Any change that alters rendering semantics needs a live human A/B (relaunch with the
+flag flipped, same spot/angle), not screenshots. An earlier "verified safe in harness
+screenshots" note for NOWAIT was wrong for exactly this reason.
