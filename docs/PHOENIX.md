@@ -1,4 +1,23 @@
-# Phoenix XI — Mac integration pending
+# Phoenix XI
+
+**3.11 (2026-11-18): Connect Phoenix signs in, installs and starts the game.** The button opens
+Phoenix's own website sign-in, installs its official client into `FFXI on Mac/Games/Phoenix XI`
+inside the folder Setup was given (`PhoenixInstaller.root`, saved as `phoenix.root`), and starts
+it with Phoenix's own loader. An install made by builds before 3.11 at the earlier fixed path is
+used where it is. Setup (Rosetta, Wine, the game's Wine) now runs with Phoenix selected.
+
+Verified: one Mac (the developer's), an existing install, login through character list into the
+world on 2026-11-01. Not verified: a first install into a newly chosen folder on another Mac.
+
+**Open, the owner's call:** Phoenix's approved-tools list covers third-party programs, and this
+launcher is not on it. No ruling has been requested from Phoenix staff. Guide and voice addons
+stay off on Phoenix (empty allowlist in `AddonPolicy.swift`).
+
+Everything below is the history up to beta 122.
+
+---
+
+## History: integration pending (October 2026)
 
 Beta 113 adds a native **Connect Phoenix (Beta)** account-access probe, not playable support.
 It opens Phoenix’s own browser sign-in and can inspect the sanitized game-manifest schema.

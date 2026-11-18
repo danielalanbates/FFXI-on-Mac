@@ -240,7 +240,7 @@ enum Primary {
 
     /// Every label the button may show when nothing is running. The progress labels are
     /// `Work.label`, with " 42%" when the job reports how far it is.
-    static let verbs: Set<String> = ["Setup", "Update", "Repair", "Play", "Stop", "Force Stop", "Play Another", "Server Info", "Connect Phoenix (Beta)"]
+    static let verbs: Set<String> = ["Setup", "Update", "Repair", "Play", "Stop", "Force Stop", "Play Another", "Server Info", "Connect Phoenix"]
 
     static func decide(_ x: PrimaryInputs) -> PrimaryDecision {
         if x.restartingLauncher { return make(.working(.updating, progress: nil), x) }
@@ -258,7 +258,21 @@ enum Primary {
         }
         if x.otherJob != nil { return make(.working(.waiting, progress: nil), x) }
 
-        if x.launchUnavailableReason != nil { return make(.serverInfo, x) }
+        if x.launchUnavailableReason != nil {
+            // Phoenix installs and starts its own client, but under this project's Wine: the same
+            // Setup steps as any world come first, none of the game-file checks.
+            if x.world == "Phoenix XI" {
+                guard x.hasInstall else {
+                    if x.scanning { return make(.working(.checking, progress: nil), x) }
+                    if let d = x.rememberedDrive { return make(driveAction(d, x.driveStates[d], wrapper: true), x) }
+                    return make(.setup(.install), x)
+                }
+                if x.rosettaMissing { return make(.setup(.rosetta), x) }
+                if x.checks.contains(where: { $0.id == "wine" && $0.state == .bad }) { return make(.setup(.wine), x) }
+                if x.patchedWineMissing { return make(.setup(.gameWine), x) }
+            }
+            return make(.serverInfo, x)
+        }
 
         guard x.hasInstall else {
             if x.scanning { return make(.working(.checking, progress: nil), x) }
@@ -400,7 +414,7 @@ enum Primary {
             return .init(action: a, label: x.serverLost ? "Force Stop" : "Stop", enabled: true,
                          reason: x.serverLost ? nil : x.renderStuckAt.map(renderStuckReason), destructive: true)
         case .serverInfo:
-            return .init(action: a, label: x.world == "Phoenix XI" ? "Connect Phoenix (Beta)" : "Server Info", enabled: true, reason: x.world == "Phoenix XI" ? "Sign in to install or launch Phoenix." : x.launchUnavailableReason)
+            return .init(action: a, label: x.world == "Phoenix XI" ? "Connect Phoenix" : "Server Info", enabled: true, reason: x.world == "Phoenix XI" ? "Sign in to install or launch Phoenix." : x.launchUnavailableReason)
         case .enterAccount:
             return .init(action: a, label: "Play", enabled: true, reason: "Type your account name and password above.")
         case .play:

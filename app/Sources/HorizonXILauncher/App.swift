@@ -1039,7 +1039,7 @@ struct ContentView: View {
             // every world, allowlist or not. Players look for it here, not in Performance.
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("VanaGuide Server-Safe (Beta)").font(.system(size: 12)).bold()
+                    Text("VanaGuide Server-Safe").font(.system(size: 12)).bold()
                     Text("Quests, gear, skills and server notes in their own window. Loads nothing into the game and reads nothing from the server.")
                         .font(.system(size: 12)).foregroundStyle(Vana.muted)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1998,6 +1998,7 @@ struct ContentView: View {
         switch a {
         case .serverInfo:
             if s.name == "Phoenix XI" {
+                guard placePhoenix() else { return }
                 PhoenixSetup.shared.begin(wine: X87Sidecar.patchedWine() ?? selected?.wine, bootstrapWine: selected?.wine, graphicsOverrides: GraphicsSettings.load(world: s.name).iniOverrides, performance: selected.map { perf.phoenixPerformance(install: $0, server: s) }) { message in notice = message }
                 return
             }
@@ -2184,7 +2185,6 @@ struct ContentView: View {
     /// what is missing.
     private func runSetup() async {
         guard !setupRunning else { return }
-        if let why = store.selected?.launchUnavailableReason { notice = why; return }
         let world = store.selectedID
         setupRunning = true
         // The whole chain as one figure, planned from where it starts (SetupMeter).
@@ -2579,6 +2579,31 @@ struct ContentView: View {
         let checksAll = full || !FileManager.default.fileExists(atPath: root.appendingPathComponent(".base-manifest.json").path)
         let donors = checksAll ? AscensionChannel.donorClients(store.servers.filter { $0.name != w.name }, base: i) : []
         r.syncAscension(root: root, datsWine: dats, install: full, donors: donors, done: done)
+    }
+
+    /// Phoenix's own folder, settled before sign-in: the saved one, a complete install from before
+    /// 3.11 where it is, else "Games/Phoenix XI" in the folder Setup was given (asked for if none).
+    private func placePhoenix() -> Bool {
+        let saved = UserDefaults.standard.string(forKey: PhoenixInstaller.rootKey)
+        var fresh: URL?
+        if saved?.isEmpty != false, !PhoenixInstaller.ready(at: PhoenixInstaller.legacyRoot) {
+            var folder = InstallLocation.remembered
+            if let f = folder, !(FileManager.default.fileExists(atPath: f.path)
+                                 && InstallLocation.verdict(InstallLocation.facts(for: f), need: 0).isOK) { folder = nil }
+            if folder == nil {
+                folder = LocationPanel.choose(
+                    title: "Where should Phoenix XI go?",
+                    message: "Phoenix's game files go in “FFXI on Mac/Games/Phoenix XI” inside the folder you choose. Any Mac-formatted drive works, external included.",
+                    prompt: "Put It Here", need: InstallLocation.Need.gameZip + InstallLocation.Need.gameUnpacked)
+                if let f = folder, InstallLocation.remembered == nil { InstallLocation.remember(f) }
+            }
+            guard let f = folder else { return false }
+            fresh = InstallLocation.worldData("Phoenix XI", in: f)
+        }
+        guard let root = PhoenixInstaller.resolve(saved: saved, legacyReady: PhoenixInstaller.ready(at: PhoenixInstaller.legacyRoot), fresh: fresh) else { return false }
+        if let drive = PhoenixInstaller.missingDrive(for: root) { notice = "Connect the “\(drive)” drive to use Phoenix."; return false }
+        PhoenixInstaller.choose(root)
+        return true
     }
 
     private func placeWorldData(for s: Server) -> Bool {

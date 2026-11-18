@@ -147,7 +147,7 @@ struct Server: Codable, Identifiable, Hashable {
     var newsPageURL: String = ""
 
     var launchUnavailableReason: String? {
-        name == "Phoenix XI" ? "Use Connect Phoenix (Beta) for native sign-in, installation and launch." : nil
+        name == "Phoenix XI" ? "Use Connect Phoenix to sign in, install and play." : nil
     }
 
     /// A pure sort shared by the picker, companion world list and offline checks.
@@ -337,16 +337,16 @@ struct Server: Codable, Identifiable, Hashable {
                loader: "horizon-loader.exe", bootTemplate: BootProfile.horizonTemplate,
                newsURL: "https://api.horizonxi.com/api/v1/news",
                newsPageURL: "https://horizonxi.com/news/{slug}"),
-        // Catalogued 2026-10-28. Native Mac authentication is pending; never send a normal
+        // Catalogued 2026-10-28; signs in on Phoenix's own website since 3.11. Never send a normal
         // account/password to its custom launch-token loader. See docs/PHOENIX.md.
         Server(name: "Phoenix XI", host: "play.phoenix-xi.com", bootProfile: "phoenix.ini",
-               verified: false, note: "Mac login support pending.",
-               era: "Treasures of Aht Urhgan · 75 cap · Mac support pending", population: 1110,
+               verified: true, note: "",
+               era: "Treasures of Aht Urhgan · 75 cap", population: 1110,
                codebase: .landSandBoat,
                installURL: "https://phoenix-xi.com/getting-started", installKind: .website,
-               installNote: "Use Connect Phoenix (Beta) to install its official client in a separate folder.",
+               installNote: "Connect Phoenix installs its official client in its own folder.",
                accountURL: "https://phoenix-xi.com/register",
-               accountHow: "Create and approve your Phoenix account on their website, then use Connect Phoenix (Beta).",
+               accountHow: "Create and approve your Phoenix account on their website, then use Connect Phoenix.",
                discordURL: "https://discord.gg/phoenix-xi", maxClients: 1),
         Server(name: "Local server", host: "127.0.0.1", bootProfile: "lsb.ini",
                verified: true,
@@ -702,6 +702,8 @@ final class ServerStore: ObservableObject {
                 out[i].population = b.population
                 out[i].pinned = b.pinned
                 out[i].era = b.era
+                // Phoenix was catalogued as pending before 3.11; its status is this project's to state.
+                if b.name == "Phoenix XI" { out[i].verified = b.verified; out[i].note = b.note }
                 // Not the user's to edit, and an old servers.json predates the flag entirely.
                 out[i].local = b.local
                 out[i].maxClients = b.maxClients

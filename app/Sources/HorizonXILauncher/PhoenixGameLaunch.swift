@@ -6,7 +6,7 @@ import CryptoKit
 /// Uses Phoenix's own loader and authenticated token, in a prefix which contains no other world.
 /// No optional addons are loaded. The short-lived loader JSON is private and removed after use.
 enum PhoenixGameLaunch {
-    static let root = PhoenixInstaller.root
+    static var root: URL { PhoenixInstaller.root }
     static var prefix: URL { root.appendingPathComponent("prefix") }
     static var client: URL { root.appendingPathComponent("client") }
 

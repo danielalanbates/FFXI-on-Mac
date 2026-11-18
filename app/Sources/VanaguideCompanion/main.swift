@@ -40,7 +40,7 @@ struct CompanionApp: App {
     }
 
     var body: some Scene {
-        Window("VanaGuide Server-Safe (Beta)", id: "guide") {
+        Window("VanaGuide Server-Safe", id: "guide") {
             CompanionView()
                 .preferredColorScheme(.dark)
                 .tint(Theme.crystal)
@@ -674,7 +674,7 @@ struct CompanionView: View {
                 })]
         }
         if layoutTest && goalsFixture {
-            initialState.guides = [Guide(name: "Solo Guide - HorizonXI", desc: "Leveling, quests and notorious monsters in one route.", levels: "1-75 ALPHA",
+            initialState.guides = [Guide(name: "Solo Guide - HorizonXI", desc: "Leveling, quests and notorious monsters in one route.", levels: "1-75",
                 steps: [GuideStep(kind: "C", title: "Levels 26-30: Bull Dhalmel.", note: "Starting location: All starting cities. Pull one at a time; these monsters link.", tags: ["EXP": "Bull Dhalmel (20-24) — Buburimu Peninsula.", "GIL": "Carnivorous Crawler for Silk Thread, or Bull Dhalmel for Dhalmel Hide and Dhalmel Meat.", "LV": "30"])])]
         }
         if layoutTest && completedFixture {
@@ -787,7 +787,7 @@ struct CompanionView: View {
     var header: some View {
         VStack(spacing: 6) {
             HStack(spacing: 8) {
-                Text("VanaGuide (Beta)").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.gold)
+                Text("VanaGuide").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.gold)
                 Text("Server-Safe").font(.system(size: 12)).foregroundStyle(Theme.muted)
                 Spacer()
                 globalSearchBar

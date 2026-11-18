@@ -7,8 +7,8 @@ extension Headless {
         var results: [(String, Bool)] = []
         func check(_ name: String, _ ok: Bool) { results.append((name, ok)) }
         let phoenix = Server.builtins.first { $0.name == "Phoenix XI" }
-        check("Phoenix is catalogued once as unverified LSB", Server.builtins.filter { $0.name == "Phoenix XI" }.count == 1
-              && phoenix?.codebase == .landSandBoat && phoenix?.verified == false)
+        check("Phoenix is catalogued once as LSB", Server.builtins.filter { $0.name == "Phoenix XI" }.count == 1
+              && phoenix?.codebase == .landSandBoat && phoenix?.verified == true)
         check("Phoenix official signup and install information; one client only", phoenix?.accountURL == "https://phoenix-xi.com/register"
               && phoenix?.installURL == "https://phoenix-xi.com/getting-started" && phoenix?.maxClients == 1
               && phoenix?.createsAccountAtLogin == false)
@@ -34,9 +34,9 @@ extension Headless {
         if let phoenix {
             var x = PrimaryInputs(); x.world = phoenix.name; x.launchUnavailableReason = phoenix.launchUnavailableReason
             let d = Primary.decide(x)
-            check("ready files cannot offer Phoenix Play", d.action == .serverInfo && d.enabled && d.label == "Connect Phoenix (Beta)")
+            check("ready files cannot offer Phoenix Play", d.action == .serverInfo && d.enabled && d.label == "Connect Phoenix")
             x.hasInstall = false; x.accountNeeded = true
-            check("no install cannot offer unsupported setup or account prompt", Primary.decide(x).action == .serverInfo)
+            check("no install offers Setup first, never Play or an account prompt", Primary.decide(x).action == .setup(.install))
             check("headless fixer cannot bypass pending integration", !PrimaryFixer.isHeadlessFixable(d.action))
             check("Phoenix guide and voice are not implicitly allowed", !Guide.allowed(by: AddonPolicies.policy(for: phoenix))
                   && !Narration.allowed(by: AddonPolicies.policy(for: phoenix)))

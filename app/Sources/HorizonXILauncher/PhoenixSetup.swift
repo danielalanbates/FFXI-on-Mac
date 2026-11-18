@@ -211,16 +211,12 @@ import Combine
             let (manifest, result) = try await session.data(for: request)
             guard (result as? HTTPURLResponse)?.statusCode == 200,
                   let object = try? JSONSerialization.jsonObject(with: manifest) else {
-                finish("Phoenix sign-in succeeded. Its game manifest is still unavailable to this integration; gameplay remains pending."); return
+                finish("Phoenix sign-in succeeded, but its game files could not be read. Try again later."); return
             }
-            let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads/FFXI-Phoenix")
-            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            let safe = try JSONSerialization.data(withJSONObject: Self.shape(object), options: [.prettyPrinted, .sortedKeys])
-            try safe.write(to: root.appendingPathComponent("manifest-schema.json"), options: .atomic)
             guard let manifest = object as? [String: Any] else {
                 finish("Phoenix returned an invalid game manifest."); return
             }
-            report?("Phoenix sign-in received. Installing the required client components on x10…")
+            report?("Phoenix sign-in received. Installing the required client components…")
             let report = self.report
             let installResult = await Task.detached {
                 await PhoenixInstaller.install(manifest: manifest, token: token, report: { message in
@@ -273,11 +269,39 @@ private final class PhoenixNoRedirect: NSObject, URLSessionTaskDelegate {
     }
 }
 
-/// Isolated installer: all archives stream to x10, never the startup disk.
+/// Isolated installer: all archives stream straight into the Phoenix folder.
 enum PhoenixInstaller {
-    static let root = URL(fileURLWithPath: "/Volumes/x10/Video Games/Mac/FFXI/Phoenix")
+    /// Where builds before 3.11 kept Phoenix. An install already there is used in place.
+    static let legacyRoot = URL(fileURLWithPath: "/Volumes/x10/Video Games/Mac/FFXI/Phoenix")
+    static let rootKey = "phoenix.root"
+    /// The Phoenix folder: the saved one, else the earlier fixed place. The app sets it
+    /// (`choose`) before the first install, inside the folder Setup was given.
+    static var root: URL = {
+        if let p = UserDefaults.standard.string(forKey: rootKey), !p.isEmpty { return URL(fileURLWithPath: p, isDirectory: true) }
+        return legacyRoot
+    }()
 
-    static var ready: Bool {
+    /// Saved folder first, then a complete install at the earlier place, then `fresh`.
+    static func resolve(saved: String?, legacyReady: Bool, fresh: URL?) -> URL? {
+        if let saved, !saved.isEmpty { return URL(fileURLWithPath: saved, isDirectory: true) }
+        return legacyReady ? legacyRoot : fresh
+    }
+
+    static func choose(_ url: URL) {
+        root = url
+        UserDefaults.standard.set(url.path, forKey: rootKey)
+    }
+
+    /// The external drive the folder is on, when that drive is not connected.
+    static func missingDrive(for root: URL) -> String? {
+        let p = root.standardizedFileURL.pathComponents
+        guard p.count > 2, p[1] == "Volumes" else { return nil }
+        return FileManager.default.fileExists(atPath: "/Volumes/" + p[2]) ? nil : p[2]
+    }
+
+    static var ready: Bool { ready(at: root) }
+
+    static func ready(at root: URL) -> Bool {
         let fm = FileManager.default
         return ["install-complete.json", "client/Ashita-cli.exe", "client/bootloader/phoenix-loader.exe",
                 "client/polplugins/sandbox.dll", "client/config/sandbox/sandbox.ini",
@@ -384,7 +408,7 @@ enum PhoenixInstaller {
 
     static func install(manifest: [String: Any], token: String, report: @escaping (String) -> Void) async -> String {
         let fm = FileManager.default
-        guard fm.fileExists(atPath: "/Volumes/x10") else { return "Connect the x10 drive to install Phoenix." }
+        if let drive = missingDrive(for: root) { return "Connect the “\(drive)” drive to use Phoenix." }
         do {
             // Validate all three manifests before starting any large download.
             let session = URLSession(configuration: .ephemeral, delegate: PhoenixNoRedirect(), delegateQueue: nil)
@@ -412,9 +436,9 @@ enum PhoenixInstaller {
             try? fm.removeItem(at: marker)
             let total = packages.reduce(Int64(0)) { $0 + $1.1.size }
             let free = (try root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])).volumeAvailableCapacityForImportantUsage ?? 0
-            guard free > total * 4 + 8_000_000_000 else { return "Not enough space on x10 for Phoenix archives and extraction." }
+            guard free > total * 4 + 8_000_000_000 else { return "Not enough free space in “\(root.deletingLastPathComponent().lastPathComponent)” for Phoenix." }
             for (name, archive, fileManifest) in packages {
-                report("Downloading Phoenix \(name) to x10…")
+                report("Downloading Phoenix \(name)…")
                 let zip = root.appendingPathComponent("\(name).zip")
                 let part = root.appendingPathComponent("\(name).zip.part")
                 var request = URLRequest(url: archive.url)
@@ -443,7 +467,7 @@ enum PhoenixInstaller {
                     try fm.moveItem(at: part, to: zip)
                 }
                 // ditto extracts the authenticated, SHA-256 checked vendor archive only.
-                report("Extracting Phoenix \(name) on x10…")
+                report("Extracting Phoenix \(name)…")
                 let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
                 let destination = name == "eradats" ? "client/polplugins/DATs/EraDATs" : "client"
                 process.arguments = ["-xk", zip.path, root.appendingPathComponent(destination).path]
@@ -461,7 +485,7 @@ enum PhoenixInstaller {
             return "Phoenix refused a required download (HTTP \(code)). Sign in again to retry."
         } catch {
             // Do not expose signed archive URLs or session details in localized network errors.
-            return "Phoenix installation stopped. Check x10 and your connection, then retry. Game launch is still pending."
+            return "Phoenix installation stopped. Check your connection and free space, then retry."
         }
     }
 }

@@ -27,6 +27,15 @@ import Foundation
         let shape = PhoenixSetup.shape(["archive":["url":"SECRET_SIGNED_URL","size":123],"files":[["name":"PRIVATE_FILE"]]])
         let text = String(decoding: try JSONSerialization.data(withJSONObject: shape), as: UTF8.self)
         precondition(!text.contains("SECRET") && !text.contains("PRIVATE") && !text.contains("123") && text.contains("archive"))
+        // The Phoenix folder: saved first, then a complete earlier install where it is, then the chosen one.
+        let fresh = URL(fileURLWithPath: "/tmp/FFXI on Mac/Games/Phoenix XI", isDirectory: true)
+        precondition(PhoenixInstaller.resolve(saved: "/tmp/kept", legacyReady: true, fresh: fresh)?.path == "/tmp/kept")
+        precondition(PhoenixInstaller.resolve(saved: nil, legacyReady: true, fresh: fresh) == PhoenixInstaller.legacyRoot)
+        precondition(PhoenixInstaller.resolve(saved: "", legacyReady: false, fresh: fresh) == fresh)
+        precondition(PhoenixInstaller.resolve(saved: nil, legacyReady: false, fresh: nil) == nil)
+        precondition(PhoenixInstaller.missingDrive(for: URL(fileURLWithPath: "/Volumes/ffxi-selftest-not-a-drive/Phoenix")) == "ffxi-selftest-not-a-drive")
+        precondition(PhoenixInstaller.missingDrive(for: fresh) == nil)
+        precondition(!PhoenixInstaller.ready(at: fresh))
         let callback = "http://127.0.0.1:23456/callback?token=fixture&state=fixture-state"
         precondition(PhoenixSetup.manualCallbackToken(callback, port: 23456, state: state) == "fixture")
         for badURL in [callback.replacingOccurrences(of: "23456", with: "23457"), callback.replacingOccurrences(of: "127.0.0.1", with: "evil.example"), callback + "&token=other", callback + "#fragment", callback.replacingOccurrences(of: "http:", with: "https:")] {
