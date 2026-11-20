@@ -13,7 +13,7 @@
 ### What has been tested
 One Mac: an M1 MacBook Pro with 8 GB on macOS 27.2. The Wine step was run for real against the live mirror into an empty folder, and the setup script tests pass. Not tried: a complete first-time Setup through the launcher window on a clean Mac. Nothing else changed from 3.11. Reports are welcome in [Issues](https://github.com/danielalanbates/FFXI-on-Mac/issues).
 
-Built from launcher LAUNCHER_REV, Vanaguide 4d85b3b and VanaVoice bd0c4a2.
+Built from launcher ecf5cdf, Vanaguide 4d85b3b and VanaVoice bd0c4a2.
 
 ---
 
