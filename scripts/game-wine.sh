@@ -7,9 +7,8 @@
 #
 #   game-wine.sh install <FFXI on Mac folder>   -> <folder>/wine-coop/wine/bin/wine
 #
-# Fetched on the user's Mac from the build's own GitHub release, pinned here (and only here) by
-# size and SHA-256, and never shipped with the app: Wine is LGPL 2.1 (LICENSING.md), the same
-# model as aria2 in update-client.sh. Needs nothing a stock Mac lacks (curl, shasum, tar).
+# Fetched on the user's Mac from this project's own mirror release, pinned here (and only here) by
+# size and SHA-256, and never shipped inside the app: Wine is LGPL 2.1 (LICENSING.md). Needs nothing a stock Mac lacks (curl, shasum, tar).
 #
 # Nothing is unpacked until the download's size and checksum match. The download resumes after a
 # Stop or a dropped connection (curl -C -, a few attempts); it unpacks into a temp folder beside
@@ -21,14 +20,17 @@ set -euo pipefail
 say() { print -r -- "==> $*"; }
 die() { print -r -- "!! $*" >&2; exit 1; }
 
-# The pin: athei/wine-build release cx-26.3.0-1, its asset's GitHub digest. Checked 2026-10-15 by
-# a fresh download: every file in it matches the copy HorizonXI was measured on, except
-# lib/external/libMoltenVK.dylib, which the launcher itself replaces with its bundled 1.4.2
-# (Renderer.upgradeCoopMoltenVK). The HXI_GAME_WINE_* overrides are for
+# The pin: this repo's release wine-cx-26.3.0-1, a repack of athei/wine-build release cx-26.3.0-1.
+# athei deleted that release in 2026-11 (the repo became athei/mach9; issue #89), and no copy of
+# its tarball was kept, so the mirror was packed on 2026-11-20 from the copy HorizonXI was
+# measured on, with the release's own libMoltenVK.dylib put back. On 2026-10-15 a fresh download
+# of the original matched that copy file for file (docs/WINE-BUILD.md), so the 3,692 files are
+# the original's; only the archive's own bytes, size and SHA-256 differ. The launcher replaces
+# lib/external/libMoltenVK.dylib with its bundled 1.4.2 (Renderer.upgradeCoopMoltenVK). The HXI_GAME_WINE_* overrides are for
 # scripts/tests/setup-scripts-test.sh only; the launcher clears them.
-WINE_URL="${HXI_GAME_WINE_URL:-https://github.com/athei/wine-build/releases/download/cx-26.3.0-1/wine-cx-26.3.0-1-macos-x86_64.tar.xz}"
-WINE_BYTES="${HXI_GAME_WINE_BYTES:-203696924}"
-WINE_SHA256="${HXI_GAME_WINE_SHA256:-ec2a9e4d438917a26e381c01367773df79c3b0d6f0504b8183464619cad7e661}"
+WINE_URL="${HXI_GAME_WINE_URL:-https://github.com/danielalanbates/FFXI-on-Mac/releases/download/wine-cx-26.3.0-1/wine-cx-26.3.0-1-macos-x86_64-repack.tar.xz}"
+WINE_BYTES="${HXI_GAME_WINE_BYTES:-152312088}"
+WINE_SHA256="${HXI_GAME_WINE_SHA256:-a99e3029135e5df9985280efa00738d73c8d2fa092e9a5552a1096412a487bb8}"
 # Unpacked: 3,692 files, 1.13 GB on disk.
 WINE_UNPACKED=1130000000
 
@@ -83,7 +85,15 @@ if (( have < WINE_BYTES )); then
   say "downloading the game's Wine ($(( WINE_BYTES / 1000000 )) MB) into $root"
   attempt=0 last=-1
   while (( $(size_of "$tarball") < WINE_BYTES )); do
-    (( ++attempt <= 5 )) || die "The game's Wine didn't download. Check the internet connection, then press Setup again."
+    if (( ++attempt > 5 )); then
+      /bin/rmdir "$dl" 2>/dev/null || true
+      # The server answers, and says the file is gone: the address is dead, not the connection
+      # (issue #89: the first pin's release was deleted upstream). curl's own exit code does not
+      # tell the two apart (a 404 has been seen as 22 and as 56), so ask once for the status.
+      code=$(/usr/bin/curl -sIL --connect-timeout 20 --max-time 40 -o /dev/null -w '%{http_code}' "$WINE_URL" 2>/dev/null) || code=""
+      [[ "$code" == (404|410) ]] && die "The game's Wine is no longer at its download address. Update FFXI on Mac, then press Setup again."
+      die "The game's Wine didn't download. Check the internet connection, then press Setup again."
+    fi
     (( attempt > 1 )) && sleep 2
     # -C -: carry on from what is there. A stall (under 1 KB/s for a minute) ends the attempt and
     # the next one resumes.
@@ -133,5 +143,6 @@ fi
 # Same folder, so a rename: wine-coop appears complete or not at all.
 /bin/mv "$unpack" "$dest" || die "Couldn't put the game's Wine in place. Press Setup to try again."
 unpack=""
-/bin/rm -f "$tarball"; /bin/rmdir "$dl" 2>/dev/null || true
+# Also a leftover of an earlier pin's download (another name), which nothing else would remove.
+/bin/rm -f "$tarball" "$dl"/wine-cx-*.tar.xz(N); /bin/rmdir "$dl" 2>/dev/null || true
 say "the game's Wine is installed in $dest"

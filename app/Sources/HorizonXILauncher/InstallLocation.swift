@@ -85,10 +85,10 @@ enum InstallLocation {
     /// What a fresh HorizonXI install takes at its peak, measured (docs/BETA-60.md): Wine and its
     /// Windows drive about 1.4 GB; HorizonXI's base zip 9,426,920,806 bytes (manifest 2.0.2),
     /// unpacked about 15.5 GB beside it until update-client.sh deletes the zip. The game's Wine:
-    /// its 203,696,924-byte tarball and the 1.13 GB it unpacks to (game-wine.sh).
+    /// its 152,312,088-byte tarball and the 1.13 GB it unpacks to (game-wine.sh).
     enum Need {
         static let wine: Int64 = 1_400_000_000
-        static let gameWine: Int64 = 203_696_924 + 1_130_000_000
+        static let gameWine: Int64 = 152_312_088 + 1_130_000_000
         static let gameZip: Int64 = 9_426_920_806
         static let gameUnpacked: Int64 = 15_500_000_000
         static let fresh: Int64 = wine + gameWine + gameZip + gameUnpacked

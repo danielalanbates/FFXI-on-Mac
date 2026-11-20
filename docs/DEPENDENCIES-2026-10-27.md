@@ -10,7 +10,7 @@ playable. No hosted server was used for addon, bot, or dependency testing.
 | --- | --- |
 | macOS | Read-only `sw_vers`: 27.0.1, build 26A434, Apple silicon. |
 | Rosetta | `pkgutil --pkg-info com.apple.pkg.RosettaUpdateAuto` finds an installed receipt. Receipt presence alone is not a runtime correctness test. |
-| Game Wine | `scripts/game-wine.sh` pins athei/wine-build `cx-26.3.0-1`; archive SHA-256 `ec2a9e4d438917a26e381c01367773df79c3b0d6f0504b8183464619cad7e661`. Existing installed Wine is retained. |
+| Game Wine | `scripts/game-wine.sh` pins athei/wine-build `cx-26.3.0-1`; archive SHA-256 `ec2a9e4d438917a26e381c01367773df79c3b0d6f0504b8183464619cad7e661`. Existing installed Wine is retained. **Superseded 2026-11-20:** that release was deleted upstream; the pin is now this repo's mirror (`docs/WINE-BUILD.md`). |
 | x87 acceleration | Existing bundled `x87sidecar-coop`, `ROSETTA_X87_PATH` and the existing attachment/failure guard. The bundled binary is not silently replaced with a newer upstream build. |
 | Rendering | Existing DXVK 1.10.3+ and MoltenVK 1.4.2 path, including project-specific readback/cursor fixes. |
 | NX compatibility | Existing `WINE_DISABLE_NX_COMPAT=1`, whose rationale is documented in [beta 66](BETA-66.md). |

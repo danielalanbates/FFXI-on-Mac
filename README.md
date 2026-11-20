@@ -69,7 +69,7 @@ buttons.
 | --- | --- | --- |
 | **FFXI on Mac** (this launcher) | about 9 MB | the download button above |
 | **Wine** (runs Windows programs on a Mac) | ~250 MB download | press ***Setup*** — automatic |
-| **The game's Wine** (athei's patched build; HorizonXI stays logged in only under it) | ~204 MB download | the same ***Setup*** — automatic |
+| **The game's Wine** (athei's patched build; HorizonXI stays logged in only under it) | ~152 MB download | the same ***Setup*** — automatic |
 | **The FFXI game itself** | 15–30 GB | the same ***Setup*** — automatic |
 
 The game files aren't inside the 9 MB download because they're Square Enix's property and nobody
