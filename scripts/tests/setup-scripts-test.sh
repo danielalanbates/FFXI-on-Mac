@@ -6,7 +6,7 @@
 # is given), nothing is downloaded (the aria2 and game Wine fetches read local copies through
 # file://), and nothing outside the fixture folder is touched.
 #
-#   [HXI_LAUNCHER_BIN=<built HorizonXILauncher>] [HXI_GAME_WINE_TARBALL=<wine-cx-26.3.0-1-macos-x86_64.tar.xz>] \
+#   [HXI_LAUNCHER_BIN=<built HorizonXILauncher>] [HXI_GAME_WINE_TARBALL=<wine-cx-26.3.0-1-macos-x86_64-repack.tar.xz>] \
 #     ./scripts/tests/setup-scripts-test.sh [aria2-1.35.0-osx-darwin.tar.bz2]
 #
 # The fixture lives in $FIXTURE (default ~/Downloads/FFXI-on-Mac-build/fixture/setup-scripts) and

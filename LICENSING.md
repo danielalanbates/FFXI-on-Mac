@@ -40,7 +40,7 @@ neither can anyone else who republishes it. Full texts of everything the app bun
 | `patches/lsb-linkshell-zone-backlog.patch` | GPL-3.0 (LandSandBoat derivative) | in the repo only |
 | Ashita v4 + server plugins | GPL-3.0 / each server's terms | **no** — comes with the server's client install |
 | wine: Sikarugir 10.0 (*Install wine…*) | LGPL 2.1 | **no** — fetched by Setup from Sikarugir's own GitHub releases on the user's Mac |
-| wine: athei `wine-cx-26.3.0-1` ("wine-coop", the game's Wine) | LGPL 2.1 | **no** — fetched by `scripts/game-wine.sh` from athei/wine-build's own GitHub release on the user's Mac (pinned size and SHA-256), or already on the Mac |
+| wine: athei `wine-cx-26.3.0-1` ("wine-coop", the game's Wine) | LGPL 2.1 | **no** — not in the app; fetched by `scripts/game-wine.sh` on the user's Mac from this repo's `wine-cx-26.3.0-1` mirror release (pinned size and SHA-256), or already on the Mac. The mirror is an unmodified repack, hosted here since athei deleted the original release (2026-11-20) |
 | aria2 1.35.0 (`aria2c`, HorizonXI's torrents) | GPL-2.0-or-later | **no** — Homebrew's if installed, else fetched by `update-client.sh` from aria2's own GitHub release on the user's Mac (pinned SHA-256; its `COPYING` kept beside it) |
 | CrossOver itself (the app, its proprietary add-ons) | proprietary, commercial | **no** — never used or shipped |
 | FFXI game data | Square Enix, all rights reserved | **no** — never |
@@ -53,14 +53,18 @@ so those fixes can be submitted without a relicensing problem.
 CrossOver under LGPL 2.1. athei's `wine-cx-26.3.0-1` (athei/wine-build), the wine Play prefers
 because the wrapper's own wine drops the client a second after login (`docs/WINE-BUILD.md`), is
 built from that published source, so it is LGPL like any other wine. What is proprietary is
-CrossOver the product, not the wine source. This project redistributes no wine binary at all:
+CrossOver the product, not the wine source. No wine binary ships inside the app or its disk image:
 *Install wine…* downloads Sikarugir's LGPL build from Sikarugir's own GitHub releases on the user's
-Mac, and since b60 Setup fetches the patched wine the same way: `scripts/game-wine.sh` downloads
-`wine-cx-26.3.0-1-macos-x86_64.tar.xz` from athei/wine-build's own release (pinned there by size and
-SHA-256, the aria2 model) into the folder the user chose, or it is found where it is already
-installed. Its source is CodeWeavers' published LGPL source and athei/wine-build's build scripts,
-both public. Shipping either wine inside our image would bring the LGPL's source/relink
-obligations with it.
+Mac, and since b60 Setup fetches the patched wine with `scripts/game-wine.sh` (pinned by size and
+SHA-256) into the folder the user chose, or it is found where it is already installed.
+
+**Changed 2026-11-20: this repo now hosts one wine binary.** athei deleted the `cx-26.3.0-1`
+release Setup downloaded from (issue #89), which blocked every fresh install, so an unmodified
+repack of it is a release asset here (`wine-cx-26.3.0-1`, `docs/WINE-BUILD.md`). That is
+redistribution of an LGPL 2.1 binary, so the release page carries the licence notice and the
+source pointers: CodeWeavers' published CrossOver 26.3.0 wine source, and athei's build scripts at
+the `cx-26.3.0-1` tag of athei/mach9. Both are public today; if either goes away, a copy of that
+source has to be hosted beside the binary or the mirror taken down. Not legal advice.
 
 ## On "it's on GitHub with an open licence, so it's safe"
 
