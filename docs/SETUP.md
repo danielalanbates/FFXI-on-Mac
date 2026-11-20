@@ -73,8 +73,8 @@ If a step fails partway, press **Setup** again. Finished steps are skipped, so i
 stopped rather than starting over.
 
 Next, **the game's Wine** — a 152 MB download of athei's patched CrossOver Wine build
-(`wine-cx-26.3.0-1`), the one Wine HorizonXI stays logged in under. It comes from that build's own
-GitHub release, is checked against a pinned size and SHA-256 before anything is unpacked, and goes
+(`wine-cx-26.3.0-1`), the one Wine HorizonXI stays logged in under. It comes from this
+project's own GitHub mirror of that build, is checked against a pinned size and SHA-256 before anything is unpacked, and goes
 in `wine-coop` beside the wrapper (1.1 GB). Progress shows on the button; Stop and press **Setup**
 again to resume. If Rosetta 2 is ever missing on its own (a new Mac set up from a backup), the
 button says so and **Setup** installs it with the normal password prompt.

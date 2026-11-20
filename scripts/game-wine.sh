@@ -143,5 +143,6 @@ fi
 # Same folder, so a rename: wine-coop appears complete or not at all.
 /bin/mv "$unpack" "$dest" || die "Couldn't put the game's Wine in place. Press Setup to try again."
 unpack=""
-/bin/rm -f "$tarball"; /bin/rmdir "$dl" 2>/dev/null || true
+# Also a leftover of an earlier pin's download (another name), which nothing else would remove.
+/bin/rm -f "$tarball" "$dl"/wine-cx-*.tar.xz(N); /bin/rmdir "$dl" 2>/dev/null || true
 say "the game's Wine is installed in $dest"

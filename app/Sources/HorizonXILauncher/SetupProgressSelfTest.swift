@@ -82,7 +82,7 @@ extension Headless {
         check("update: 50% of its download is 45% of the job, labelled 2.0.5",
               pct(up.fraction) == 45 && up.label == "2.0.5 · 1 of 1" && up.stage == .updatingGame)
         var gw = ScriptProgress(.gameWine)
-        gw.read("==> downloading the game's Wine (203 MB) into /x\n[#game-wine 100/203MB(49%)]\n")
+        gw.read("==> downloading the game's Wine (152 MB) into /x\n[#game-wine 75/152MB(49%)]\n")
         let gwDown = gw.fraction
         gw.read("==> verifying the game's Wine\n==> extracting the game's Wine\n")
         check("game Wine: its download moves the button (\(pct(gwDown))%), its unpack is 90%",
