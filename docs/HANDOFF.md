@@ -1,5 +1,18 @@
 # Handoff — read this first
 
+**2026-11-20: public release is 3.11.1 build 127 (also installed in Applications).** It fixes
+issue #89: athei deleted the `cx-26.3.0-1` Wine release, so Setup now downloads a repack from this
+repo's `wine-cx-26.3.0-1` release (never mark that release latest; the updater reads
+`/releases/latest`). How it was packed and how to re-pin: [WINE-BUILD.md](WINE-BUILD.md). Open:
+
+| Item | State |
+| --- | --- |
+| Full first-time Setup in the launcher window on a clean Mac | not tried (script-level install from the live mirror passed) |
+| In-app update 3.11 → 3.11.1 | 3.11's `--selftest-updater` accepts the image; not clicked through in the window |
+| LGPL source for the mirror | points at CodeWeavers' source and athei/mach9 tag `cx-26.3.0-1`; host a copy if either disappears |
+| athei's successor (Mach9, arm64 wine `v0.4.0`) | not evaluated as a replacement for the x86_64 build |
+| Google Drive checkout of this repo | stale at 3.10; work happens in `~/Downloads/ffxi-release-3.11/launcher` (no remote; push by URL) |
+
 **2026-10-29: launcher and VanaGuide Server-Safe beta 103 are installed in Applications;
 VanaVoice is 1.5.5. Read [CURRENT-2026-10-29.md](CURRENT-2026-10-29.md),
 [BETA-103.md](BETA-103.md) and the October 29 continuation in
