@@ -17,7 +17,7 @@
 ### What has been tested
 One Mac: an M1 MacBook Pro with 8 GB on macOS 27.2. Eden's real installer was run through the launcher's install code with the launcher's own Wine four ways: the installer picked directly, the `.zip` picked, a re-run over a copy a 3.11.1 install left behind, and a Stop part-way followed by a fresh run. Every one ended with the game in the world's folder (14.6 GB) and the progress readout climbing to 99%. New and existing self-tests pass. Not tried: the window itself on a clean Mac, an M5 Mac, logging in to Eden. Eden is not one of the worlds this launcher lists (it is not a LandSandBoat server); adding it yourself is still possible.
 
-Built from launcher BUILT_COMMIT, Vanaguide 4d85b3b and VanaVoice bd0c4a2.
+Built from launcher 7c7824e, Vanaguide 4d85b3b and VanaVoice bd0c4a2.
 
 ---
 
