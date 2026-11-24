@@ -18,7 +18,7 @@ import Foundation
 ///
 /// Writes only under a fresh folder in the temporary directory, removed at the end.
 ///
-/// `--selftest-installer-live <installer .exe|.zip> <world> <world folder> <wrapper .app>` runs the
+/// `--selftest-installer-live <installer .exe|.zip> <world> <world folder> <wrapper .app> [--stop-after <s>]` runs the
 /// real job (Runner.runLocalInstaller: the installers' prefix, the installer under Wine, the
 /// client brought into the world folder) on that wrapper, printing the button's figure as it
 /// changes and the outcome. It changes no setting and touches no other prefix. For testing on a
@@ -39,7 +39,7 @@ extension Headless {
             touch(dir.appendingPathComponent("Ashita/Ashita.exe"))
             touch(dir.appendingPathComponent("Ashita/injector.exe"))
             touch(dir.appendingPathComponent("Ashita/ffxi-bootmod/xiloader.exe"))
-            touch(dir.appendingPathComponent("SquareEnix/FINAL FANTASY XI/FFXiMain.dll"))
+            for dll in ["FFXi.dll", "FFXiMain.dll", "FFXiVersions.dll"] { touch(dir.appendingPathComponent("SquareEnix/FINAL FANTASY XI/" + dll)) }
             touch(dir.appendingPathComponent("SquareEnix/PlayOnlineViewer/viewer/com/polcore.dll"))
             touch(dir.appendingPathComponent("Uninstall.exe"))
         }
@@ -66,28 +66,44 @@ extension Headless {
         touch(data.appendingPathComponent("installer-downloads/Eden535-unpacked/Installer.exe"))
         touch(data.appendingPathComponent("installer-downloads/Eden535-unpacked/Ashita/injector.exe"))
         check("an installer's own unpacked copy is not the client", !InstallerClient.holdsClient(data))
+        let empty = InstallerClient.snapshot(driveC: driveC)
         check("nothing installed yet: nothing found",
-              InstallerClient.find(driveC: driveC, world: "eden", dataPath: data, since: Date()) == nil)
+              InstallerClient.find(driveC: driveC, world: "eden", dataPath: data, before: empty) == nil)
         check("C:\\windows and links to other worlds' folders are never candidates",
               InstallerClient.candidates(driveC: driveC).isEmpty)
 
         let eden = driveC.appendingPathComponent("Eden", isDirectory: true)
         edenClient(at: eden)
         check("Eden's C:\\Eden holds a client (Ashita v3 injector.exe)", InstallerClient.holdsClient(eden))
-        check("found by name, before any install (\"eden\" is C:\\Eden)",
-              same(InstallerClient.find(driveC: driveC, world: "eden", dataPath: data, since: nil), eden))
+        check("a run that made C:\\Eden finds it", same(InstallerClient.find(driveC: driveC, world: "eden", dataPath: data, before: empty), eden))
+        check("before any install, a complete one named for the world is found (\"eden\" is C:\\Eden)",
+              same(InstallerClient.find(driveC: driveC, world: "eden", dataPath: data, before: nil), eden))
         check("\"Eden XI\" and \"EDEN\" are the same name", InstallerClient.named(eden, world: "Eden XI") && InstallerClient.named(eden, world: "EDEN"))
         check("another world's name finds nothing before an install",
-              InstallerClient.find(driveC: driveC, world: "Valhalla", dataPath: nil, since: nil) == nil)
-        old(eden, 3600)
-        check("after a run: an unnamed folder counts only when it changed since the run",
-              InstallerClient.find(driveC: driveC, world: "Valhalla", dataPath: nil, since: Date()) == nil
-              && same(InstallerClient.find(driveC: driveC, world: "Valhalla", dataPath: nil, since: Date().addingTimeInterval(-7200)), eden))
+              InstallerClient.find(driveC: driveC, world: "Valhalla", dataPath: nil, before: nil) == nil)
+        let snap = InstallerClient.snapshot(driveC: driveC)
+        check("a run that changed nothing does not take a folder that was already there",
+              InstallerClient.find(driveC: driveC, world: "Valhalla", dataPath: nil, before: snap) == nil)
+        check("one it made is its, whatever the name", same(InstallerClient.find(driveC: driveC, world: "Valhalla", dataPath: nil, before: empty), eden))
         let pf = driveC.appendingPathComponent("Program Files (x86)/Some World", isDirectory: true)
         touch(pf.appendingPathComponent("Ashita-cli.exe"))
-        check("Program Files counts too, newest first",
-              same(InstallerClient.find(driveC: driveC, world: "Valhalla", dataPath: nil, since: Date().addingTimeInterval(-60)), pf))
+        check("Program Files counts too", same(InstallerClient.find(driveC: driveC, world: "Valhalla", dataPath: nil, before: snap), pf))
         try? fm.removeItem(at: driveC.appendingPathComponent("Program Files (x86)"))
+        let half = driveC.appendingPathComponent("Halfworld", isDirectory: true)
+        touch(half.appendingPathComponent("Ashita/injector.exe"))
+        check("a leftover without the game's DLLs is never taken before an install",
+              InstallerClient.find(driveC: driveC, world: "Halfworld", dataPath: nil, before: nil) == nil)
+        try? fm.removeItem(at: half)
+        let started = driveC.appendingPathComponent("Fresh Start", isDirectory: true)
+        try? fm.createDirectory(at: started, withIntermediateDirectories: true)
+        InstallerClient.markIncomplete(driveC: driveC, world: "eden", before: snap, began: Date().addingTimeInterval(-1))
+        check("a folder the stopped run made is marked even before it holds a client", InstallerClient.isMarkedIncomplete(started))
+        try? fm.removeItem(at: started)
+        check("what a world's folder already holds counts towards the figure", InstallerClient.alreadyThere(driveC: driveC, world: "eden") > 0
+              && InstallerClient.alreadyThere(driveC: driveC, world: "Valhalla") == 0)
+        check("a stopped or failed run marks what it was writing; no later look takes it",
+              InstallerClient.isMarkedIncomplete(eden) && InstallerClient.find(driveC: driveC, world: "eden", dataPath: data, before: nil) == nil)
+        check("a run that finishes over it finds it again", same(InstallerClient.find(driveC: driveC, world: "eden", dataPath: data, before: snap), eden))
 
         // MARK: bringing it into the world's folder
         var log: [String] = []
@@ -100,9 +116,10 @@ extension Headless {
               && fm.fileExists(atPath: data.appendingPathComponent("installer-downloads/Eden535-unpacked/Installer.exe").path))
         check("C:\\Eden is now a link to it (\(link ?? "none"))", link == data.resolvingSymlinksInPath().path)
         check("the world's folder now holds the client, and is what is found",
-              InstallerClient.holdsClient(data) && same(InstallerClient.find(driveC: driveC, world: "eden", dataPath: data, since: nil), data))
+              InstallerClient.holdsClient(data) && same(InstallerClient.find(driveC: driveC, world: "eden", dataPath: data, before: InstallerClient.snapshot(driveC: driveC)), data))
         check("the link is no longer a candidate", InstallerClient.candidates(driveC: driveC).isEmpty)
         check("it says what it moved", log.contains { $0.contains("moved the client") })
+        check("the incomplete mark does not travel with it", !fm.fileExists(atPath: data.appendingPathComponent(InstallerClient.incompleteMarker).path))
         check("adopting into itself changes nothing", InstallerClient.adopt(data, into: data) { _ in }.path == data.path)
 
         let moved = root.appendingPathComponent("Elsewhere/eden", isDirectory: true)
@@ -141,10 +158,15 @@ extension Headless {
         check("a zip's unpacked size from its own listing", InstallerClient.archiveBytes(zip) == 312_345)
         let exeDir = root.appendingPathComponent("unpacked", isDirectory: true)
         touch(exeDir.appendingPathComponent("Installer.exe"))
-        check("no archive beside the installer: total unknown", InstallerClient.payloadBytes(beside: exeDir.appendingPathComponent("Installer.exe")) == nil)
+        let exe = exeDir.appendingPathComponent("Installer.exe")
+        check("no archive beside the installer: total unknown", InstallerClient.payloadBytes(beside: exe, ownFolder: true) == nil)
         try? fm.copyItem(at: zip, to: exeDir.appendingPathComponent("data.7z"))
-        check("an archive beside the installer is its payload",
-              InstallerClient.payloadBytes(beside: exeDir.appendingPathComponent("Installer.exe")) == 312_345)
+        check("in a folder this job unpacked, an archive beside the installer is its payload",
+              InstallerClient.payloadBytes(beside: exe, ownFolder: true) == 312_345)
+        check("an .exe picked elsewhere (Downloads): unrelated archives beside it are not counted",
+              InstallerClient.payloadBytes(beside: exe, ownFolder: false) == nil)
+        try? fm.moveItem(at: exeDir.appendingPathComponent("data.7z"), to: exeDir.appendingPathComponent("data.pak"))
+        check("but a data.pak is (Eden's payload, unzipped by hand)", InstallerClient.payloadBytes(beside: exe, ownFolder: false) == 312_345)
         check("written = free space that went", InstallerClient.written(since: ["/": 100, "/V": 50], now: ["/": 40, "/V": 50]) == 60)
         check("space that came back counts as nothing", InstallerClient.written(since: ["/": 100], now: ["/": 140]) == 0)
         check("free space is read per volume", (InstallerClient.freeBytes([root, root.appendingPathComponent("not/yet/made")]).count) == 1)
@@ -186,7 +208,14 @@ extension Headless {
         check("under 0.1 GB: no figure", Primary.decide(x).label == "Setting up…")
         var y = PrimaryInputs()
         y.setupRunning = true; y.setupStage = .installingGame; y.setupProgress = 0.63
-        check("in Setup's chain it names the step: \(Primary.decide(y).label)", Primary.decide(y).label == "Installing the game… 63%")
+        check("in Setup's chain it names the step: \(Primary.decide(y).label)", Primary.decide(y).label == "Running installer… 63%")
+        y.ownWritten = 14_600_000_000
+        check("…and counts gigabytes when the installer's total is unknown: \(Primary.decide(y).label)",
+              Primary.decide(y).label == "Running installer… 14 GB" && Primary.decide(y).label.count <= 26)
+        check("one game step per Setup press, partial or not",
+              ContentView.sameStep(.game(partial: false), .game(partial: true)) && !ContentView.sameStep(.game(partial: false), .gameWine))
+        check("a world with its own sign-in (Phoenix XI) lends nothing to one added by hand",
+              Server.catalogued(for: "PhoenixXI") == nil)
 
         // MARK: C:\Games\<world>
         let wrapper = root.appendingPathComponent("Test Wine.app", isDirectory: true)
@@ -229,9 +258,15 @@ extension Headless {
         var outcome: Runner.InstallerOutcome?
         var last = ""
         func stamp() -> String { String(format: "%6.1fs", Date().timeIntervalSince(started)) }
+        // `--stop-after <seconds>`: press Stop then, as the window's Stop does.
+        let stopAfter = a.firstIndex(of: "--stop-after").flatMap { $0 + 1 < a.count ? Double(a[$0 + 1]) : nil }
+        var stopped = false
         runner.runLocalInstaller(file, in: install, dataPath: data, name: world) { outcome = $0 }
         while outcome == nil {
             RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+            if let t = stopAfter, !stopped, Date().timeIntervalSince(started) >= t {
+                stopped = true; print("\(stamp())  pressing Stop"); runner.stopJob()
+            }
             var x = PrimaryInputs()
             x.world = world
             if runner.busy { x.ownJob = runner.busyReason }
@@ -241,6 +276,11 @@ extension Headless {
             if now != last { print("\(stamp())  button: \(now)"); last = now }
         }
         print("\(stamp())  outcome: \(String(describing: outcome!))")
+        if outcome == .stopped {
+            let marked = InstallerClient.realFolders(driveC: install.installerPrefix.driveC).filter(InstallerClient.isMarkedIncomplete)
+            print("marked incomplete: \(marked.map(\.lastPathComponent))")
+            exit(marked.isEmpty ? 1 : 0)
+        }
         if case .installed(let at) = outcome! {
             let ok = InstallerClient.holdsClient(at)
             print("client in \(at.path): \(ok ? "yes" : "NO")")

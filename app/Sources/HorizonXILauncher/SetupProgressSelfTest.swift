@@ -135,7 +135,11 @@ extension Headless {
         check("choosing the folder: \(Primary.decide(y).label)", Primary.decide(y).label == "Setting up…")
         y.setupStage = .unpackingGame; y.setupProgress = 0.6
         check("the unzip: \(Primary.decide(y).label)", Primary.decide(y).label == "Unpacking HorizonXI… 60%")
-        let longest = SetupStage.allCases.map { $0.rawValue + "… 99%" }.max { $0.count < $1.count } ?? ""
+        // Gigabytes only ever follow an installer's step (its total unknown), or "Setting up".
+        let gbLabels = [SetupStage.installingGame.rawValue, "Setting up"].flatMap { name in
+            [99_900_000_000, 9_990_000_000].map { name + "… " + Primary.gigabytes(Int64($0)) }
+        }
+        let longest = (SetupStage.allCases.map { $0.rawValue + "… 99%" } + gbLabels).max { $0.count < $1.count } ?? ""
         check("every step's label fits the button (longest: \(longest), \(longest.count) characters)", longest.count <= 26)
         let jargon = ["prefix", "registry", "wineserver", "aria2", "torrent", "restart", "Restart"]
         check("plain words, never 'restart'", SetupStage.allCases.allSatisfy { s in !jargon.contains { s.rawValue.contains($0) } })

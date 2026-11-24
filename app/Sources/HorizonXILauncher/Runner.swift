@@ -927,15 +927,23 @@ final class Runner: ObservableObject {
     func ensureInstallerPrefix(_ install: Install, then: @escaping (Install) -> Void,
                                failed: @escaping () -> Void = {}) {
         let ip = install.installerPrefix
-        if FileManager.default.fileExists(atPath: ip.systemReg.path) { then(ip); return }
+        // Made, and not left half-made by a Stop or a time-out (its marker goes only once wineboot
+        // finished): then it is ready. Otherwise wineboot runs again; it only adds what is missing.
+        let booting = ip.prefix.appendingPathComponent(".ffxi-on-mac-booting")
+        let fm = FileManager.default
+        if fm.fileExists(atPath: ip.systemReg.path), !fm.fileExists(atPath: booting.path) { then(ip); return }
         appendLine("==> creating \(ip.prefixName) (a second wine prefix for installers, so a download is never killed by Play) — about 30 s")
         jobWine = .init(server: ip.wineserver, prefix: ip.prefix)
         installerStop.reset()
         let stop = installerStop
         Task { [weak self] in
             let made = await Task.detached(priority: .userInitiated) { () -> Bool in
-                _ = Runner.updatePrefix(ip, stop: stop, wine: ip.wine, mono: true)
-                return FileManager.default.fileExists(atPath: ip.systemReg.path)
+                try? FileManager.default.createDirectory(at: ip.prefix, withIntermediateDirectories: true)
+                FileManager.default.createFile(atPath: booting.path, contents: Data())
+                let ok = Runner.updatePrefix(ip, stop: stop, wine: ip.wine, mono: true)
+                    && FileManager.default.fileExists(atPath: ip.systemReg.path)
+                if ok { try? FileManager.default.removeItem(at: booting) }
+                return ok
             }.value
             guard let self else { return }
             self.jobWine = nil
@@ -1170,15 +1178,20 @@ final class Runner: ObservableObject {
     /// Reads the free space of the volumes `watch` is on every 2 s: what went is what the job
     /// wrote. Cheap (one statfs each) and it does not care where an installer writes, which is
     /// the point -- Eden's writes to `C:\Eden`, not where it was asked to.
-    private func startInstallerMeter(watch: [URL], expected: Int64?, from start: Double, span: Double) {
+    /// `already`: bytes of the result already on disk (a stopped run's half that this one writes over).
+    private func startInstallerMeter(watch: [URL], expected: Int64?, from start: Double, span: Double, already: Int64 = 0) {
         installerTimer?.invalidate()
         let baseline = InstallerClient.freeBytes(watch)
-        installerProgress = expected == nil ? (start > 0 ? start : nil) : max(installerProgress ?? 0, start)
+        // Unknown total: no figure (after an unpack too), so the button counts gigabytes instead
+        // of sitting at the unpack's 20%.
+        installerProgress = expected == nil ? nil : max(installerProgress ?? 0, start)
         installerWritten = nil
-        let t = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                let w = InstallerClient.written(since: baseline, now: InstallerClient.freeBytes(watch))
+        let t = Timer(timeInterval: 2, repeats: true) { [weak self] timer in
+            // On the main run loop already: update now, and only for the job that made this timer
+            // (a tick queued behind its end must not leave a figure on the next job).
+            MainActor.assumeIsolated {
+                guard let self, self.installerTimer === timer, self.busy else { return }
+                let w = already + InstallerClient.written(since: baseline, now: InstallerClient.freeBytes(watch))
                 if let e = expected, e > 0 {
                     let f = start + span * min(0.99, Double(w) / Double(e))
                     self.installerProgress = max(self.installerProgress ?? 0, f)
@@ -1195,11 +1208,6 @@ final class Runner: ObservableObject {
         installerTimer?.invalidate(); installerTimer = nil
     }
 
-    private func endInstallerMeter() {
-        stopInstallerMeter()
-        installerProgress = nil; installerWritten = nil
-    }
-
     /// Start `exe` under wine in `install` and stream its output. When it exits, the client is
     /// looked for wherever it landed and brought into `dataPath` (InstallerClient); `busy`
     /// clears before `done` runs. `from`: where the button's figure starts (after an unpack).
@@ -1208,14 +1216,19 @@ final class Runner: ObservableObject {
     private func launchInstaller(exe: URL, in install: Install, name nm: String, dataPath: String,
                                  from start: Double, cleanup: URL?, done: @escaping (InstallerOutcome) -> Void) {
         let data = dataPath.isEmpty ? nil : URL(fileURLWithPath: dataPath)
-        let watch = [install.driveC] + (data.map { [$0] } ?? [])
+        // The world's folder first: a shortfall message names it.
+        let watch = (data.map { [$0] } ?? []) + [install.driveC]
+        let driveC = install.driveC
         Task { [weak self] in
-            let expected = await Task.detached(priority: .userInitiated) { InstallerClient.payloadBytes(beside: exe) }.value
+            let (expected, before, already) = await Task.detached(priority: .userInitiated) {
+                (InstallerClient.payloadBytes(beside: exe, ownFolder: cleanup != nil), InstallerClient.snapshot(driveC: driveC),
+                 InstallerClient.alreadyThere(driveC: driveC, world: nm))
+            }.value
             guard let self else { return }
-            if self.stopRequested { self.endInstallerMeter(); self.busy = false; done(.stopped); return }
+            if self.stopRequested { self.busy = false; done(.stopped); return }
             if let need = expected, let short = InstallerClient.shortfall(need: need + Self.installerMargin, at: watch) {
                 self.appendLine("!! \(nm)'s install needs about \(InstallerClient.gigabytes(need)) free on \(InstallerClient.volumeName(short.volume)); \(InstallerClient.gigabytes(short.free)) is free.")
-                self.endInstallerMeter(); self.busy = false; done(.failed); return
+                self.busy = false; done(.failed); return
             }
             var args = [Install.winePath(exe, driveC: install.driveC)]
             let silent = Self.isNSIS(exe)
@@ -1231,22 +1244,32 @@ final class Runner: ObservableObject {
             var env = ProcessInfo.processInfo.environment
             env["WINEPREFIX"] = install.prefix.path; env["WINEDEBUG"] = "-all"
             env.removeValue(forKey: "DYLD_FALLBACK_LIBRARY_PATH"); env.removeValue(forKey: "DYLD_LIBRARY_PATH")
-            if let data { InstallerClient.repointLinks(driveC: install.driveC, world: nm, to: data) }
+            if let data { InstallerClient.repointLinks(driveC: driveC, world: nm, to: data) }
             self.jobWine = .init(server: install.wineserver, prefix: install.prefix)
             let began = Date()
-            self.startInstallerMeter(watch: watch, expected: expected, from: start, span: 1 - start)
+            self.startInstallerMeter(watch: watch, expected: expected, from: start, span: 1 - start, already: already)
             self.spawn(install.wine, args: args, env: env, cwd: exe.deletingLastPathComponent()) { [weak self] code in
                 guard let self else { return }
                 self.stopInstallerMeter()
-                // Stopped: no verdict, nothing adopted (a half-written client is not one).
-                if self.stopRequested { self.endInstallerMeter(); self.busy = false; done(.stopped); return }
-                self.appendLine("==> installer exited \(code)")
+                let stopped = self.stopRequested
+                // A silent NSIS run says how it went (0 = installed). A window-driven installer's or a
+                // launcher's exit code means nothing; what it left decides.
+                let failed = !stopped && silent && code != 0
+                if !stopped { self.appendLine("==> installer exited \(code)") }
                 Task { [weak self] in
                     let (client, lines) = await Task.detached(priority: .userInitiated) { () -> (URL?, [String]) in
                         var lines: [String] = []
-                        guard let found = InstallerClient.find(driveC: install.driveC, world: nm, dataPath: data, since: began)
+                        // Stopped or failed: nothing is adopted, and whatever it wrote is marked so no
+                        // later look takes a half-written client for a finished one.
+                        if stopped || failed {
+                            InstallerClient.markIncomplete(driveC: driveC, world: nm, before: before, began: began)
+                            return (nil, lines)
+                        }
+                        guard let found = InstallerClient.find(driveC: driveC, world: nm, dataPath: data, before: before)
                         else { return (nil, lines) }
-                        let now = data.map { InstallerClient.adopt(found, into: $0) { lines.append($0) } } ?? found
+                        var now = data.map { InstallerClient.adopt(found, into: $0) { lines.append($0) } } ?? found
+                        // Not brought over (a name already there): the world keeps playing the client it has.
+                        if let d = data, now.path != d.path, InstallerClient.holdsClient(d) { now = d }
                         // The unpacked installer is this job's own copy; the client is never inside it.
                         if let c = cleanup, now.path != c.path, !now.path.hasPrefix(c.path + "/") {
                             try? FileManager.default.removeItem(at: c)
@@ -1255,8 +1278,12 @@ final class Runner: ObservableObject {
                     }.value
                     guard let self else { return }
                     lines.forEach { self.appendLine($0) }
-                    self.endInstallerMeter()
                     self.busy = false
+                    if stopped { done(.stopped); return }
+                    if failed {
+                        self.appendLine("!! \(nm)'s installer stopped with an error (exit \(code)). Press the button to run it again.")
+                        done(.failed); return
+                    }
                     guard let client else {
                         self.appendLine("!! No game files appeared after \(nm)'s installer ran. If it came in a .zip, pick the .zip itself, or unzip all of it and pick the installer inside.")
                         done(.failed); return

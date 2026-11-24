@@ -1,5 +1,12 @@
 # Handoff — read this first
 
+**2026-11-24: 3.11.2 build 128 fixes issue #92** (a world installed from its own Windows
+installer, e.g. Eden added by hand, never found its client: Eden's installer always writes
+`C:\Eden`). Root cause, the fix, its review and the live runs: [ISSUE-92.md](ISSUE-92.md). New
+self-test `--selftest-installer`; `--selftest-installer-live <exe|zip> <world> <folder> <wrapper>
+[--stop-after s]` runs the real job on a spare wrapper. Eden's catalogue entry now points at
+Eden535 (what edenxi.com/install links). Eden is still not listed (DarkStar lineage).
+
 **2026-11-20: public release is 3.11.1 build 127 (also installed in Applications).** It fixes
 issue #89: athei deleted the `cx-26.3.0-1` Wine release, so Setup now downloads a repack from this
 repo's `wine-cx-26.3.0-1` release (never mark that release latest; the updater reads

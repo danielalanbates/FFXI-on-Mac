@@ -74,60 +74,177 @@ enum InstallerClient {
         return a.contains(b) || b.contains(a)
     }
 
+    /// Left in a folder an installer run was stopped in, or failed in (issue #92 review): a
+    /// half-written client must never be taken for one later. A run that finishes clears it.
+    static let incompleteMarker = ".ffxi-on-mac-incomplete"
+
+    static func isMarkedIncomplete(_ dir: URL) -> Bool {
+        FileManager.default.fileExists(atPath: dir.appendingPathComponent(incompleteMarker).path)
+    }
+
+    /// The game's own files are all there: the three DLLs Repair needs (`Runner.repairBlocker`),
+    /// in any layout the launcher reads (SquareEnix beside or inside Ashita, CatsEye's Game/).
+    static func hasGameFiles(_ dir: URL) -> Bool {
+        let fm = FileManager.default
+        let need = ["FFXi.dll", "FFXiMain.dll", "FFXiVersions.dll"]
+        for se in ["SquareEnix/FINAL FANTASY XI", "Game/SquareEnix/FINAL FANTASY XI", "Game/FINAL FANTASY XI", "FINAL FANTASY XI"] {
+            let d = dir.appendingPathComponent(se)
+            if need.allSatisfy({ fm.fileExists(atPath: d.appendingPathComponent($0).path) }) { return true }
+        }
+        return false
+    }
+
+    /// Every candidate as it is now, path to date: taken just before a run, so only what the run
+    /// made or changed counts as its result.
+    static func snapshot(driveC: URL) -> [String: Date] {
+        Dictionary(candidates(driveC: driveC).map { ($0.url.path, $0.modified) }, uniquingKeysWith: { a, _ in a })
+    }
+
+    /// What a run made or changed, against the `before` snapshot.
+    static func changed(_ c: Candidate, before: [String: Date]) -> Bool {
+        guard let was = before[c.url.path] else { return true }
+        return c.modified > was
+    }
+
     /// The client an installer run left, best first:
-    ///   1. `dataPath`, when it now holds one (the installer honoured `/D`, or wrote through a link);
+    ///   1. a real folder the run made or changed (`before` is the snapshot from just before it),
+    ///      named for the world first;
     ///   2. a folder named for the world;
-    ///   3. with `since` (right after a run): the newest folder changed since then.
-    /// Without `since` (before asking for an installer) only 1 and 2 count, so another world's
-    /// client is never taken.
-    static func find(driveC: URL, world: String, dataPath: URL?, since: Date?) -> URL? {
-        if let d = dataPath, holdsClient(d) { return d }
+    ///   3. `dataPath`, when it holds one (the installer honoured `/D`, or wrote through a link).
+    /// Without `before` (looking for one an earlier run left, before asking for an installer) only a
+    /// folder named for the world counts, and only when it is complete (`hasGameFiles`) and not
+    /// marked incomplete, so another world's client or a stopped run's half is never taken.
+    static func find(driveC: URL, world: String, dataPath: URL?, before: [String: Date]?) -> URL? {
         let all = candidates(driveC: driveC)
+        guard let before else {
+            return all.filter { named($0.url, world: world) && !isMarkedIncomplete($0.url) && hasGameFiles($0.url) }
+                .max { $0.modified < $1.modified }?.url
+        }
+        let fresh = all.filter { changed($0, before: before) }
+        if let n = fresh.filter({ named($0.url, world: world) }).max(by: { $0.modified < $1.modified }) { return n.url }
+        if let n = fresh.max(by: { $0.modified < $1.modified }) { return n.url }
         if let n = all.filter({ named($0.url, world: world) }).max(by: { $0.modified < $1.modified }) { return n.url }
-        guard let since else { return nil }
-        return all.filter { $0.modified >= since.addingTimeInterval(-60) }.max(by: { $0.modified < $1.modified })?.url
+        if let d = dataPath, holdsClient(d) { return d }
+        return nil
+    }
+
+    /// Real folders (never links) in the containers, `C:\`'s own excepted: what an installer may
+    /// have started writing, client yet or not.
+    static func realFolders(driveC: URL) -> [URL] {
+        let fm = FileManager.default
+        var out: [URL] = []
+        for container in containers(driveC) {
+            guard let kids = try? fm.contentsOfDirectory(at: container, includingPropertiesForKeys: [.isSymbolicLinkKey, .isDirectoryKey],
+                                                         options: [.skipsHiddenFiles]) else { continue }
+            for k in kids {
+                if container == driveC, systemFolders.contains(k.lastPathComponent.lowercased()) { continue }
+                guard let v = try? k.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey]),
+                      v.isSymbolicLink != true, v.isDirectory == true else { continue }
+                out.append(k)
+            }
+        }
+        return out
+    }
+
+    /// After a run that was stopped or failed: everything it made or changed (a client yet or not:
+    /// a later run may finish it), and the folder named for the world, is marked so that no later
+    /// look takes it for a finished client.
+    static func markIncomplete(driveC: URL, world: String, before: [String: Date], began: Date) {
+        let fm = FileManager.default
+        let changedClients = Set(candidates(driveC: driveC).filter { changed($0, before: before) }.map(\.url.path))
+        for dir in realFolders(driveC: driveC) {
+            let made = ((try? dir.resourceValues(forKeys: [.creationDateKey]))?.creationDate).map { $0 >= began.addingTimeInterval(-2) } ?? false
+            guard named(dir, world: world) || made || changedClients.contains(dir.path) else { continue }
+            fm.createFile(atPath: dir.appendingPathComponent(incompleteMarker).path, contents: Data())
+        }
+    }
+
+    /// What a folder named for the world already holds before a run writes over it (a stopped run's
+    /// half): counted towards the button's figure, which otherwise only sees new space being used.
+    static func alreadyThere(driveC: URL, world: String) -> Int64 {
+        realFolders(driveC: driveC).filter { named($0, world: world) }.compactMap(treeBytes).reduce(0, +)
     }
 
     /// Bring the client at `found` into `dataPath`: each item is renamed in (same volume, so no copy
     /// and no extra space), then `found` becomes a link to `dataPath`, so the installers' registry
-    /// (`C:\Eden\…`) and a later run of the same installer land there too. Nothing is overwritten:
-    /// a name already in `dataPath`, another volume, or a failed rename leaves the client where it
-    /// is (every item already moved goes back) and returns `found`. Returns where the client is now.
+    /// (`C:\Eden\…`) and a later run of the same installer land there too. On another volume the
+    /// items are copied (after a space check) and the originals removed. Nothing in `dataPath` is
+    /// overwritten: a name already there, or a failed rename or copy, leaves the client where it is
+    /// (whatever was already moved goes back) and returns `found`. Returns where the client is now.
     static func adopt(_ found: URL, into dataPath: URL, log: (String) -> Void) -> URL {
         let fm = FileManager.default
         let from = found.resolvingSymlinksInPath().standardizedFileURL
         let to = dataPath.resolvingSymlinksInPath().standardizedFileURL
-        if from.path == to.path { return dataPath }
+        if from.path == to.path { try? fm.removeItem(at: to.appendingPathComponent(incompleteMarker)); return dataPath }
         // Never into itself: a client folder that holds the world's folder.
         if to.path.hasPrefix(from.path + "/") || from.path.hasPrefix(to.path + "/") { return found }
         try? fm.createDirectory(at: to, withIntermediateDirectories: true)
-        guard sameVolume(from, to) else {
-            log("==> \(found.path) is on another drive than \(dataPath.path); the game is played from where the installer put it")
-            return found
-        }
         try? fm.removeItem(at: from.appendingPathComponent(".DS_Store"))
+        try? fm.removeItem(at: from.appendingPathComponent(incompleteMarker))
         guard let items = try? fm.contentsOfDirectory(at: from, includingPropertiesForKeys: nil, options: []) else { return found }
         let taken = items.filter { lexists(to.appendingPathComponent($0.lastPathComponent).path) }
         if !taken.isEmpty {
-            log("==> \(dataPath.path) already has \(taken.map(\.lastPathComponent).joined(separator: ", ")); the game is played from \(found.path)")
+            log("!! \(dataPath.path) already has \(taken.map(\.lastPathComponent).joined(separator: ", ")), so the new copy was left at \(found.path).")
             return found
         }
-        var moved: [URL] = []
-        for item in items {
-            let dest = to.appendingPathComponent(item.lastPathComponent)
-            do { try fm.moveItem(at: item, to: dest); moved.append(item) } catch {
-                for m in moved.reversed() { try? fm.moveItem(at: to.appendingPathComponent(m.lastPathComponent), to: m) }
-                log("==> couldn't move \(item.lastPathComponent) into \(dataPath.path) (\(error.localizedDescription)); the game is played from \(found.path)")
+        if sameVolume(from, to) {
+            var moved: [URL] = []
+            for item in items {
+                do { try fm.moveItem(at: item, to: to.appendingPathComponent(item.lastPathComponent)); moved.append(item) } catch {
+                    for m in moved.reversed() { try? fm.moveItem(at: to.appendingPathComponent(m.lastPathComponent), to: m) }
+                    log("!! Couldn't move \(item.lastPathComponent) into \(dataPath.path) (\(error.localizedDescription)); the game is played from \(found.path).")
+                    return found
+                }
+            }
+        } else {
+            // Another drive (a world folder chosen apart from the wrapper): a copy, never a client
+            // left inside the installers' prefix, which Move… does not carry.
+            let need = treeBytes(from)
+            if let need, let short = shortfall(need: need + 1_000_000_000, at: [to]) {
+                log("!! \(found.path) is \(gigabytes(need)); \(volumeName(short.volume)) has \(gigabytes(short.free)) free, so the game is played from there.")
                 return found
             }
+            var copied: [URL] = []
+            for item in items {
+                let dest = to.appendingPathComponent(item.lastPathComponent)
+                let d = Process(); d.executableURL = URL(fileURLWithPath: "/usr/bin/ditto"); d.arguments = [item.path, dest.path]
+                d.standardOutput = FileHandle.nullDevice; d.standardError = FileHandle.nullDevice
+                guard (try? d.run()) != nil else { break }
+                d.waitUntilExit()
+                guard d.terminationStatus == 0 else {
+                    try? fm.removeItem(at: dest)
+                    for c in copied { try? fm.removeItem(at: c) }
+                    log("!! Couldn't copy \(item.lastPathComponent) into \(dataPath.path); the game is played from \(found.path).")
+                    return found
+                }
+                copied.append(dest)
+            }
+            guard copied.count == items.count else {
+                for c in copied { try? fm.removeItem(at: c) }
+                return found
+            }
+            for item in items { try? fm.removeItem(at: item) }
         }
-        // The emptied folder becomes the link. If it cannot be replaced, the client is still whole
-        // in dataPath; only a later run of the installer would write beside it again.
-        if (try? fm.removeItem(at: from)) != nil {
+        // The emptied folder becomes the link. rmdir, never a recursive delete: anything that
+        // appeared in it meanwhile stays (and so does the folder; only a later run would write
+        // beside the client again).
+        if rmdir(from.path) == 0 {
             try? fm.createSymbolicLink(at: from, withDestinationURL: to)
         }
         log("==> moved the client from \(found.path) into \(dataPath.path)")
         return dataPath
+    }
+
+    /// Bytes under `dir` (du), nil when it cannot be read.
+    static func treeBytes(_ dir: URL) -> Int64? {
+        let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/du"); p.arguments = ["-sk", dir.path]
+        let out = Pipe(); p.standardOutput = out; p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return nil }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        guard let k = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isWhitespace).first.flatMap({ Int64($0) })
+        else { return nil }
+        return k * 1024
     }
 
     /// Before a run: a link an earlier adoption left in `C:\` for this world (`C:\Eden`) points at
@@ -161,10 +278,16 @@ enum InstallerClient {
 
     /// What an installer will write, when its payload sits beside it as an archive bsdtar can list
     /// (Eden's `data.pak` is a 7z: 14,623,105,145 bytes listed in about a second). Nil otherwise.
-    static func payloadBytes(beside exe: URL) -> Int64? {
+    ///
+    /// `ownFolder`: the installer is in a folder this job unpacked, so every .pak/.7z there is its
+    /// payload. Otherwise (an .exe picked in Downloads, say) only a `data.pak` counts: unrelated
+    /// archives beside it must not make the job refuse for want of space.
+    static func payloadBytes(beside exe: URL, ownFolder: Bool) -> Int64? {
         let dir = exe.deletingLastPathComponent()
         guard let kids = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return nil }
-        let archives = kids.filter { ["pak", "7z"].contains($0.pathExtension.lowercased()) }
+        let archives = kids.filter {
+            ownFolder ? ["pak", "7z"].contains($0.pathExtension.lowercased()) : $0.lastPathComponent.lowercased() == "data.pak"
+        }
         let sizes = archives.compactMap(archiveBytes)
         return sizes.isEmpty ? nil : sizes.reduce(0, +)
     }
@@ -218,9 +341,13 @@ enum InstallerClient {
         baseline.reduce(0) { sum, kv in sum + max(0, kv.value - (now[kv.key] ?? kv.value)) }
     }
 
-    /// The first volume among `urls` with less than `need` bytes free, with what it has.
+    /// When no volume among `urls` has `need` bytes free: the first of them (the one a message
+    /// names) and what it has. An installer writes to one of them, and which one is its own choice.
     static func shortfall(need: Int64, at urls: [URL]) -> (volume: String, free: Int64)? {
-        freeBytes(urls).sorted { $0.key < $1.key }.first { $0.value < need }.map { ($0.key, $0.value) }
+        let free = freeBytes(urls)
+        guard !free.isEmpty, free.values.allSatisfy({ $0 < need }) else { return nil }
+        let first = urls.first.flatMap { u in freeBytes([u]).first } ?? free.first!
+        return (first.key, first.value)
     }
 
     /// "14.6 GB".

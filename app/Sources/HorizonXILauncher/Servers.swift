@@ -180,7 +180,8 @@ struct Server: Codable, Identifiable, Hashable {
     static func catalogued(for name: String) -> Server? {
         let n = InstallerClient.squash(name)
         guard !n.isEmpty else { return nil }
-        return all.first { !$0.local && InstallerClient.squash($0.name) == n }
+        // Never a world with its own sign-in flow (Phoenix XI): its research is not a host to type into.
+        return all.first { !$0.local && $0.launchUnavailableReason == nil && InstallerClient.squash($0.name) == n }
     }
 
     /// A world added by hand that is named for one this project researched gets that research

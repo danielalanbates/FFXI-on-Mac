@@ -1707,7 +1707,7 @@ struct ContentView: View {
                                 .disabled(runner.busy)
                                 .help("Runs CatsEyeXI's own launcher inside the wrapper to install or update their client (their storage is private, so only their launcher can fetch it).")
                         }
-                        if let s = store.selected, !s.local {
+                        if let s = store.selected, !s.local, s.installKind != .horizonTorrent {
                             Button("Run installer…") { if let i = active { runLocalInstaller(for: s, install: i) } }
                                 .disabled(runner.busy)
                                 .help("Run a Windows installer or launcher (.exe or .zip) you already downloaded for \(s.name), inside the wrapper. It installs into C:\\Games\\\(s.name), which is \(s.dataPath.isEmpty ? "the folder you choose" : s.dataPath).")
@@ -1847,13 +1847,16 @@ struct ContentView: View {
     /// Run it in the wrapper; wherever it installs, its client is brought into the world's folder
     /// ("FFXI on Mac/Games/<world>", asked for only when there is no chosen folder).
     private func runLocalInstaller(for s: Server, install i: Install) {
-        guard let s = worldWithFolder(s), let file = pickInstaller(for: s) else { return }
+        // The installer first: a cancelled picker leaves the world exactly as it was.
+        guard let file = pickInstaller(for: s), let s = worldWithFolder(s) else { return }
         Task { _ = await runInstallerJob(for: s, install: i.forServer(s), file: file) }
     }
 
     /// The world, with its folder made first when it has none (`placeWorldData`). Nil when the
-    /// user cancelled the folder chooser.
+    /// user cancelled the folder chooser, and for the worlds that play the wrapper's own client
+    /// (HorizonXI, the local world), whose empty folder means exactly that.
     private func worldWithFolder(_ s: Server) -> Server? {
+        if s.local || s.installKind == .horizonTorrent { return s.dataPath.isEmpty ? nil : s }
         if !s.dataPath.isEmpty { return s }
         guard placeWorldData(for: s), let again = store.servers.first(where: { $0.name == s.name }),
               !again.dataPath.isEmpty else { return nil }
@@ -1908,7 +1911,7 @@ struct ContentView: View {
         let driveC = i.installerPrefix.driveC, data = URL(fileURLWithPath: s.dataPath), world = s.name
         let (found, lines) = await Task.detached(priority: .userInitiated) { () -> (URL?, [String]) in
             var lines: [String] = []
-            guard let f = InstallerClient.find(driveC: driveC, world: world, dataPath: nil, since: nil) else { return (nil, lines) }
+            guard let f = InstallerClient.find(driveC: driveC, world: world, dataPath: nil, before: nil) else { return (nil, lines) }
             let now = InstallerClient.adopt(f, into: data) { lines.append($0) }
             return (now, lines)
         }.value
@@ -2296,7 +2299,10 @@ struct ContentView: View {
                 continue
             default: return                                     // nothing left to set up
             }
-            if done.contains(need) { return }
+            // The game step once per press whatever its kind: an installer that left only part of
+            // the client turns .game(partial: false) into .game(partial: true), and must not open
+            // a second picker (or start a second download) by itself.
+            if done.contains(where: { Self.sameStep($0, need) }) { return }
             done.append(need)
             switch need {
             case .rosetta:
@@ -2311,6 +2317,8 @@ struct ContentView: View {
                 setupStep(.game)
                 await carryOverPrepare()
                 guard await setupGameStep(r) else { return }
+                // An installer can run for a long time: what follows is for the world it was for.
+                guard store.selectedID == world else { return }
                 // The macros, equipment sets and addon settings of the install played before, as
                 // soon as the client is there (a configure step that fails must not lose them).
                 await carryOver(.setup)
@@ -2328,6 +2336,12 @@ struct ContentView: View {
                 guard await setupLocalServerStep(r) else { return }
             }
         }
+    }
+
+    /// Setup's steps for the once-per-press rule: every `.game` is one step.
+    static func sameStep(_ a: PrimaryAction.SetupNeed, _ b: PrimaryAction.SetupNeed) -> Bool {
+        if case .game = a, case .game = b { return true }
+        return a == b
     }
 
     private func setupMultiServerStep(_ r: Runner) async -> Bool {
