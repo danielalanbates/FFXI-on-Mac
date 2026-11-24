@@ -1,6 +1,7 @@
 # Handoff — read this first
 
-**2026-11-24: 3.11.2 build 128 fixes issue #92** (a world installed from its own Windows
+**2026-11-24: public release is 3.11.2 build 128 (tag `v3.11.2` = `7c7824e`, also installed in
+Applications). It fixes issue #92** (a world installed from its own Windows
 installer, e.g. Eden added by hand, never found its client: Eden's installer always writes
 `C:\Eden`). Root cause, the fix, its review and the live runs: [ISSUE-92.md](ISSUE-92.md). New
 self-test `--selftest-installer`; `--selftest-installer-live <exe|zip> <world> <folder> <wrapper>
