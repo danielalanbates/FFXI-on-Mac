@@ -92,8 +92,8 @@ So the answer is not to find a clone of CrossOver. It is to use **real wine**:
   CodeWeavers' published wine source counts: athei's `wine-cx` is exactly that.
 
 Homebrew marks the official cask as failing the macOS Gatekeeper check. That is a
-**notarisation** gap, not a licensing one, and it does not affect us: we sign and notarise our
-own `.dmg` with the project's Developer ID anyway.
+**notarisation** gap, not a licensing one, and it does not affect us: we sign our own `.dmg`
+with the project's Developer ID (notarised up to 3.10; signed only from 3.11).
 
 Things to check while shopping for an engine: Kegworks and Wineskin ship *both* pure-wine
 engines and CrossOver-derived ones (names containing `CX`, e.g. `WS12WineCX64Bit`). A `CX` engine
