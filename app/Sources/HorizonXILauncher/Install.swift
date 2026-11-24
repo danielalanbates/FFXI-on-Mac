@@ -397,7 +397,8 @@ struct Install: Identifiable, Hashable {
                 // the game nowhere, it is a fresh wrapper waiting for an install, and its
                 // prefixes are exactly what the user needs to see.
                 let candidates = kids
-                    .filter { $0.lastPathComponent.hasPrefix("prefix") && !WorldPrefix.isManaged(name: $0.lastPathComponent) }
+                    .filter { $0.lastPathComponent.hasPrefix("prefix") && !WorldPrefix.isManaged(name: $0.lastPathComponent)
+                        && $0.lastPathComponent != Install.installerPrefixName }
                     .map { Install(wrapper: app, prefixName: $0.lastPathComponent) }
                 let withGame = candidates.filter(\.hasGame)
                 found.append(contentsOf: withGame.isEmpty ? candidates : withGame)
@@ -478,7 +479,7 @@ struct Install: Identifiable, Hashable {
               let kids = try? fm.contentsOfDirectory(at: shared, includingPropertiesForKeys: nil)
         else { return [] }
         return kids
-            .filter { $0.lastPathComponent.hasPrefix("prefix") }
+            .filter { $0.lastPathComponent.hasPrefix("prefix") && $0.lastPathComponent != Install.installerPrefixName }
             .map { Install(wrapper: app, prefixName: $0.lastPathComponent) }
             .sorted { a, b in
                 if a.hasGame != b.hasGame { return a.hasGame }
