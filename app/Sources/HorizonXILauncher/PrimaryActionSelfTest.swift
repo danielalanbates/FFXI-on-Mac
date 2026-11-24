@@ -279,10 +279,15 @@ extension Headless {
             var y = base; y.setupRunning = true; y.setupStage = s; y.setupProgress = 0.37
             seen.append(("Setup step \(s.rawValue)", Primary.decide(y)))
         }
+        // An installer whose total is unknown counts gigabytes (issue #92).
+        var gb = base; gb.ownJob = "Installing eden"; gb.ownWritten = 3_240_000_000
+        seen.append(("installer, unknown total", Primary.decide(gb)))
+        gb.setupRunning = true; gb.setupStage = .installingGame; gb.setupProgress = 0.4; gb.ownWritten = 99_400_000_000
+        seen.append(("installer in Setup's chain, unknown total", Primary.decide(gb)))
         let names = ["Setting up", "Updating", "Repairing", "Checking", "Starting", "Stopping", "Moving", "Waiting",
                      "Running", "Wine is closing"] + SetupStage.allCases.map(\.rawValue)
         let progress = try! NSRegularExpression(
-            pattern: "^(" + names.map(NSRegularExpression.escapedPattern(for:)).joined(separator: "|") + ")…( \\d{1,3}%)?$")
+            pattern: "^(" + names.map(NSRegularExpression.escapedPattern(for:)).joined(separator: "|") + ")…( \\d{1,3}%| \\d{1,3}(\\.\\d)? GB)?$")
         func isProgress(_ l: String) -> Bool {
             progress.firstMatch(in: l, range: NSRange(l.startIndex..., in: l)) != nil
         }

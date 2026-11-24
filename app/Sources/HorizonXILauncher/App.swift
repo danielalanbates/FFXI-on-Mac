@@ -432,7 +432,8 @@ struct ContentView: View {
         if runner.busy { x.ownJob = runner.busyReason.isEmpty ? "Working" : runner.busyReason }
         else if x.isLocal, local.busy { x.ownJob = local.activity.isEmpty ? "setting up" : local.activity }
         else if moveChecking { x.ownJob = "Checking" }
-        x.ownProgress = runner.updatingHorizon ? runner.updateProgress : runner.moveProgress ?? runner.ascensionProgress
+        x.ownProgress = runner.updatingHorizon ? runner.updateProgress : runner.moveProgress ?? runner.ascensionProgress ?? runner.installerProgress
+        x.ownWritten = runner.installerWritten
         if !runner.busy, Runner.workInFlight { x.otherJob = Runner.workInFlightReason ?? "Another job is running" }
         x.runningHere = runner.running
         x.serverLost = runner.serverLost
@@ -1706,7 +1707,7 @@ struct ContentView: View {
                                 .disabled(runner.busy)
                                 .help("Runs CatsEyeXI's own launcher inside the wrapper to install or update their client (their storage is private, so only their launcher can fetch it).")
                         }
-                        if let s = store.selected, !s.local {
+                        if let s = store.selected, !s.local, s.installKind != .horizonTorrent {
                             Button("Run installer…") { if let i = active { runLocalInstaller(for: s, install: i) } }
                                 .disabled(runner.busy)
                                 .help("Run a Windows installer or launcher (.exe or .zip) you already downloaded for \(s.name), inside the wrapper. It installs into C:\\Games\\\(s.name), which is \(s.dataPath.isEmpty ? "the folder you choose" : s.dataPath).")
@@ -1843,30 +1844,82 @@ struct ContentView: View {
     }
 
     /// The user already has the world's installer (their site, Discord, a friend's USB stick).
-    /// Run it in the wrapper, pointed at the world's data folder.
+    /// Run it in the wrapper; wherever it installs, its client is brought into the world's folder
+    /// ("FFXI on Mac/Games/<world>", asked for only when there is no chosen folder).
     private func runLocalInstaller(for s: Server, install i: Install) {
-        if s.dataPath.isEmpty {
-            chooseGameData(for: s)
-            guard let again = store.servers.first(where: { $0.name == s.name }), !again.dataPath.isEmpty else { return }
-            runLocalInstaller(for: again, install: i.forServer(again)); return
-        }
+        // The installer first: a cancelled picker leaves the world exactly as it was.
+        guard let file = pickInstaller(for: s), let s = worldWithFolder(s) else { return }
+        Task { _ = await runInstallerJob(for: s, install: i.forServer(s), file: file) }
+    }
+
+    /// The world, with its folder made first when it has none (`placeWorldData`). Nil when the
+    /// user cancelled the folder chooser, and for the worlds that play the wrapper's own client
+    /// (HorizonXI, the local world), whose empty folder means exactly that.
+    private func worldWithFolder(_ s: Server) -> Server? {
+        if s.local || s.installKind == .horizonTorrent { return s.dataPath.isEmpty ? nil : s }
+        if !s.dataPath.isEmpty { return s }
+        guard placeWorldData(for: s), let again = store.servers.first(where: { $0.name == s.name }),
+              !again.dataPath.isEmpty else { return nil }
+        return again
+    }
+
+    /// Asks for the installer the user already has. Nil when cancelled.
+    private func pickInstaller(for s: Server) -> URL? {
         let panel = NSOpenPanel()
         panel.title = "Installer for \(s.name)"
-        panel.message = "Pick \(s.name)'s Windows installer or launcher (.exe, or a .zip holding one). It runs inside the wrapper; when it asks where to install, use C:\\Games\\\(s.name) — that is \(s.dataPath)."
+        panel.message = "Pick \(s.name)'s Windows installer (.exe), or the .zip it came in. It runs inside the wrapper; if it asks where to install, use C:\\Games\\\(s.name)."
         panel.canChooseDirectories = false; panel.canChooseFiles = true
         panel.allowedContentTypes = [.exe, .zip]
         panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
         panel.prompt = "Run in wrapper"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        runner.runLocalInstaller(url, in: i, dataPath: s.dataPath, name: s.name)
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url
     }
 
-    /// Where a world's own download page is, for when a direct installer link has gone stale.
-    static let homePages: [String: String] = [
-        "Eden": "https://edenxi.com", "FFEra": "https://ffera.com/login.php?guide=install",
-        "ValhallaXI": "https://valhalla.group/site/connect.html", "Gaia XI": "https://gaiaxi.com",
-        "CatsEyeXI": "https://catseyexi.com/download",
-    ]
+    /// Runs a world's installer job and waits for it: the `file` the user picked, or the world's
+    /// own download (`installURL`). True when the world has its client afterwards.
+    private func runInstallerJob(for s: Server, install i: Install, file: URL?) async -> Bool {
+        guard let file else {
+            guard let u = URL(string: s.installURL) else { return false }
+            runner.installPageFallback = Server.homePages[s.name].flatMap(URL.init(string:))
+            return await withCheckedContinuation { c in
+                runner.runInstaller(from: u, in: i, dataPath: s.dataPath, name: s.name) { c.resume(returning: installerFinished(s, $0)) }
+            }
+        }
+        return await withCheckedContinuation { c in
+            runner.runLocalInstaller(file, in: i, dataPath: s.dataPath, name: s.name) { c.resume(returning: installerFinished(s, $0)) }
+        }
+    }
+
+    /// Where an installer job left the client becomes the world's folder when it is not already
+    /// (it could not be moved in: another drive, a name already there). True when installed.
+    private func installerFinished(_ s: Server, _ outcome: Runner.InstallerOutcome) -> Bool {
+        defer { recheck() }
+        guard case .installed(let found) = outcome else { return false }
+        if var c = store.servers.first(where: { $0.name == s.name }), c.dataPath != found.path {
+            c.dataPath = found.path; store.update(c)
+            runner.appendLine("==> \(s.name)'s game data folder set to \(found.path)")
+        }
+        return true
+    }
+
+    /// A client an earlier installer run left in the installers' Windows drive, named for this
+    /// world (3.11.1 never brought it over: issue #92, 14.6 GB of Eden in `C:\Eden`), brought into
+    /// the world's folder instead of installing it all again. True when there was one.
+    private func adoptLeftover(_ s: Server, _ i: Install) async -> Bool {
+        guard !s.dataPath.isEmpty, !runner.busy else { return false }
+        let driveC = i.installerPrefix.driveC, data = URL(fileURLWithPath: s.dataPath), world = s.name
+        let (found, lines) = await Task.detached(priority: .userInitiated) { () -> (URL?, [String]) in
+            var lines: [String] = []
+            guard let f = InstallerClient.find(driveC: driveC, world: world, dataPath: nil, before: nil) else { return (nil, lines) }
+            let now = InstallerClient.adopt(f, into: data) { lines.append($0) }
+            return (now, lines)
+        }.value
+        lines.forEach { runner.appendLine($0) }
+        guard let found else { return false }
+        runner.appendLine("==> found \(world)'s client from an earlier install at \(found.path)")
+        return installerFinished(s, .installed(found))
+    }
 
     /// Get the world's client the way that world distributes it. Nothing here redistributes
     /// Square Enix data: each route runs or opens the server's own installer.
@@ -1884,32 +1937,23 @@ struct ContentView: View {
         case .horizonTorrent:
             runner.installHorizon(into: i.gameDir)
         case .installerExe:
-            guard let u = URL(string: s.installURL) else { return }
-            runner.installPageFallback = Self.homePages[s.name].flatMap(URL.init(string:))
-            // An NSIS script may ignore /D= and install wherever it likes (Eden's does). Take
-            // the folder the installer actually used rather than assuming the one we asked for —
-            // a dataPath that does not hold the world's client is what made "Play Eden" launch
-            // the HorizonXI client in the first place.
-            runner.onClientInstalled = { found in
-                guard var c = store.servers.first(where: { $0.name == s.name }) else { return }
-                if c.dataPath != found.path {
-                    c.dataPath = found.path; store.update(c)
-                    runner.appendLine("==> \(s.name)'s game data folder set to \(found.path)")
-                }
-                recheck()
-            }
-            runner.runInstaller(from: u, in: i, dataPath: s.dataPath, name: s.name)
+            Task { _ = await runInstallerJob(for: s, install: i, file: nil) }
         case .clientZip:
             guard let u = URL(string: s.installURL) else { return }
-            runner.installPageFallback = Self.homePages[s.name].flatMap(URL.init(string:))
+            runner.installPageFallback = Server.homePages[s.name].flatMap(URL.init(string:))
             runner.installClientZip(from: u, into: s.dataPath, name: s.name)
         case .retail:
             runner.installRetail(for: s, in: i)
         case .ascensionChannel, .vanadreamsPackage, .driftwoodContent, .pegasusPack, .retailWorld, .scytheChannel:
             worldJob(for: s, install: i, full: true, runner: runner) { _ in recheck() }
         case .website:
-            if let u = URL(string: s.installURL) { NSWorkspace.shared.open(u) }
-            info("Download page opened — then use Run installer…")
+            // A world added by hand may have no page: say so rather than that one opened.
+            if let u = URL(string: s.installURL) {
+                NSWorkspace.shared.open(u)
+                info("Download page opened — then use Run installer…")
+            } else {
+                info("No download page is known for \(s.name) — use Run installer… with the installer you have.")
+            }
         case .none:
             notice = "No download known for \(s.name)"
         }
@@ -2032,7 +2076,7 @@ struct ContentView: View {
                 // No updater in the launcher: the world's own route (installer, client zip or
                 // download page); with none known, its home page, or the folder its client is in.
                 if s.installKind != .none { downloadGameData(for: s, install: i) }
-                else if let u = Self.homePages[s.name].flatMap(URL.init(string:)) { NSWorkspace.shared.open(u) }
+                else if let u = Server.homePages[s.name].flatMap(URL.init(string:)) { NSWorkspace.shared.open(u) }
                 else { chooseGameData(for: s) }
                 return
             }
@@ -2142,7 +2186,7 @@ struct ContentView: View {
             case .assemble?: return 0.55
             case .prefix?: return 0.75
             }
-        case .gameWine?, .game?: return runner.updatingHorizon ? runner.updateProgress : runner.ascensionProgress ?? 0
+        case .gameWine?, .game?: return runner.updatingHorizon ? runner.updateProgress : runner.ascensionProgress ?? runner.installerProgress ?? 0
         case .multiServer?: return 0
         case .files?: return runner.moveProgress ?? 0
         default: return 0
@@ -2158,7 +2202,7 @@ struct ContentView: View {
         case .files?: return runner.busy ? .copyingFiles : .movingFiles
         case .gameWine?: return .gameWine
         case .multiServer?: return .multiServer
-        case .game?: return runner.updatingHorizon ? runner.stage : nil
+        case .game?: return runner.updatingHorizon ? runner.stage : runner.installing ? .installingGame : nil
         case .configure?: return .finishing
         case .localServer?: return .buildingServer
         case nil: return nil
@@ -2255,7 +2299,10 @@ struct ContentView: View {
                 continue
             default: return                                     // nothing left to set up
             }
-            if done.contains(need) { return }
+            // The game step once per press whatever its kind: an installer that left only part of
+            // the client turns .game(partial: false) into .game(partial: true), and must not open
+            // a second picker (or start a second download) by itself.
+            if done.contains(where: { Self.sameStep($0, need) }) { return }
             done.append(need)
             switch need {
             case .rosetta:
@@ -2270,6 +2317,8 @@ struct ContentView: View {
                 setupStep(.game)
                 await carryOverPrepare()
                 guard await setupGameStep(r) else { return }
+                // An installer can run for a long time: what follows is for the world it was for.
+                guard store.selectedID == world else { return }
                 // The macros, equipment sets and addon settings of the install played before, as
                 // soon as the client is there (a configure step that fails must not lose them).
                 await carryOver(.setup)
@@ -2287,6 +2336,12 @@ struct ContentView: View {
                 guard await setupLocalServerStep(r) else { return }
             }
         }
+    }
+
+    /// Setup's steps for the once-per-press rule: every `.game` is one step.
+    static func sameStep(_ a: PrimaryAction.SetupNeed, _ b: PrimaryAction.SetupNeed) -> Bool {
+        if case .game = a, case .game = b { return true }
+        return a == b
     }
 
     private func setupMultiServerStep(_ r: Runner) async -> Bool {
@@ -2705,17 +2760,23 @@ struct ContentView: View {
                 }
             }
         }
-        if s.installKind == .website {
+        if s.installKind == .website || s.installKind == .installerExe {
+            // The world's own Windows installer. Setup waits for it (its progress is the button's)
+            // and then goes on to configure the client, wherever the installer put it (issue #92).
+            guard let s = worldWithFolder(s) else { return false }
+            if await adoptLeftover(s, i) { return true }
+            if s.installKind == .installerExe { return await runInstallerJob(for: s, install: i.forServer(s), file: nil) }
             // Their page is the only source. The first press opens it; once the installer is
-            // downloaded, the next press runs it inside the wrapper.
-            if websiteOpened.contains(s.name) {
-                runLocalInstaller(for: s, install: i)
-            } else {
+            // downloaded, the next press runs it inside the wrapper. No page known (a world added
+            // by hand): straight to the installer the user has.
+            if URL(string: s.installURL) != nil, !websiteOpened.contains(s.name) {
                 websiteOpened.insert(s.name)
                 downloadGameData(for: s, install: i)
                 info("\(s.name)'s download page is open. When it has downloaded, press Setup again.")
+                return false
             }
-            return false
+            guard let file = pickInstaller(for: s) else { return false }
+            return await runInstallerJob(for: s, install: i.forServer(s), file: file)
         }
         downloadGameData(for: s, install: i)
         return false

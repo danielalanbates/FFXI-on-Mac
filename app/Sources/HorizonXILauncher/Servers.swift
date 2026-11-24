@@ -161,6 +161,42 @@ struct Server: Codable, Identifiable, Hashable {
         name == "Phoenix XI" ? "Use Connect Phoenix to sign in, install and play." : nil
     }
 
+    /// The note `ServerStore.add` gives a world added by hand. It marks the entry as the user's:
+    /// never dropped with the worlds this project retired (a world added as "Eden" used to vanish
+    /// at the next launch, issue #92), and filled in from what this project knows of that world.
+    static let addedNote = "Added by you."
+    var addedByUser: Bool { note == Self.addedNote }
+
+    /// Where a world's own download page is, for when a direct installer link has gone stale, and
+    /// for a world added by hand under a name this project knows.
+    static let homePages: [String: String] = [
+        "Eden": "https://edenxi.com/install", "FFEra": "https://ffera.com/login.php?guide=install",
+        "ValhallaXI": "https://valhalla.group/site/connect.html", "Gaia XI": "https://gaiaxi.com",
+        "CatsEyeXI": "https://catseyexi.com/download",
+    ]
+
+    /// The researched entry (offered in the picker or not) a world added by hand is named for:
+    /// "eden" is Eden.
+    static func catalogued(for name: String) -> Server? {
+        let n = InstallerClient.squash(name)
+        guard !n.isEmpty else { return nil }
+        // Never a world with its own sign-in flow (Phoenix XI): its research is not a host to type into.
+        return all.first { !$0.local && $0.launchUnavailableReason == nil && InstallerClient.squash($0.name) == n }
+    }
+
+    /// A world added by hand that is named for one this project researched gets that research
+    /// wherever the user left a blank: its login host, how its accounts are made, and its own
+    /// download page (Setup opens it, then runs the installer the user picks). Nothing typed is
+    /// replaced, and it stays out of the picker's own list.
+    mutating func fillFromCatalogue() {
+        guard addedByUser, let c = Self.catalogued(for: name) else { return }
+        if host.trimmingCharacters(in: .whitespaces).isEmpty { host = c.host }
+        if accountHow.isEmpty { accountURL = c.accountURL; accountHow = c.accountHow; discordURL = c.discordURL }
+        if installURL.isEmpty, let page = Self.homePages[c.name] {
+            installURL = page; installKind = .website; installNote = c.installNote
+        }
+    }
+
     /// A pure sort shared by the picker, companion world list and offline checks.
     static func ordered(_ servers: [Server], populations: [String: Int]) -> [Server] {
         func count(_ s: Server) -> Int {
@@ -568,20 +604,22 @@ struct Server: Codable, Identifiable, Hashable {
         Server(name: "Eden", host: "play.edenxi.com", bootProfile: "eden.ini", verified: false,
                note: "Login host from Eden's own new-player wiki. Untested by this project.",
                era: "Classic · 75 cap", population: 1925, codebase: .darkStarLineage,
-               // Eden534.zip on Google Drive (5.8 GB, checked 2026-08-16): a full pre-retail-era
-               // client + Ashita + Windower, default C:\Eden, loader Ashita\ffxi-bootmod\xiloader.exe.
-               // The bit.ly on their site resolves to this file id; if Eden ships a new build the id
-               // changes and this falls back to opening their page.
-               installURL: "https://drive.usercontent.google.com/download?id=196Da1f9Wx1Oy8LfDyqlvmJLaRr24n5A7&export=download&confirm=t", installKind: .installerExe,
-               installNote: "Eden's own installer (Eden534.zip, 5.8 GB from their Google Drive): full client, Ashita and Windower. It runs inside the wrapper; install into C:\\Games\\Eden.",
-               // Eden has no signup page at all: edenxi.com is a news SPA. Their wiki's new-player
-               // guide says a registration code comes from their Discord bot (`!getcode`, 7
-               // digits, valid 10 minutes) and the account itself is typed into the loader
-               // console. Pointing at edenxi.com would be pointing at a page that cannot sign
-               // anyone up, so this points at the invite (checked live: guild "Eden").
+               // Eden535.zip on Google Drive (5,771,573,370 bytes): the file edenxi.com/install links
+               // (bit.ly/Eden535, read from their /api/v1/misc/config on 2026-11-24; Eden534 is the
+               // 2023 build it replaced). Installer.exe (NSIS 3.06.1) + data.pak (a 7z, 14.6 GB
+               // unpacked): Ashita v3 with Eden's xiloader in Ashita\ffxi-bootmod, Windower 4, the
+               // classic client. The installer ignores /D and always writes C:\Eden; InstallerClient
+               // brings it into the world's folder. If the id changes this falls back to their page.
+               installURL: "https://drive.usercontent.google.com/download?id=1kLPVfruGCzXkkT2XQ-pmiSh4akHMLjo2&export=download&confirm=t", installKind: .installerExe,
+               installNote: "Eden's own installer (Eden535.zip, 5.8 GB, from edenxi.com/install): client, Ashita and Windower, about 14.6 GB installed. Pick Installer.exe from the unzipped folder, or the .zip itself.",
+               // Eden has no signup page at all: edenxi.com only manages an existing account (their
+               // API's POST /register answers 404). The account is made in the loader console:
+               // Login / Create Account / Quit. A registration code is asked for only when the
+               // server says so (their news, 2024-10-12: not currently required); an existing
+               // player makes one in game with !getcode.
                accountHow: "No signup page — the account is created in the loader window that "
-                     + "opens when you press Play. Eden gates that with a registration code "
-                     + "their Discord bot hands out (!getcode: 7 digits, good for 10 minutes).",
+                     + "opens when you press Play. If it asks for a registration code, an Eden "
+                     + "player can make you one in game (!getcode).",
                discordURL: "https://discord.gg/S3EAWr2Jec"),
         Server(name: "FFEra", host: "ffera.com", bootProfile: "ffera.ini", verified: false,
                note: "Longest-running 75-cap community server. Login host from FFEra's own "
@@ -703,7 +741,8 @@ final class ServerStore: ObservableObject {
         // those by name -- but only ones this project shipped and has since retired, never a
         // server the user added themselves.
         let retiredNames = Set(Server.retiredWorlds.map(\.name))
-        var out = saved.filter { !retiredNames.contains($0.name) }
+        var out = saved.filter { !retiredNames.contains($0.name) || $0.addedByUser }
+        for i in out.indices where out[i].addedByUser { out[i].fillFromCatalogue() }
         for b in Server.builtins where !saved.contains(where: { $0.name == b.name }) {
             out.append(b)
         }
@@ -759,9 +798,11 @@ final class ServerStore: ObservableObject {
 
     func add(name: String, host: String, profile: String) {
         guard !name.isEmpty, !servers.contains(where: { $0.name == name }) else { return }
-        servers.append(Server(name: name, host: host,
-                              bootProfile: profile.isEmpty ? "horizonxi.ini" : profile,
-                              verified: false, note: "Added by you.", era: "", population: 0))
+        var added = Server(name: name, host: host,
+                           bootProfile: profile.isEmpty ? "horizonxi.ini" : profile,
+                           verified: false, note: Server.addedNote, era: "", population: 0)
+        added.fillFromCatalogue()
+        servers.append(added)
         save()
     }
 

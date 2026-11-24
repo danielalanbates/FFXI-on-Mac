@@ -47,7 +47,13 @@ final class Runner: ObservableObject {
         didSet {
             if busy != oldValue { Runner.busyCount += busy ? 1 : -1 }
             if busy { Runner.busyReasons[ObjectIdentifier(self)] = busyReason }
-            else { Runner.busyReasons[ObjectIdentifier(self)] = nil; busyReason = "" }
+            else {
+                Runner.busyReasons[ObjectIdentifier(self)] = nil; busyReason = ""
+                // An installer's figure belongs to its job only, however that job ended.
+                installerTimer?.invalidate(); installerTimer = nil
+                if installerProgress != nil { installerProgress = nil }
+                if installerWritten != nil { installerWritten = nil }
+            }
         }
     }
     /// What `busy` is, in a few words ("Updating Wine"): what the button's progress, its Stop
@@ -213,6 +219,8 @@ final class Runner: ObservableObject {
     private var jobWine: JobKill.Wine?
     /// Stop on work this process does itself: Wine's prefix update (`updatePrefix`).
     private let prefixUpdateStop = StopFlag()
+    /// Stop for the installers' prefix while it is made (ensureInstallerPrefix).
+    private let installerStop = StopFlag()
     /// Executable Ashita boots the game in for the current launch (the boot profile's
     /// `[ashita.boot] file`): horizon-loader.exe on HorizonXI, pol.exe on CatsEyeXI, xiloader.exe
     /// elsewhere. Both the exit watcher and the x87 sidecar look for this, by name.
@@ -518,7 +526,7 @@ final class Runner: ObservableObject {
         // (which made every Play after a Repair stop for "Updating Wine").
         spawn(URL(fileURLWithPath: "/bin/zsh"),
               args: [script.path, install.wrapper.path, install.prefixName,
-                     install.gameDir.path, install.squareEnixWine],
+                     install.gameDir.path, install.squareEnixWine, install.squareEnix.path],
               env: ["HXI_WINE": wine.path], cwd: Self.scratchDir) { [weak self] code in
             self?.jobWine = nil
             self?.endMaintenance()
@@ -661,6 +669,7 @@ final class Runner: ObservableObject {
         stopRequested = true
         InstallMove.copyStop.raise()
         prefixUpdateStop.raise()
+        installerStop.raise()
         ascensionStop.raise()
         let pid = proc.flatMap { $0.isRunning ? $0.processIdentifier : nil }
         let wine = jobWine
@@ -777,7 +786,11 @@ final class Runner: ObservableObject {
         let games = install.driveC.appendingPathComponent("Games")
         try? FileManager.default.createDirectory(at: games, withIntermediateDirectories: true)
         let link = games.appendingPathComponent(name)
-        try? FileManager.default.removeItem(at: link)
+        // Only ever a link is replaced: a real folder there is a client an installer wrote (it is
+        // brought into the world's folder afterwards, InstallerClient), and was deleted here before.
+        let isLink = (try? link.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
+        if isLink { try? FileManager.default.removeItem(at: link) }
+        else if InstallerClient.lexists(link.path) { return }
         try? FileManager.default.createSymbolicLink(at: link, withDestinationURL: URL(fileURLWithPath: dataPath))
     }
 
@@ -819,13 +832,18 @@ final class Runner: ObservableObject {
     /// Bounded: a wineboot (or the wait for its wineserver) still going after `limit` seconds, or
     /// ended by Stop, ends this prefix's Wine session and counts as not done -- "Updating Wine"
     /// never holds the main button for good. Quit ends it too (JobKill).
-    nonisolated static func updatePrefix(_ install: Install, limit: Double = 300, stop: StopFlag? = nil) -> Bool {
+    ///
+    /// `wine`: the Wine to boot it with (Play's by default). `mono`: let wineboot install Mono and
+    /// Gecko -- the installers' prefix keeps them (a world's installer may be .NET), and the
+    /// wrapper's Wine carries both, so they install without a question (measured 2026-11-24).
+    nonisolated static func updatePrefix(_ install: Install, limit: Double = 300, stop: StopFlag? = nil,
+                                         wine wineOverride: URL? = nil, mono: Bool = false) -> Bool {
         var env = ProcessInfo.processInfo.environment
         env["WINEPREFIX"] = install.prefix.path; env["WINEDEBUG"] = "-all"
-        env["WINEDLLOVERRIDES"] = "mscoree,mshtml="
+        if !mono { env["WINEDLLOVERRIDES"] = "mscoree,mshtml=" }
         env["WINEBOOT_HIDE_DIALOG"] = "1"
         env.removeValue(forKey: "DYLD_FALLBACK_LIBRARY_PATH"); env.removeValue(forKey: "DYLD_LIBRARY_PATH")
-        let wine = playWine(install)
+        let wine = wineOverride ?? playWine(install)
         let session = JobKill.Wine(server: wine.deletingLastPathComponent().appendingPathComponent("wineserver"),
                                    prefix: install.prefix)
         let deadline = Date().addingTimeInterval(limit)
@@ -899,51 +917,74 @@ final class Runner: ObservableObject {
 
     /// Make sure the wrapper's installer prefix exists (see `Install.installerPrefix`). Slow the
     /// first time only; runs off the main actor and calls back on it.
-    func ensureInstallerPrefix(_ install: Install, then: @escaping (Install) -> Void) {
+    ///
+    /// Made the way every other prefix here is (issue #92): bounded (`updatePrefix`, 300 s), no
+    /// "updating configuration" window, output to nowhere rather than a pipe nobody reads, and
+    /// this job's Stop ends it and its Wine session. Before, Stop did nothing here and the button
+    /// sat at "Setting up…" for as long as wineboot liked. A prefix with no system.reg afterwards
+    /// is a failure said in one line, never an installer started into it. `failed` runs after
+    /// the job has ended (busy is false), stopped or not.
+    func ensureInstallerPrefix(_ install: Install, then: @escaping (Install) -> Void,
+                               failed: @escaping () -> Void = {}) {
         let ip = install.installerPrefix
-        if FileManager.default.fileExists(atPath: ip.systemReg.path) { then(ip); return }
+        // Made, and not left half-made by a Stop or a time-out (its marker goes only once wineboot
+        // finished): then it is ready. Otherwise wineboot runs again; it only adds what is missing.
+        let booting = ip.prefix.appendingPathComponent(".ffxi-on-mac-booting")
+        let fm = FileManager.default
+        if fm.fileExists(atPath: ip.systemReg.path), !fm.fileExists(atPath: booting.path) { then(ip); return }
         appendLine("==> creating \(ip.prefixName) (a second wine prefix for installers, so a download is never killed by Play) — about 30 s")
-        var env = ProcessInfo.processInfo.environment
-        env["WINEPREFIX"] = ip.prefix.path; env["WINEDEBUG"] = "-all"
-        env.removeValue(forKey: "DYLD_FALLBACK_LIBRARY_PATH"); env.removeValue(forKey: "DYLD_LIBRARY_PATH")
-        // Stopped while the prefix was being made: nothing else starts.
-        let proceed: @MainActor (Install) -> Void = { [weak self] ip in
-            if let self, self.stopRequested { self.busy = false; return }
+        jobWine = .init(server: ip.wineserver, prefix: ip.prefix)
+        installerStop.reset()
+        let stop = installerStop
+        Task { [weak self] in
+            let made = await Task.detached(priority: .userInitiated) { () -> Bool in
+                try? FileManager.default.createDirectory(at: ip.prefix, withIntermediateDirectories: true)
+                FileManager.default.createFile(atPath: booting.path, contents: Data())
+                let ok = Runner.updatePrefix(ip, stop: stop, wine: ip.wine, mono: true)
+                    && FileManager.default.fileExists(atPath: ip.systemReg.path)
+                if ok { try? FileManager.default.removeItem(at: booting) }
+                return ok
+            }.value
+            guard let self else { return }
+            self.jobWine = nil
+            if self.stopRequested { self.busy = false; failed(); return }
+            guard made else {
+                self.appendLine("!! Couldn't make the Windows drive installers run in (\(ip.prefix.path)). Press the button again to retry.")
+                self.busy = false; failed(); return
+            }
             then(ip)
         }
-        Task.detached {
-            let p = Process()
-            p.executableURL = ip.wine; p.arguments = ["wineboot", "-u"]; p.environment = env
-            p.standardOutput = Pipe(); p.standardError = Pipe()
-            if (try? p.run()) != nil {
-                // Quit ends it and its session (JobKill).
-                JobKill.track(p.processIdentifier, wine: .init(server: ip.wineserver, prefix: ip.prefix))
-                p.waitUntilExit()
-                JobKill.untrack(p.processIdentifier)
-            }
-            let k = Process(); k.executableURL = ip.wineserver; k.arguments = ["-k"]; k.environment = ["WINEPREFIX": ip.prefix.path]
-            try? k.run(); k.waitUntilExit()
-            await MainActor.run { proceed(ip) }
-        }
+    }
+
+    /// How a world's installer job ended (`runInstaller`, `runLocalInstaller`).
+    enum InstallerOutcome: Equatable {
+        /// The client is in this folder now: the world's own folder, or wherever the installer
+        /// put it when it could not be moved (another drive, a name already taken).
+        case installed(URL)
+        case failed
+        case stopped
     }
 
     /// Download a server's Windows installer and run it inside the *installer* prefix. The user
     /// drives the installer's own UI; `dataPath` is pre-linked as `C:\Games\<name>` for it to
     /// install into (and the same link is made in the game prefix, so a path the installer wrote
-    /// into a config file resolves at play time too).
-    func runInstaller(from url: URL, in gameInstall: Install, dataPath: String, name: String = "") {
-        if refuseWhileBusy("the installer for \(name.isEmpty ? url.lastPathComponent : name)") { return }
+    /// into a config file resolves at play time too). Wherever it really installs, the client is
+    /// brought into `dataPath` (InstallerClient). `done` runs once, after the job has ended.
+    func runInstaller(from url: URL, in gameInstall: Install, dataPath: String, name: String = "",
+                      done: @escaping (InstallerOutcome) -> Void = { _ in }) {
+        if refuseWhileBusy("the installer for \(name.isEmpty ? url.lastPathComponent : name)") { done(.failed); return }
         let nm = name.isEmpty ? url.deletingPathExtension().lastPathComponent : name
         beginBusy("Installing \(nm)")
         Self.linkGamesFolder(nm, to: dataPath, in: gameInstall)
-        ensureInstallerPrefix(gameInstall) { [weak self] install in
+        ensureInstallerPrefix(gameInstall, then: { [weak self] install in
             guard let self else { return }
             Self.linkGamesFolder(nm, to: dataPath, in: install)
-            self.runInstallerNow(from: url, in: install, name: nm)
-        }
+            self.runInstallerNow(from: url, in: install, name: nm, dataPath: dataPath, done: done)
+        }, failed: { [weak self] in done(self?.stopRequested == true ? .stopped : .failed) })
     }
 
-    private func runInstallerNow(from url: URL, in install: Install, name nm: String) {
+    private func runInstallerNow(from url: URL, in install: Install, name nm: String, dataPath: String,
+                                 done: @escaping (InstallerOutcome) -> Void) {
         // Installers are big (Eden's is 5.8 GB) and served from places that support ranges, so
         // fetch with curl: resumable (-C -), retried, and its progress bar streams into the log.
         // Saved next to the world's data rather than in the prefix -- that is where the space is.
@@ -957,16 +998,17 @@ final class Runner: ObservableObject {
               env: [:], cwd: dl) { [weak self] code in
             guard let self else { return }
             // Stopped: the part downloaded stays for the next press; no error, no web page.
-            if self.stopRequested { self.busy = false; return }
+            if self.stopRequested { self.busy = false; done(.stopped); return }
             // curl 33 = server refused the range because the file is already complete.
             guard code == 0 || (code == 33 && FileManager.default.fileExists(atPath: file.path)) else {
                 self.appendLine("!! download failed (curl \(code)). If \(nm) has moved its installer, get it from their site and use Run installer….")
                 self.busy = false
                 if let page = self.installPageFallback { NSWorkspace.shared.open(page) }
+                done(.failed)
                 return
             }
             self.appendLine("==> downloaded \(file.lastPathComponent)")
-            self.runDownloadedInstaller(file, in: install, name: nm)
+            self.runDownloadedInstaller(file, in: install, name: nm, dataPath: dataPath, done: done)
         }
     }
 
@@ -1020,38 +1062,56 @@ final class Runner: ObservableObject {
         return world.replacingOccurrences(of: " ", with: "") + "-installer.zip"
     }
 
-    /// Unpack a zip if it is one, find the installer .exe, run it.
-    private func runDownloadedInstaller(_ file: URL, in install: Install, name nm: String) {
+    /// Unpack a zip if it is one, find the installer .exe, run it. A zip is unpacked into the
+    /// world's own `installer-downloads` (the drive its client goes on, never beside a zip in
+    /// Downloads on the Mac's own disk), after a space check, with its progress on the button; the
+    /// unpacked copy is removed once the client is in place.
+    private func runDownloadedInstaller(_ file: URL, in install: Install, name nm: String, dataPath: String,
+                                        done: @escaping (InstallerOutcome) -> Void) {
         let isZip = file.pathExtension.lowercased() == "zip" || Self.looksLikeZip(file)
-        if isZip {
-            let out = file.deletingLastPathComponent().appendingPathComponent(file.deletingPathExtension().lastPathComponent + "-unpacked", isDirectory: true)
-            appendLine("==> unpacking \(file.lastPathComponent)")
-            // Off the main actor: a client-sized zip (Eden's is 5.8 GB) is minutes of ditto, and
-            // the window froze for all of it.
-            // The job's process while it runs, so Stop (and Quit) end it like any other.
-            let d = Process(); d.executableURL = URL(fileURLWithPath: "/usr/bin/ditto"); d.arguments = ["-x", "-k", file.path, out.path]
-            d.standardOutput = FileHandle.nullDevice; d.standardError = FileHandle.nullDevice
-            proc = d
-            Task { [weak self] in
-                let found = await Task.detached(priority: .userInitiated) { () -> URL? in
-                    try? FileManager.default.removeItem(at: out)
-                    guard (try? d.run()) != nil else { return nil }
-                    JobKill.track(d.processIdentifier, wine: nil)
-                    d.waitUntilExit()
-                    JobKill.untrack(d.processIdentifier)
-                    return d.terminationStatus == 0 ? Runner.firstExe(under: out) : nil
-                }.value
-                guard let self else { return }
-                if self.stopRequested { self.busy = false; return }
-                guard let found else {
-                    self.appendLine("!! could not unpack \(file.lastPathComponent) or no .exe inside it"); self.busy = false; return
-                }
-                self.launchInstaller(exe: found, in: install, name: nm)
+        guard isZip else { launchInstaller(exe: file, in: install, name: nm, dataPath: dataPath, from: 0, cleanup: nil, done: done); return }
+        let base = file.deletingPathExtension().lastPathComponent + "-unpacked"
+        let home = dataPath.isEmpty ? file.deletingLastPathComponent()
+            : URL(fileURLWithPath: dataPath).appendingPathComponent(InstallerClient.downloadsFolder, isDirectory: true)
+        let out = home.appendingPathComponent(base, isDirectory: true)
+        appendLine("==> unpacking \(file.lastPathComponent) into \(out.path)")
+        // The job's process while it runs, so Stop (and Quit) end it like any other.
+        let d = Process(); d.executableURL = URL(fileURLWithPath: "/usr/bin/ditto"); d.arguments = ["-x", "-k", file.path, out.path]
+        d.standardOutput = FileHandle.nullDevice; d.standardError = FileHandle.nullDevice
+        proc = d
+        Task { [weak self] in
+            // Off the main actor: listing and unpacking a client-sized zip (Eden's is 5.8 GB) takes
+            // minutes of ditto, and the window froze for all of it.
+            let size = await Task.detached(priority: .userInitiated) { InstallerClient.archiveBytes(file) }.value
+            guard let self else { return }
+            if self.stopRequested { self.busy = false; done(.stopped); return }
+            if let size, let short = InstallerClient.shortfall(need: size + Self.installerMargin, at: [out]) {
+                self.appendLine("!! Unpacking \(file.lastPathComponent) needs about \(InstallerClient.gigabytes(size)) free on \(InstallerClient.volumeName(short.volume)); \(InstallerClient.gigabytes(short.free)) is free.")
+                self.busy = false; done(.failed); return
             }
-            return
+            self.startInstallerMeter(watch: [out], expected: size, from: 0, span: Self.unpackShare)
+            let found = await Task.detached(priority: .userInitiated) { () -> URL? in
+                try? FileManager.default.removeItem(at: out)
+                try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+                guard (try? d.run()) != nil else { return nil }
+                JobKill.track(d.processIdentifier, wine: nil)
+                d.waitUntilExit()
+                JobKill.untrack(d.processIdentifier)
+                return d.terminationStatus == 0 ? Runner.firstExe(under: out) : nil
+            }.value
+            self.stopInstallerMeter()
+            if self.stopRequested { self.busy = false; done(.stopped); return }
+            guard let found else {
+                self.appendLine("!! could not unpack \(file.lastPathComponent) or no .exe inside it"); self.busy = false; done(.failed); return
+            }
+            self.launchInstaller(exe: found, in: install, name: nm, dataPath: dataPath, from: Self.unpackShare, cleanup: out, done: done)
         }
-        launchInstaller(exe: file, in: install, name: nm)
     }
+
+    /// Of an installer job that starts from a zip, the unpack's share of the button's figure.
+    static let unpackShare = 0.2
+    /// Room kept free beyond what an unpack or an install is known to write.
+    static let installerMargin: Int64 = 1_000_000_000
 
     static func looksLikeZip(_ file: URL) -> Bool {
         guard let h = try? FileHandle(forReadingFrom: file) else { return false }
@@ -1062,15 +1122,16 @@ final class Runner: ObservableObject {
 
     /// Run an installer the user already has on disk (their server's site, Discord, a USB stick)
     /// inside the installer prefix. Zips are unpacked first and the first .exe inside is run.
-    func runLocalInstaller(_ file: URL, in gameInstall: Install, dataPath: String, name: String) {
-        if refuseWhileBusy("the installer for \(name)") { return }
+    func runLocalInstaller(_ file: URL, in gameInstall: Install, dataPath: String, name: String,
+                           done: @escaping (InstallerOutcome) -> Void = { _ in }) {
+        if refuseWhileBusy("the installer for \(name)") { done(.failed); return }
         beginBusy("Installing \(name)")
         Self.linkGamesFolder(name, to: dataPath, in: gameInstall)
-        ensureInstallerPrefix(gameInstall) { [weak self] install in
+        ensureInstallerPrefix(gameInstall, then: { [weak self] install in
             guard let self else { return }
             Self.linkGamesFolder(name, to: dataPath, in: install)
-            self.runDownloadedInstaller(file, in: install, name: name)
-        }
+            self.runDownloadedInstaller(file, in: install, name: name, dataPath: dataPath, done: done)
+        }, failed: { [weak self] in done(self?.stopRequested == true ? .stopped : .failed) })
     }
 
     nonisolated static func firstExe(under dir: URL) -> URL? {
@@ -1093,7 +1154,7 @@ final class Runner: ObservableObject {
     /// one that needs somebody sitting in front of a wine window clicking Next. Verified
     /// 2026-08-21 on Eden's `Installer.exe` (NSIS 3.06.1) and FFEra's `FFEraInstaller-Jan2023.exe`
     /// (NSIS 3.08). Note `/D=` is advisory: Eden's script overrides it and installs to its own
-    /// `C:\Eden` regardless, which is why `findInstalledClient` runs afterwards.
+    /// `C:\Eden` regardless, which is why `InstallerClient` looks for the client afterwards.
     static func isNSIS(_ exe: URL) -> Bool {
         guard let d = try? Data(contentsOf: exe, options: .mappedIfSafe) else { return false }
         let needle = Array("Nullsoft.NSIS.exehead".utf8)
@@ -1103,54 +1164,134 @@ final class Runner: ObservableObject {
         return window.range(of: Data(needle)) != nil
     }
 
-    /// Where a just-run installer actually put the client: the newest folder under the prefix's
-    /// `drive_c` (or under the world's own folder) holding an Ashita launcher. Needed because an
-    /// NSIS script may ignore `/D=` entirely.
-    static func findInstalledClient(in install: Install, world: String) -> URL? {
-        let roots = [install.driveC, install.driveC.appendingPathComponent("Games")]
-        let fm = FileManager.default
-        for root in roots {
-            guard let kids = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { continue }
-            for kid in kids {
-                for probe in ["Ashita-cli.exe", "Ashita/Ashita-cli.exe", "Ashita.exe", "Ashita/Ashita.exe"]
-                where fm.fileExists(atPath: kid.appendingPathComponent(probe).path) {
-                    return kid
+    // MARK: - The installer's progress (issue #92: a disabled "Setting up…" and nothing else)
+
+    /// 0...1 while an installer job unpacks or installs, when how much it writes is known (an
+    /// archive beside it bsdtar can list); nil otherwise. Never goes back.
+    @Published private(set) var installerProgress: Double?
+    /// Bytes it has written so far, for the button when the total is not known.
+    @Published private(set) var installerWritten: Int64?
+    /// A world's installer job is running (download, unpack, install).
+    var installing: Bool { busy && busyReason.hasPrefix("Installing ") }
+    private var installerTimer: Timer?
+
+    /// Reads the free space of the volumes `watch` is on every 2 s: what went is what the job
+    /// wrote. Cheap (one statfs each) and it does not care where an installer writes, which is
+    /// the point -- Eden's writes to `C:\Eden`, not where it was asked to.
+    /// `already`: bytes of the result already on disk (a stopped run's half that this one writes over).
+    private func startInstallerMeter(watch: [URL], expected: Int64?, from start: Double, span: Double, already: Int64 = 0) {
+        installerTimer?.invalidate()
+        let baseline = InstallerClient.freeBytes(watch)
+        // Unknown total: no figure (after an unpack too), so the button counts gigabytes instead
+        // of sitting at the unpack's 20%.
+        installerProgress = expected == nil ? nil : max(installerProgress ?? 0, start)
+        installerWritten = nil
+        let t = Timer(timeInterval: 2, repeats: true) { [weak self] timer in
+            // On the main run loop already: update now, and only for the job that made this timer
+            // (a tick queued behind its end must not leave a figure on the next job).
+            MainActor.assumeIsolated {
+                guard let self, self.installerTimer === timer, self.busy else { return }
+                let w = already + InstallerClient.written(since: baseline, now: InstallerClient.freeBytes(watch))
+                if let e = expected, e > 0 {
+                    let f = start + span * min(0.99, Double(w) / Double(e))
+                    self.installerProgress = max(self.installerProgress ?? 0, f)
+                } else {
+                    self.installerWritten = w
                 }
             }
         }
-        return nil
+        RunLoop.main.add(t, forMode: .common)
+        installerTimer = t
     }
 
-    /// Called with the folder an installer left the client in, when one is found.
-    var onClientInstalled: ((URL) -> Void)? = nil
+    private func stopInstallerMeter() {
+        installerTimer?.invalidate(); installerTimer = nil
+    }
 
-    /// Start `exe` under wine in `install` and stream its output. `busy` clears when it exits.
-    private func launchInstaller(exe: URL, in install: Install, name nm: String) {
-        var args = [Install.winePath(exe, driveC: install.driveC)]
-        let silent = Self.isNSIS(exe)
-        if silent {
-            // /D must be last and unquoted -- that is NSIS's rule, not a preference.
-            args += ["/S", "/D=C:\\Games\\" + nm]
-            appendLine("==> running \(exe.lastPathComponent) in \(install.prefixName) — Nullsoft installer, running it unattended (/S). Nothing to click; this takes a while for a client-sized payload.")
-        } else {
-            appendLine("==> running \(exe.lastPathComponent) in \(install.prefixName) — install into C:\\Games\\\(nm)")
-        }
-        var env = ProcessInfo.processInfo.environment
-        env["WINEPREFIX"] = install.prefix.path; env["WINEDEBUG"] = "-all"
-        env.removeValue(forKey: "DYLD_FALLBACK_LIBRARY_PATH"); env.removeValue(forKey: "DYLD_LIBRARY_PATH")
-        jobWine = .init(server: install.wineserver, prefix: install.prefix)
-        spawn(install.wine, args: args,
-              env: env, cwd: exe.deletingLastPathComponent()) { [weak self] code in
+    /// Start `exe` under wine in `install` and stream its output. When it exits, the client is
+    /// looked for wherever it landed and brought into `dataPath` (InstallerClient); `busy`
+    /// clears before `done` runs. `from`: where the button's figure starts (after an unpack).
+    /// `cleanup`: the folder this job unpacked the installer into, removed once the client is in
+    /// place.
+    private func launchInstaller(exe: URL, in install: Install, name nm: String, dataPath: String,
+                                 from start: Double, cleanup: URL?, done: @escaping (InstallerOutcome) -> Void) {
+        let data = dataPath.isEmpty ? nil : URL(fileURLWithPath: dataPath)
+        // The world's folder first: a shortfall message names it.
+        let watch = (data.map { [$0] } ?? []) + [install.driveC]
+        let driveC = install.driveC
+        Task { [weak self] in
+            let (expected, before, already) = await Task.detached(priority: .userInitiated) {
+                (InstallerClient.payloadBytes(beside: exe, ownFolder: cleanup != nil), InstallerClient.snapshot(driveC: driveC),
+                 InstallerClient.alreadyThere(driveC: driveC, world: nm))
+            }.value
             guard let self else { return }
-            self.busy = false
-            self.appendLine("==> installer exited \(code)")
-            guard let found = Self.findInstalledClient(in: install, world: nm) else {
-                if silent { self.appendLine("!! \(nm)'s installer finished but no client folder was found under \(install.driveC.path). Check the log above.") }
-                self.reportFailure(code, "\(nm)'s installer failed — Open log in Setup & Diagnostics")
-                return
+            if self.stopRequested { self.busy = false; done(.stopped); return }
+            if let need = expected, let short = InstallerClient.shortfall(need: need + Self.installerMargin, at: watch) {
+                self.appendLine("!! \(nm)'s install needs about \(InstallerClient.gigabytes(need)) free on \(InstallerClient.volumeName(short.volume)); \(InstallerClient.gigabytes(short.free)) is free.")
+                self.busy = false; done(.failed); return
             }
-            self.appendLine("==> \(nm)'s client is at \(found.path)")
-            self.onClientInstalled?(found)
+            var args = [Install.winePath(exe, driveC: install.driveC)]
+            let silent = Self.isNSIS(exe)
+            if silent {
+                // /D must be last and unquoted -- that is NSIS's rule, not a preference -- and wine
+                // quotes an argument with a space in it, so such a name gets the installer's own folder.
+                args.append("/S")
+                if !nm.contains(" ") { args.append("/D=C:\\Games\\" + nm) }
+                self.appendLine("==> running \(exe.lastPathComponent) in \(install.prefixName) — Nullsoft installer, running it unattended (/S). Nothing to click; this takes a while for a client-sized payload.")
+            } else {
+                self.appendLine("==> running \(exe.lastPathComponent) in \(install.prefixName) — install into C:\\Games\\\(nm)")
+            }
+            var env = ProcessInfo.processInfo.environment
+            env["WINEPREFIX"] = install.prefix.path; env["WINEDEBUG"] = "-all"
+            env.removeValue(forKey: "DYLD_FALLBACK_LIBRARY_PATH"); env.removeValue(forKey: "DYLD_LIBRARY_PATH")
+            if let data { InstallerClient.repointLinks(driveC: driveC, world: nm, to: data) }
+            self.jobWine = .init(server: install.wineserver, prefix: install.prefix)
+            let began = Date()
+            self.startInstallerMeter(watch: watch, expected: expected, from: start, span: 1 - start, already: already)
+            self.spawn(install.wine, args: args, env: env, cwd: exe.deletingLastPathComponent()) { [weak self] code in
+                guard let self else { return }
+                self.stopInstallerMeter()
+                let stopped = self.stopRequested
+                // A silent NSIS run says how it went (0 = installed). A window-driven installer's or a
+                // launcher's exit code means nothing; what it left decides.
+                let failed = !stopped && silent && code != 0
+                if !stopped { self.appendLine("==> installer exited \(code)") }
+                Task { [weak self] in
+                    let (client, lines) = await Task.detached(priority: .userInitiated) { () -> (URL?, [String]) in
+                        var lines: [String] = []
+                        // Stopped or failed: nothing is adopted, and whatever it wrote is marked so no
+                        // later look takes a half-written client for a finished one.
+                        if stopped || failed {
+                            InstallerClient.markIncomplete(driveC: driveC, world: nm, before: before, began: began)
+                            return (nil, lines)
+                        }
+                        guard let found = InstallerClient.find(driveC: driveC, world: nm, dataPath: data, before: before)
+                        else { return (nil, lines) }
+                        var now = data.map { InstallerClient.adopt(found, into: $0) { lines.append($0) } } ?? found
+                        // Not brought over (a name already there): the world keeps playing the client it has.
+                        if let d = data, now.path != d.path, InstallerClient.holdsClient(d) { now = d }
+                        // The unpacked installer is this job's own copy; the client is never inside it.
+                        if let c = cleanup, now.path != c.path, !now.path.hasPrefix(c.path + "/") {
+                            try? FileManager.default.removeItem(at: c)
+                        }
+                        return (now, lines)
+                    }.value
+                    guard let self else { return }
+                    lines.forEach { self.appendLine($0) }
+                    self.busy = false
+                    if stopped { done(.stopped); return }
+                    if failed {
+                        self.appendLine("!! \(nm)'s installer stopped with an error (exit \(code)). Press the button to run it again.")
+                        done(.failed); return
+                    }
+                    guard let client else {
+                        self.appendLine("!! No game files appeared after \(nm)'s installer ran. If it came in a .zip, pick the .zip itself, or unzip all of it and pick the installer inside.")
+                        done(.failed); return
+                    }
+                    self.appendLine("==> \(nm)'s client is at \(client.path)")
+                    done(.installed(client))
+                }
+            }
         }
     }
 

@@ -200,6 +200,9 @@ struct PrimaryInputs {
     var setupStage: SetupStage? = nil
     var ownJob: String? = nil
     var ownProgress: Double? = nil
+    /// Bytes the running installer has written, when how much it will write is not known: the
+    /// button counts them instead of a percentage ("Setting up… 3.2 GB").
+    var ownWritten: Int64? = nil
     var otherJob: String? = nil
     var runningHere = false
     var starting = false
@@ -340,6 +343,12 @@ enum Primary {
         return .settingUp
     }
 
+    /// "3.2 GB", or "14 GB" from 10 GB on (the button's width).
+    static func gigabytes(_ n: Int64) -> String {
+        let g = Double(n) / 1_000_000_000
+        return g < 10 ? String(format: "%.1f GB", g) : "\(Int(g)) GB"
+    }
+
     /// The line under Stop once the game's GPU device is lost (b70): when, and what to press.
     static func renderStuckReason(_ time: String) -> String { "The game's graphics stopped at \(time) — press Stop." }
 
@@ -366,7 +375,10 @@ enum Primary {
         switch a {
         case .working(let work, let p):
             // Under 1% says no figure at all: "Setting up… 0%" read as stuck (Daniel, 2026-10-15).
-            let pct = p.flatMap { $0 >= 0.01 ? " \(Int((min($0, 1) * 100).rounded(.down)))%" : nil } ?? ""
+            var pct = p.flatMap { $0 >= 0.01 ? " \(Int((min($0, 1) * 100).rounded(.down)))%" : nil } ?? ""
+            // An installer whose total is unknown: what it has written, in place of any figure (in
+            // Setup's chain too, whose own figure would sit still for the whole install).
+            if let w = x.ownWritten, w >= 100_000_000 { pct = " " + Primary.gigabytes(w) }
             let name = work == .settingUp ? x.setupStage.map { $0.rawValue + "…" } ?? work.label : work.label
             return .init(action: a, label: name + pct, enabled: false, reason: work.reason, progress: p)
         case .setup(let need):
@@ -466,6 +478,9 @@ enum Primary {
     /// The boot profile's `command` line already carries `--user` (the launcher never
     /// rewrites it without an account typed in, so that one is used).
     static func profileHasAccount(_ i: Install, profile: String) -> Bool {
+        // Ashita v3 (Eden) keeps the account in its XML profile's boot_command, under the name
+        // `bootProfileName` gives it: reading the .ini name there always said "no account".
+        if i.ashitaGeneration == .v3 { return Credentials.bootHasAccount(in: i, profile: profile) }
         let url = i.gameDir.appendingPathComponent("config/boot/\(profile)")
         guard let text = try? String(contentsOf: url, encoding: .utf8) else { return false }
         return text.split(whereSeparator: \.isNewline).contains { raw in

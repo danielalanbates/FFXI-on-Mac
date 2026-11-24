@@ -24,6 +24,8 @@ enum SetupStage: String, CaseIterable {
     case downloadingGame = "Downloading HorizonXI"
     case unpackingGame = "Unpacking HorizonXI"
     case updatingGame = "Updating HorizonXI"
+    /// A world's own Windows installer, unpacking or installing (issue #92).
+    case installingGame = "Running installer"
     case finishing = "Finishing"
     case multiServer = "Enabling multi-server"
     case buildingServer = "Building the server"
