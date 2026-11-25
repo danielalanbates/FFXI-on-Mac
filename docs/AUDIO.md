@@ -152,3 +152,21 @@ is not covered by the app's TCC grant). The ad-hoc build has no such restriction
 So the **local `/Applications` build is ad-hoc** and plays fine; a notarized
 release still needs this solved (candidate: a removable-volume/Documents
 entitlement, or install wine to an Application Support path on the internal disk).
+
+## 2026-10-16: not reaching an x87-accelerated client — carried since b69
+
+Since Play runs i386 wine processes through the cooperative x87 sidecar (`ROSETTA_X87_PATH`,
+docs/X87-SIDECAR.md), `audiofollow.dylib` has not been reaching the game client. Wine execs
+`x87sidecar-coop --cooperative <loader> …`; that binary is signed with the hardened runtime, so
+dyld strips every `DYLD_*` variable from its environment before `main()`, and the client it execs
+starts without `DYLD_INSERT_LIBRARIES`. Measured with the installed Developer ID sidecar: an
+unsigned child exec'd through it saw no `DYLD_INSERT_LIBRARIES` and did not load the dylib; the
+same child exec'd directly did. The 2026-08-26 check above was made with an ad-hoc build (see
+the note just above), whose sidecar keeps the vendored ad-hoc signature without the hardened
+runtime and strips nothing; a Developer ID build (the installed one, every release) signs it with
+the hardened runtime.
+
+b69's `gamewindow.dylib` carries the list across that exec (see `window/gamewindow.c`), so with
+"Keep the game window's shape" on (the default), audiofollow reaches the client again whenever
+"Follow the Mac's sound output" is on. With the window setting off it does not. Details and the
+test: `docs/BETA-69.md`, `scripts/tests/gamewindow-test.sh`.

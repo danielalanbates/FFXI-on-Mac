@@ -17,11 +17,10 @@ struct Server: Codable, Identifiable, Hashable {
     var note: String
     /// Era / level cap, shown as a subtitle in the dropdown.
     var era: String = ""
-    /// Rough community size, used **only** for ordering the dropdown. Never shown as a number:
-    /// these are estimates from public trackers and would be stale within a month. Ordering by
-    /// them is useful; publishing them as fact is not.
+    /// Dated online-player estimate, used when no live public counter is available.
+    /// Zero means unknown. Discord membership and monthly accounts are not player counts.
     var population: Int = 0
-    /// Pinned entries sort above everything else regardless of population.
+    /// Legacy persistence field. Population ordering deliberately ignores pins.
     var pinned: Bool = false
     /// A server that runs on this Mac. Selecting it turns the launcher into an installer for
     /// LandSandBoat as well: see `LocalServer` and `scripts/lsb-server.sh`. Optional in the
@@ -99,6 +98,117 @@ struct Server: Codable, Identifiable, Hashable {
     /// DYLD_FALLBACK_LIBRARY_PATH, WINE_LARGE_ADDRESS_AWARE, FFXI_FPS_DIVISOR, the MVK knobs)
     /// was ruled out individually.
     var msync: Bool = true
+    /// How many clients of this world may run on this Mac at once. Daniel, 2026-10-25: as many as
+    /// the server's own published rules allow. No cap (`noClientCap`) when its rules were read and
+    /// say nothing against boxing, the server's number when they set one, 1 when they forbid it or
+    /// allow one account per person, and 1 when its rules could not be read. Each built-in cites
+    /// what was read (docs/MULTI_WORLD.md, "Clients per world"). A world added by hand has had no
+    /// rules read and stays at 1. Not the user's to edit: refreshed from `builtins` like the other
+    /// curated fields.
+    var maxClients: Int = 1
+    /// Opt-in to a separate Windows environment for this world. Existing game files are reused.
+    /// A user choice: never refreshed from the curated built-in client limits.
+    var multiServerPlay: Bool = false
+    var allowsMultipleClients: Bool { maxClients > 1 }
+    static let noClientCap = Int.max
+    /// The boot loader (in the client's `bootloader/`) this world's login server needs, when it
+    /// needs one in particular. Play makes the boot profile name it whenever it is there
+    /// (`Credentials.fixBootLoader`), whatever the profile said. Empty: the profile's own choice
+    /// stands while that file exists. Not the user's to edit: refreshed from `builtins`.
+    ///
+    /// HorizonXI's login server takes horizon-loader.exe, and the `pol.exe` beside it in every
+    /// Ashita v4 client is Ashita's DarkStar-era loader, which connects and then sits at its own
+    /// account menu (b60, 2026-10-15). The local world plays through that same client and loader
+    /// (MultiWorld), so it declares it too: on a fresh client its profile is copied from Ashita's
+    /// example, which names pol.exe. CatsEyeXI's own loader *is* called pol.exe, Gaia XI's is
+    /// gxiloader.exe and Supernova's xiloader.exe, and each of those profiles already names its
+    /// own: they declare none, and keep exactly what they had.
+    var loader: String = ""
+    /// Arguments the world's loader always gets after the account (`Credentials.apply`), from the
+    /// `command` line of the world's own boot profile. AscensionXI's profile passes `--hairpin`
+    /// (xiloader: reach the map server at the login server's own address), and rewriting `command`
+    /// with the account used to drop it. Refreshed from `builtins`, like `loader`.
+    var loaderOptions: [String] = []
+    /// The world makes accounts at its login server, not on a website (LandSandBoat's
+    /// `login.ACCOUNT_CREATION`): the account card offers Create account (LoginAccount), since the
+    /// loader console where xiloader would ask is never shown here. Refreshed from `builtins`.
+    var createsAccountAtLogin: Bool = false
+    /// The boot profile shipped in the app that a new profile for this world is made from, and
+    /// whose required settings an existing one is completed with (see `BootProfile`). Empty: a
+    /// new profile is copied from one already in the client, as before. Refreshed from `builtins`.
+    var bootTemplate: String = ""
+    /// Where this world publishes its news as JSON (`News.parse`), and its page for one post
+    /// (`{slug}` replaced). Empty: the world publishes no feed a launcher can read, and the
+    /// left panel shows nothing for it. Curated, never read from servers.json: refreshed from
+    /// `builtins` like `loader`. Checked 2026-10-15: HorizonXI's site reads its news from
+    /// api.horizonxi.com/api/v1/news and routes each post at horizonxi.com/news/<slug> (its own
+    /// JSON-LD `mainEntityOfPage`). See ServerFeeds for the other worlds.
+    var newsURL: String = ""
+    var newsPageURL: String = ""
+
+    /// Worlds whose staff have said, in writing, that this launcher may be used there. None yet
+    /// (2026-11-18): add a world's exact name only with that ruling recorded in docs/LSB-SERVERS.md.
+    static let launcherApprovedWorlds: Set<String> = []
+
+    /// The window's top line on a hosted world that has not approved this launcher. Servers can
+    /// tell it apart from their own launcher, so the player is told before signing in.
+    var launcherApprovalWarning: String? {
+        if local || Self.launcherApprovedWorlds.contains(name) { return nil }
+        return "Use of this launcher is not yet approved by \(name)."
+    }
+
+    var launchUnavailableReason: String? {
+        name == "Phoenix XI" ? "Use Connect Phoenix to sign in, install and play." : nil
+    }
+
+    /// The note `ServerStore.add` gives a world added by hand. It marks the entry as the user's:
+    /// never dropped with the worlds this project retired (a world added as "Eden" used to vanish
+    /// at the next launch, issue #92), and filled in from what this project knows of that world.
+    static let addedNote = "Added by you."
+    var addedByUser: Bool { note == Self.addedNote }
+
+    /// Where a world's own download page is, for when a direct installer link has gone stale, and
+    /// for a world added by hand under a name this project knows.
+    static let homePages: [String: String] = [
+        "Eden": "https://edenxi.com/install", "FFEra": "https://ffera.com/login.php?guide=install",
+        "ValhallaXI": "https://valhalla.group/site/connect.html", "Gaia XI": "https://gaiaxi.com",
+        "CatsEyeXI": "https://catseyexi.com/download",
+    ]
+
+    /// The researched entry (offered in the picker or not) a world added by hand is named for:
+    /// "eden" is Eden.
+    static func catalogued(for name: String) -> Server? {
+        let n = InstallerClient.squash(name)
+        guard !n.isEmpty else { return nil }
+        // Never a world with its own sign-in flow (Phoenix XI): its research is not a host to type into.
+        return all.first { !$0.local && $0.launchUnavailableReason == nil && InstallerClient.squash($0.name) == n }
+    }
+
+    /// A world added by hand that is named for one this project researched gets that research
+    /// wherever the user left a blank: its login host, how its accounts are made, and its own
+    /// download page (Setup opens it, then runs the installer the user picks). Nothing typed is
+    /// replaced, and it stays out of the picker's own list.
+    mutating func fillFromCatalogue() {
+        guard addedByUser, let c = Self.catalogued(for: name) else { return }
+        if host.trimmingCharacters(in: .whitespaces).isEmpty { host = c.host }
+        if accountHow.isEmpty { accountURL = c.accountURL; accountHow = c.accountHow; discordURL = c.discordURL }
+        if installURL.isEmpty, let page = Self.homePages[c.name] {
+            installURL = page; installKind = .website; installNote = c.installNote
+        }
+    }
+
+    /// A pure sort shared by the picker, companion world list and offline checks.
+    static func ordered(_ servers: [Server], populations: [String: Int]) -> [Server] {
+        func count(_ s: Server) -> Int {
+            if let live = populations[s.name], (0...1_000_000).contains(live) { return live }
+            return max(0, s.population)
+        }
+        return servers.sorted {
+            if $0.local != $1.local { return !$0.local }
+            if count($0) != count($1) { return count($0) > count($1) }
+            return $0.name < $1.name
+        }
+    }
 
     /// How a world's client is obtained.
     /// - `clientZip`: a plain archive of the finished client, unpacked straight into `dataPath`.
@@ -106,7 +216,38 @@ struct Server: Codable, Identifiable, Hashable {
     ///   downloader whose only job is to fetch exactly such an archive (ValhallaXI's is a .NET
     ///   WinForms app that downloads `mirror.valhalla.group/ValhallaXI.zip`); going to the
     ///   archive directly skips a GUI that cannot be driven unattended under wine.
-    enum InstallKind: String, Codable { case website, installerExe, catseyeLauncher, horizonTorrent, retail, clientZip, none }
+    /// - `ascensionChannel`: AscensionXI's own update channel, read natively (AscensionChannel).
+    /// - `driftwoodContent`: DriftwoodXI's public content repo, with retail files from this Mac (DriftwoodSync).
+    /// - `pegasusPack`: PegasusXI's release zip, read by Range member by member (PegasusSync).
+    /// - `retailWorld`: retail FFXI from this Mac + Ashita + LandSandBoat's xiloader (RetailWorldSync).
+    /// - `scytheChannel`: Scythe's signed release, files by SHA-256 (ScytheSync).
+    enum InstallKind: String, Codable {
+        case website, installerExe, catseyeLauncher, horizonTorrent, retail, clientZip, ascensionChannel, vanadreamsPackage,
+             driftwoodContent, pegasusPack, retailWorld, scytheChannel, none
+
+        /// Worlds whose own launcher updates the client before every Play; this one does the same
+        /// (AscensionSync, VanadreamsSync, DriftwoodSync, PegasusSync, RetailWorldSync, ScytheSync).
+        var updatesBeforePlay: Bool {
+            [.ascensionChannel, .vanadreamsPackage, .driftwoodContent, .pegasusPack, .retailWorld, .scytheChannel].contains(self)
+        }
+
+        /// A kind this build does not know (a newer build wrote it) reads as `website`: one
+        /// unknown value must not make the whole servers.json unreadable, which resets every
+        /// world's folder and host.
+        init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = InstallKind(rawValue: raw) ?? .website
+        }
+
+        /// Written as a kind every earlier build can read. How a built-in world installs is
+        /// refreshed from `builtins` on every load (`ServerStore.merge`), so the stored value is
+        /// only ever read back by a build that predates the kind -- and 3.10 and older throw on a
+        /// value they do not know, which would reset that build's whole server list.
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.singleValueContainer()
+            try c.encode(updatesBeforePlay ? InstallKind.website.rawValue : rawValue)
+        }
+    }
 
     // A hand-written decoder because the synthesised one treats a missing key as an error rather
     // than as "use the default". `servers.json` on disk was written by whichever build the user
@@ -118,7 +259,10 @@ struct Server: Codable, Identifiable, Hashable {
          requiredClientURL: String = "", requiredClient: String = "",
          installURL: String = "", installKind: InstallKind = .website, installNote: String = "",
          accountURL: String = "", accountHow: String = "", discordURL: String = "",
-         renderer: Renderer? = nil, x87: Bool = true, msync: Bool = true) {
+         renderer: Renderer? = nil, x87: Bool = true, msync: Bool = true,
+         maxClients: Int = 1, multiServerPlay: Bool = false, loader: String = "", loaderOptions: [String] = [], createsAccountAtLogin: Bool = false,
+         bootTemplate: String = "",
+         newsURL: String = "", newsPageURL: String = "") {
         self.codebase = codebase; self.retired = retired
         self.name = name; self.host = host; self.bootProfile = bootProfile
         self.verified = verified; self.note = note; self.era = era
@@ -127,6 +271,10 @@ struct Server: Codable, Identifiable, Hashable {
         self.installURL = installURL; self.installKind = installKind; self.installNote = installNote
         self.accountURL = accountURL; self.accountHow = accountHow; self.discordURL = discordURL
         self.renderer = renderer; self.x87 = x87; self.msync = msync
+        self.maxClients = maxClients; self.multiServerPlay = multiServerPlay
+        self.loader = loader; self.loaderOptions = loaderOptions; self.bootTemplate = bootTemplate
+        self.createsAccountAtLogin = createsAccountAtLogin
+        self.newsURL = newsURL; self.newsPageURL = newsPageURL
     }
 
     init(from decoder: Decoder) throws {
@@ -156,6 +304,14 @@ struct Server: Codable, Identifiable, Hashable {
         renderer    = try c.decodeIfPresent(Renderer.self, forKey: .renderer)
         x87         = try c.decodeIfPresent(Bool.self, forKey: .x87) ?? Server.builtins.first { $0.name == name }?.x87 ?? true
         msync       = try c.decodeIfPresent(Bool.self, forKey: .msync) ?? Server.builtins.first { $0.name == name }?.msync ?? true
+        maxClients  = Server.all.first { $0.name == name }?.maxClients ?? 1
+        multiServerPlay = try c.decodeIfPresent(Bool.self, forKey: .multiServerPlay) ?? false
+        loader      = Server.all.first { $0.name == name }?.loader ?? ""
+        loaderOptions = Server.all.first { $0.name == name }?.loaderOptions ?? []
+        createsAccountAtLogin = Server.all.first { $0.name == name }?.createsAccountAtLogin ?? false
+        bootTemplate = Server.all.first { $0.name == name }?.bootTemplate ?? ""
+        newsURL     = Server.all.first { $0.name == name }?.newsURL ?? ""
+        newsPageURL = Server.all.first { $0.name == name }?.newsPageURL ?? ""
         // A world the user has not renamed inherits a renderer the project has since measured
         // for it -- otherwise a servers.json written before this field existed keeps launching
         // Gaia XI on the pathway that is known to kill it.
@@ -178,7 +334,7 @@ struct Server: Codable, Identifiable, Hashable {
         }
     }
 
-    /// Ranking and population from nostalgic.gg's live-tracked FFXI private-server list
+    /// Historical survey: ranking and population from nostalgic.gg's live-tracked FFXI private-server list
     /// (checked 2026-08-13; it tracks nine servers despite its "Top 10" title, hence Local
     /// server standing in as the round tenth). Login hosts below are copied verbatim from each
     /// server's own connect/setup page or wiki — real values, not guesses — but `verified` is
@@ -213,23 +369,45 @@ struct Server: Codable, Identifiable, Hashable {
         Server(name: "HorizonXI", host: "play.horizonxi.com", bootProfile: "horizonxi.ini",
                verified: true,
                note: "The server this project was built and tested against.",
-               era: "Chains of Promathia · 75 cap", population: 9495, pinned: true, codebase: .landSandBoat,
+               // horizonxi.com, 2026-10-14: "Treasures of Aht Urhgan is live on HorizonXI"
+               // (launched 2026-08-07); contributor PR #24 said the same.
+               era: "Treasures of Aht Urhgan · 75 cap", population: 1496, codebase: .landSandBoat,
                installURL: "https://horizonxi.com/play-now", installKind: .horizonTorrent,
                installNote: "HorizonXI's own client, fetched the way their launcher does it: a 9.4 GB torrent, then their updates. Needs aria2 (brew install aria2).",
                accountURL: "https://horizonxi.com/register",
                accountHow: "Sign up on horizonxi.com, then log in here with that account.",
-               discordURL: "https://discord.gg/horizonxi"),
+               discordURL: "https://discord.gg/horizonxi",
+               // horizonxi.com/faq, 2026-10-25: "Can we dual box? No, Horizon is a single box server
+               // where each IP address can only have one account tied to it." /rules: "Each Adventurer
+               // may only ever have one account".
+               maxClients: 1,
+               loader: "horizon-loader.exe", bootTemplate: BootProfile.horizonTemplate,
+               newsURL: "https://api.horizonxi.com/api/v1/news",
+               newsPageURL: "https://horizonxi.com/news/{slug}"),
+        // Catalogued 2026-10-28; signs in on Phoenix's own website since 3.11. Never send a normal
+        // account/password to its custom launch-token loader. See docs/PHOENIX.md.
+        Server(name: "Phoenix XI", host: "play.phoenix-xi.com", bootProfile: "phoenix.ini",
+               verified: true, note: "",
+               era: "Treasures of Aht Urhgan · 75 cap", population: 1110,
+               codebase: .landSandBoat,
+               installURL: "https://phoenix-xi.com/getting-started", installKind: .website,
+               installNote: "Connect Phoenix installs its official client in its own folder.",
+               accountURL: "https://phoenix-xi.com/register",
+               accountHow: "Create and approve your Phoenix account on their website, then use Connect Phoenix.",
+               discordURL: "https://discord.gg/phoenix-xi", maxClients: 1),
         Server(name: "Local server", host: "127.0.0.1", bootProfile: "lsb.ini",
                verified: true,
                note: "LandSandBoat, built and run on this Mac. Nobody else can reach it.",
-               era: "LandSandBoat · your own world", population: 9494, pinned: true, codebase: .landSandBoat,
+               era: "LandSandBoat · your own world", population: 0, codebase: .landSandBoat,
                local: true,
                accountHow: "Your own world: the loader window offers to create the account the "
-                     + "first time you connect. No signup site, and nobody to ask."),
+                     + "first time you connect. No signup site, and nobody to ask.",
+               // Daniel's own server: nobody's rules but his.
+               maxClients: Server.noClientCap, loader: "horizon-loader.exe"),
         Server(name: "CatsEyeXI", host: "server.catseyexi.com", bootProfile: "catseyexi.ini",
                verified: false,
                note: "Login host from CatsEyeXI's own connect page. Untested by this project.",
-               era: "Custom content · 75 cap", population: 2722, codebase: .landSandBoat,
+               era: "Custom content · 75 cap", population: 657, codebase: .landSandBoat,
                // CatsEyeXI's server settings are public; CLIENT_VER there is what its login
                // server enforces (VER_LOCK = 2, "this version or newer"). 30251204_1 as of
                // 2026-08-15. HorizonXI's client was at 30251101_2 that day, which is exactly
@@ -241,24 +419,207 @@ struct Server: Codable, Identifiable, Hashable {
                accountURL: "https://www.catseyexi.com/register",
                accountHow: "Register on catseyexi.com, then create the game account from that "
                      + "site's account page — the website login is not the game login.",
-               discordURL: "https://discord.gg/catseyexi"),
+               discordURL: "https://discord.gg/catseyexi",
+               // Their account rules (github.com/CatsAndBoats/catseyexi/wiki/Information-
+               // Regarding-Account-Rules-and-Limitations, read 2026-09-26): "You have one
+               // active character on two account's (dual box) is this allowed? Yes!" and
+               // "A single person is allowed two active characters maximum."
+               maxClients: 2),
+        // Added 2026-10-24 (b71). Port 54231 answers LandSandBoat's own JSON over TLS ("Your
+        // xiloader is too old... '2.1.x'"), and their loader's notice says it is LSB xiloader 2.1.2.
+        // Everything below is from their own site, their launcher (AscensionXI.exe 3.6.0, read with
+        // ILSpy) and their update channel; see docs/ASCENSION.md.
+        Server(name: AscensionChannel.worldName, host: "play.ascensionffxi.com",
+               bootProfile: AscensionChannel.bootProfile, verified: false,
+               note: "Level 75 era, Ironman: no auction house, gear is earned. Their client and "
+                     + "DATs come from their own update server.",
+               // ascensionffxi.com, 2026-10-24: "a Final Fantasy XI private server, level 75 era,
+               // Ironman". Their Discord had 65 members (26 online) that day: ordering only.
+               era: "Level 75 era · Ironman", population: 0, codebase: .landSandBoat,
+               installURL: "https://www.ascensionffxi.com/download", installKind: .ascensionChannel,
+               installNote: "AscensionXI's client (about 14 GB) from their update server, file by file and "
+                     + "checked, reusing identical files from other FFXI clients on this Mac; then their "
+                     + "DATs, addons and loader, as their launcher does at every Play.",
+               accountURL: "https://www.ascensionffxi.com/register",
+               accountHow: "Register on ascensionffxi.com with your email, then create your character on "
+                     + "their website — the game cannot make one. Log in here with that account.",
+               discordURL: "https://discord.gg/e924EXBC6m",
+               // Their rules (ascensionffxi.com/rules, 2026-10-24): "Each person may have one account
+               // ... Multiboxing, meaning one person controlling multiple characters at the same
+               // time, is not permitted."
+               maxClients: 1,
+               loader: AscensionChannel.loaderName, loaderOptions: ["--hairpin"]),
+        // Added 2026-10-24 (b72). LSB: port 54231 answers LSB JSON ("requires version 2.2.x").
+        // Everything below is from their own open-source launcher (github.com/VanaDreams/vanadreams-
+        // ashita), their site and their status API; see docs/VANADREAMS.md.
+        Server(name: VanadreamsChannel.worldName, host: VanadreamsChannel.host,
+               bootProfile: VanadreamsChannel.bootProfile, verified: false,
+               note: "Level 99, every expansion, custom content. Boxing, mules and your own addons are welcome.",
+               // Their status API, 2026-10-24: 22 online, 161 characters, 82 players this week.
+               era: "99 cap · every expansion · custom", population: 21, codebase: .landSandBoat,
+               installURL: "https://fairywitch.ca/", installKind: .vanadreamsPackage,
+               installNote: "Vanadreams' own client package (about 9 GB of downloads, 17 GB installed) with Ashita "
+                     + "and the loader their server takes, put together as their launcher does it.",
+               accountHow: "No signup page: the account is made at their login server. Type the account name and "
+                     + "password you want above, then Create account.",
+               discordURL: "https://discord.gg/tBpNVBwKqT",
+               // fairywitch.ca: "As many accounts and characters as you want, boxing welcome, mules
+               // welcome, your addons welcome."
+               maxClients: Server.noClientCap, loader: "xiloader.exe", createsAccountAtLogin: true),
+        // Added 2026-10-24 (b73). LSB: port 54231 answers LSB's JSON, their loader is LSB xiloader
+        // 2.1.2. From their site, their Linux guide, their launcher (0.36.15) and their public
+        // content repo; see docs/DRIFTWOOD.md.
+        Server(name: DriftwoodChannel.worldName, host: DriftwoodChannel.host,
+               bootProfile: DriftwoodChannel.bootProfile, verified: false,
+               note: "Level 99 with no limit-break quests, custom systems (arena, merits, politics, a player market). "
+                     + "Retail FFXI plus their own Ashita and addons.",
+               // xi.driftwoodgaming.com/api/players, 2026-10-24: {"playersOnline":44}.
+               era: "99 cap · custom systems", population: 42, codebase: .landSandBoat,
+               installURL: DriftwoodChannel.site + "/download", installKind: .driftwoodContent,
+               installNote: "No game files come from DriftwoodXI: their client is retail FFXI (build "
+                     + DriftwoodChannel.clientBuild + "), put together from the identical files of another world's client on "
+                     + "this Mac (AscensionXI or Vanadreams), then their Ashita and addons from their public repo.",
+               accountURL: DriftwoodChannel.site + "/register",
+               accountHow: "Register on xi.driftwoodgaming.com, then log in here with that account.",
+               discordURL: "https://discord.gg/DriftwoodGaming",
+               // Their home page's House rules, 2026-10-25: "One account per player." Their staff post
+               // (news/one-account-sixteen-characters, 2026-07-28): "Why multi-boxing is against the rules".
+               maxClients: 1),
+        // Added 2026-10-24 (b74). LSB: port 54231 answers LandSandBoat's own JSON ("'2.1.x'") and
+        // their client ships stock LandSandBoat xiloader 2.1.1.0. From pegasusxi.com, their launcher
+        // (1.1.8, app.asar read as data) and their CDN; see docs/PEGASUS.md.
+        Server(name: PegasusChannel.worldName, host: PegasusChannel.host,
+               bootProfile: PegasusChannel.bootProfile, verified: false,
+               note: "Retail-like level 99 world, playable through Chains of Promathia; later expansions in development.",
+               // pegasusxi.com/server-info.html, 2026-10-24: "Level cap 99", "Playable through Chains of
+               // Promathia". Discord 50 members that day: ordering only.
+               era: "99 cap · through Chains of Promathia", population: 0, codebase: .landSandBoat,
+               installURL: "https://pegasusxi.com/files/", installKind: .pegasusPack,
+               installNote: "PegasusXI's own client (Ashita, LandSandBoat's loader, the game and their HD textures: "
+                     + "about 14 GB of downloads, 28 GB installed), read straight out of their release zip, file by file and checked.",
+               // register.html 301-redirects here; 18+, password 8-32 characters ("The game client
+               // (xiloader) cannot use longer passwords").
+               accountURL: "https://pegasusxi.com/new_accounts/index.html",
+               accountHow: "Register on pegasusxi.com (18 or older; password 8–32 characters), then log in here "
+                     + "with that account. Characters are made in game.",
+               discordURL: "https://discord.gg/M3NFvpm75E",
+               // The live site's six rules say nothing on boxing, but the operator's own repo
+               // (github.com/aremais/PegasusXI, public/rules.html, read 2026-10-25) says "PegasusXI is a
+               // “single box” server. Each Adventurer may only ever have one account". The stricter reading.
+               maxClients: 1),
+        // Added 2026-10-24 (b75). LSB: port 54231 answers LandSandBoat's own JSON ("'2.1.x'"), and LSB's
+        // login checks major.minor exactly, so xiloader 2.1.2 (RetailWorld.loaders), never the latest.
+        // From mistxi.com (server-info, getting-started, create-account), api.mistxi.com/status.php
+        // and their launcher (github.com/mistxi/mistxi_launcher); see docs/RETAIL-WORLDS.md.
+        Server(name: RetailWorld.mist.world, host: RetailWorld.mist.host, bootProfile: RetailWorld.mist.profile, verified: false,
+               note: "Era-focused 75 cap through Wings of the Goddess, 3x EXP and 1.5x movement speed.",
+               // mistxi.com/server-info, 2026-10-24: "Level cap: 75 (Main)", "Content: Supported up to Wings
+               // of the Goddess". Discord 52 members that day: ordering only.
+               era: "Wings of the Goddess · 75 cap", population: 0, codebase: .landSandBoat,
+               // api.mistxi.com/status.php, 2026-10-24: "clientVersion":"30260805_0" (JSON; ServerFeeds reads
+               // only Lua CLIENT_VER, so this snapshot is the check). The client here is newer (30260904_1).
+               requiredClient: "30260805_0",
+               installURL: "https://mistxi.com/getting-started/", installKind: .retailWorld,
+               installNote: "Retail FFXI from the identical files of another world's client on this Mac, then Ashita and "
+                     + "LandSandBoat's xiloader 2.1, as their getting-started guide sets them up.",
+               accountURL: "https://mistxi.com/create-account/",
+               accountHow: "Sign up on mistxi.com (Discord verification, or ask for manual approval), choose your game "
+                     + "login there, then log in here with it.",
+               discordURL: "https://discord.gg/kQp9Vetk3d",
+               // mistxi.com/server-info, 2026-10-24: "Dual boxing: Allowed ( maximum 2 per IP )".
+               maxClients: 2),
+        // Added 2026-10-24 (b75). LSB: port 54231 answers "This server requires version 2.2.x". From
+        // moghouse.cc (getting-setup, the Ashita guide); see docs/RETAIL-WORLDS.md.
+        Server(name: RetailWorld.moghouse.world, host: RetailWorld.moghouse.host, bootProfile: RetailWorld.moghouse.profile,
+               verified: false,
+               note: "A fun server: every player is GM level 1. Level 99, Rise of the Zilart through Adoulin.",
+               era: "99 cap · fun server", population: 0, codebase: .landSandBoat,
+               installURL: "https://moghouse.cc/getting-setup/", installKind: .retailWorld,
+               installNote: "Retail FFXI from the identical files of another world's client on this Mac, then Ashita and "
+                     + "LandSandBoat's xiloader 2.2, as their setup guide does it.",
+               accountHow: "No signup page: the account is made at their login server. Type the account name and "
+                     + "password you want above, then Create account.",
+               discordURL: "https://discord.gg/3ZfEJrp56X",
+               // moghouse.cc publishes no rules (all 25 pages read 2026-10-25); their ffxiprivateservers.com
+               // listing says "Dual-boxing: Yes" with no number. Nothing against it: no cap.
+               maxClients: Server.noClientCap, createsAccountAtLogin: true),
+        // Added 2026-10-24 (b76). LSB: port 54231 answers "This server requires version 2.2.x". From
+        // their wiki (ffxileveldown.fandom.com: Installation, About Us, Past FFXI Version Repository); see
+        // docs/RETAIL-WORLDS.md.
+        Server(name: RetailWorld.levelDown.world, host: RetailWorld.levelDown.host, bootProfile: RetailWorld.levelDown.profile,
+               verified: false,
+               note: "Level 99 custom server: every expansion, boosted rates, free 109 artifact armor and a relic at milestones.",
+               era: "99 cap · custom", population: 0, codebase: .landSandBoat,
+               installURL: "https://ffxileveldown.fandom.com/wiki/Installation", installKind: .retailWorld,
+               installNote: "Their own copy of the game on the version their server runs (5.5 GB download, 15 GB installed), "
+                     + "then Ashita and LandSandBoat's xiloader 2.2, as their install guide sets them up.",
+               accountHow: "No signup page: the account is made at their login server. Type the account name and "
+                     + "password you want above, then Create account.",
+               discordURL: "https://discord.gg/uZ5J2KwAPA",
+               // Their wiki's About Us, 2026-10-24: "Accounts – 2 Active, 1 Mule (only two logged in at a time)".
+               maxClients: 2, createsAccountAtLogin: true),
+        // Added 2026-10-24 (b76). LSB ("Powered by LandSandBoat"; port 54231 answers LSB's JSON,
+        // "'2.1.x'"). From their site and their launcher (3.0.39, read with ILSpy); see docs/SCYTHE.md.
+        Server(name: ScytheChannel.worldName, host: ScytheChannel.host, bootProfile: ScytheChannel.bootProfile, verified: false,
+               note: "Level 99 custom: Master Levels to 50, Rhapsodies of Vana'diel, a custom hub zone and a levelling buff.",
+               era: "99 cap · custom", population: 0, codebase: .landSandBoat,
+               installURL: "https://scythe-bbq.pages.dev/getting-started", installKind: .scytheChannel,
+               installNote: "Scythe's signed client release (pinned to retail 30260429_1): files already on this Mac are copied "
+                     + "byte for byte, the rest (about 1 GB) come from Scythe; then their Ashita and loader.",
+               accountHow: "No signup page: the account is made at their login server. Type the account name and "
+                     + "password you want above, then Create account.",
+               discordURL: "https://discord.gg/9KDDH3XQfY",
+               // scythe-bbq.pages.dev/getting-started, 2026-10-24: "You may use up to two accounts per player for
+               // dual-boxing, with both online simultaneously."
+               maxClients: 2, createsAccountAtLogin: true),
+        // Added 2026-10-24 (b77). LSB: port 54231 answers "requires version 2.2.x". From their site and
+        // their launcher (0.7.18, app.asar read as data); see docs/RETAIL-WORLDS.md.
+        Server(name: RetailWorld.olympus.world, host: RetailWorld.olympus.host, bootProfile: RetailWorld.olympus.profile, verified: false,
+               note: "Open beta. 75 cap, Chains of Promathia and Treasures of Aht Urhgan, era plus.",
+               era: "75 cap · CoP + ToAU · open beta", population: 2, codebase: .landSandBoat,
+               installURL: "https://olympus-games.dev/", installKind: .retailWorld,
+               installNote: "Retail FFXI from the identical files of another world's client on this Mac, Ashita and LandSandBoat's "
+                     + "xiloader 2.2, then their DATs (about 1.2 GB) as an overlay, as their launcher sets it up.",
+               accountURL: "https://olympus-games.dev/create",
+               accountHow: "Sign up on olympus-games.dev (that also makes your first character), or type the account name "
+                     + "and password you want above and Create account.",
+               discordURL: "https://discord.gg/apYsQ4b4GN",
+               // olympus-games.dev/rules (2026-10-25) has seven conduct rules and none on boxing, accounts
+               // per person or per IP; nor do their FAQ, launcher or patch notes. Nothing against it: no cap.
+               maxClients: Server.noClientCap, loaderOptions: RetailWorld.olympus.loaderOptions, createsAccountAtLogin: true),
+        // Added 2026-10-24 (b77). LSB (their FAQ says so; port 54231 answers "'2.1.x'"). From their site and
+        // their launcher (1.0.29, read with ILSpy); see docs/RETAIL-WORLDS.md.
+        Server(name: RetailWorld.legendary.world, host: RetailWorld.legendary.host, bootProfile: RetailWorld.legendary.profile,
+               verified: false,
+               note: "Invite-only. Level 99 custom: fast progression and a deep custom endgame.",
+               era: "99 cap · custom · invite-only", population: 0, codebase: .landSandBoat,
+               installURL: "https://www.ffxi-legendary.com/", installKind: .retailWorld,
+               installNote: "Retail FFXI from the identical files of another world's client on this Mac, Ashita and LandSandBoat's "
+                     + "xiloader 2.1, then their DATs as an overlay from their portal, as their launcher sets it up.",
+               accountHow: "Invite-only: \"new accounts aren't created automatically. Ask in our Discord and a GM will set "
+                     + "you up with a login.\" Then log in here with it.",
+               discordURL: "https://discord.gg/BWaSwqn5Fq",
+               // Their FAQ (2026-10-24): "There are no account limits and no cap on how many characters you run at once."
+               maxClients: Server.noClientCap),
         Server(name: "Eden", host: "play.edenxi.com", bootProfile: "eden.ini", verified: false,
                note: "Login host from Eden's own new-player wiki. Untested by this project.",
                era: "Classic · 75 cap", population: 1925, codebase: .darkStarLineage,
-               // Eden534.zip on Google Drive (5.8 GB, checked 2026-08-16): a full pre-retail-era
-               // client + Ashita + Windower, default C:\Eden, loader Ashita\ffxi-bootmod\xiloader.exe.
-               // The bit.ly on their site resolves to this file id; if Eden ships a new build the id
-               // changes and this falls back to opening their page.
-               installURL: "https://drive.usercontent.google.com/download?id=196Da1f9Wx1Oy8LfDyqlvmJLaRr24n5A7&export=download&confirm=t", installKind: .installerExe,
-               installNote: "Eden's own installer (Eden534.zip, 5.8 GB from their Google Drive): full client, Ashita and Windower. It runs inside the wrapper; install into C:\\Games\\Eden.",
-               // Eden has no signup page at all: edenxi.com is a news SPA. Their wiki's new-player
-               // guide says a registration code comes from their Discord bot (`!getcode`, 7
-               // digits, valid 10 minutes) and the account itself is typed into the loader
-               // console. Pointing at edenxi.com would be pointing at a page that cannot sign
-               // anyone up, so this points at the invite (checked live: guild "Eden").
+               // Eden535.zip on Google Drive (5,771,573,370 bytes): the file edenxi.com/install links
+               // (bit.ly/Eden535, read from their /api/v1/misc/config on 2026-11-24; Eden534 is the
+               // 2023 build it replaced). Installer.exe (NSIS 3.06.1) + data.pak (a 7z, 14.6 GB
+               // unpacked): Ashita v3 with Eden's xiloader in Ashita\ffxi-bootmod, Windower 4, the
+               // classic client. The installer ignores /D and always writes C:\Eden; InstallerClient
+               // brings it into the world's folder. If the id changes this falls back to their page.
+               installURL: "https://drive.usercontent.google.com/download?id=1kLPVfruGCzXkkT2XQ-pmiSh4akHMLjo2&export=download&confirm=t", installKind: .installerExe,
+               installNote: "Eden's own installer (Eden535.zip, 5.8 GB, from edenxi.com/install): client, Ashita and Windower, about 14.6 GB installed. Pick Installer.exe from the unzipped folder, or the .zip itself.",
+               // Eden has no signup page at all: edenxi.com only manages an existing account (their
+               // API's POST /register answers 404). The account is made in the loader console:
+               // Login / Create Account / Quit. A registration code is asked for only when the
+               // server says so (their news, 2024-10-12: not currently required); an existing
+               // player makes one in game with !getcode.
                accountHow: "No signup page — the account is created in the loader window that "
-                     + "opens when you press Play. Eden gates that with a registration code "
-                     + "their Discord bot hands out (!getcode: 7 digits, good for 10 minutes).",
+                     + "opens when you press Play. If it asks for a registration code, an Eden "
+                     + "player can make you one in game (!getcode).",
                discordURL: "https://discord.gg/S3EAWr2Jec"),
         Server(name: "FFEra", host: "ffera.com", bootProfile: "ffera.ini", verified: false,
                note: "Longest-running 75-cap community server. Login host from FFEra's own "
@@ -275,7 +636,7 @@ struct Server: Codable, Identifiable, Hashable {
         // standard xiloader TLS/JSON login (bad-credential probe returned LOGIN_ERROR).
         Server(name: "Gaia XI", host: "play.gaiaxi.com", bootProfile: "GaiaXI.ini", verified: false,
                note: "Accounts are registered on gaiaxi.com.",
-               era: "75 cap", population: 276, codebase: .landSandBoat,
+               era: "75 cap", population: 0, codebase: .landSandBoat,
                installURL: "https://gaiaxi.com/account/index.xi?return=downloadzip", installKind: .website,
                installNote: "Gaia XI's launcher zip is behind their site login (register there first). Save it, then Run installer… — their launcher.exe downloads the whole game into C:\\Games\\Gaia XI.",
                accountURL: "https://gaiaxi.com/account/index.xi",
@@ -285,7 +646,10 @@ struct Server: Codable, Identifiable, Hashable {
                // Their client dies about a second after login on the DXVK pathway and boots on
                // wined3d/OpenGL. Slower, but a slow world beats a world that exits. See
                // docs/SERVERS-WORKLOG.md, 2026-08-19.
-               renderer: .openGL, msync: false),
+               renderer: .openGL, msync: false,
+               // gaiaxi.com/res/info/terms.xi, 2026-10-25: "Maximum 2 Accounts Per Player" and
+               // "Dual-Boxing Allowed"; /res/info/server.xi: "Multiboxing 2 Accounts".
+               maxClients: 2),
         Server(name: "ValhallaXI", host: "logon.valhalla.group", bootProfile: "valhallaxi.ini",
                verified: false,
                note: "Login host from Valhalla's own connect page (2026-08). Untested by this project.",
@@ -309,25 +673,31 @@ struct Server: Codable, Identifiable, Hashable {
                verified: false,
                note: "Login host from Supernova's own Ashita setup guide. Untested by this "
                      + "project.",
-               era: "75 cap", population: 155, codebase: .landSandBoat,
+               era: "75 cap", population: 0, codebase: .landSandBoat,
                installURL: "https://supernovaffxi.wordpress.com/get-started-on-supernova/client-installation/", installKind: .retail,
                installNote: "Bring-your-own retail FFXI: Square Enix's free client (7.7 GB, five parts) installs inside the wrapper, then PlayOnline updates it, then Supernova's patch and DATs go on top. Slow (hours) but every step is automated.",
-               accountHow: "No signup page — the account is created in the loader window that "
-                     + "opens when you press Play, then linked to Discord from their Get "
+               accountHow: "No signup page: the account is made at their login server. Type the account name and "
+                     + "password you want above, then Create account; link it to Discord from their Get "
                      + "Started guide.",
-               discordURL: "https://discord.gg/QBBdfQh"),
+               discordURL: "https://discord.gg/QBBdfQh",
+               // supernovaffxi.wordpress.com, Server Rules › Alts & Multiboxing, 2026-10-25: while
+               // multiboxing, "Playing more than 6 characters at once" is prohibited.
+               maxClients: 6, createsAccountAtLogin: true),
         Server(name: "OmicronXI", host: "OmicronFFXI.com", bootProfile: "omicronxi.ini",
                verified: false,
                note: "Heavily customized. Login host from Omicron's own wiki. Untested by this "
                      + "project.",
-               era: "99 cap", population: 105, codebase: .landSandBoat,
+               era: "99 cap", population: 0, codebase: .landSandBoat,
                installURL: "https://omicronxi.fandom.com/wiki/Connecting_to_OmicronXI", installKind: .retail,
                installNote: "Bring-your-own retail FFXI: Square Enix's free client (7.7 GB, five parts) installs inside the wrapper, then PlayOnline updates it, then Ashita + xiloader are added. Slow (hours) but every step is automated.",
                // omicronffxi.com sits behind a Cloudflare challenge this project cannot read,
                // so the wiki's own connect page is the honest destination.
                accountURL: "https://omicronxi.fandom.com/wiki/Connecting_to_OmicronXI",
                accountHow: "Omicron publishes no signup form — their wiki's connect page and "
-                     + "their Discord are where new accounts are arranged."),
+                     + "their Discord are where new accounts are arranged.",
+               // omicronxi.fandom.com/wiki/Alt, 2026-10-25: "Currently we allow 2 active characters
+               // on at a time." Their Login changes blog: "limited to 2 connections per IP (dualboxing)".
+               maxClients: 2),
         Server(name: "Tabula Rasa XI", host: "", bootProfile: "tabularasa.ini", verified: false,
                note: "No login host published anywhere this project could find — get it from "
                      + "their own launcher.",
@@ -360,18 +730,19 @@ final class ServerStore: ObservableObject {
         } else {
             list = Server.builtins
         }
-        let saved = UserDefaults.standard.string(forKey: "server.selected")
+        let saved = AppDefaults.store.string(forKey: "server.selected")
         servers = list
         selectedID = list.first(where: { $0.name == saved })?.name ?? list.first?.name ?? ""
     }
 
     /// Keep the user's edited hosts, but pick up servers added to `builtins` in later releases.
-    private static func merge(saved: [Server]) -> [Server] {
+    static func merge(saved: [Server]) -> [Server] {
         // A servers.json written before the LSB-only cut still lists the retired worlds. Drop
         // those by name -- but only ones this project shipped and has since retired, never a
         // server the user added themselves.
         let retiredNames = Set(Server.retiredWorlds.map(\.name))
-        var out = saved.filter { !retiredNames.contains($0.name) }
+        var out = saved.filter { !retiredNames.contains($0.name) || $0.addedByUser }
+        for i in out.indices where out[i].addedByUser { out[i].fillFromCatalogue() }
         for b in Server.builtins where !saved.contains(where: { $0.name == b.name }) {
             out.append(b)
         }
@@ -381,8 +752,17 @@ final class ServerStore: ObservableObject {
                 out[i].population = b.population
                 out[i].pinned = b.pinned
                 out[i].era = b.era
+                // Phoenix was catalogued as pending before 3.11; its status is this project's to state.
+                if b.name == "Phoenix XI" { out[i].verified = b.verified; out[i].note = b.note }
                 // Not the user's to edit, and an old servers.json predates the flag entirely.
                 out[i].local = b.local
+                out[i].maxClients = b.maxClients
+                out[i].loader = b.loader
+                out[i].loaderOptions = b.loaderOptions
+                out[i].createsAccountAtLogin = b.createsAccountAtLogin
+                // How an account is made is this project's research too, and changes with it (b72).
+                out[i].accountHow = b.accountHow
+                out[i].bootTemplate = b.bootTemplate
                 if b.local { out[i].host = b.host }
                 // A stored blank host means the user never set one — adopt a host this project
                 // has since sourced (Gaia XI shipped blank until 2026-08-19). A user-typed host
@@ -396,23 +776,19 @@ final class ServerStore: ObservableObject {
         return out
     }
 
-    /// HorizonXI first because Daniel asked for it; everything else by community size, largest
-    /// first — except the local server, which Daniel wants last: it is a tool, not a community,
-    /// and its pinned fake population was floating it to second place. Numbers stay out of the UI.
-    var ordered: [Server] {
-        servers.sorted {
-            if $0.local != $1.local { return $1.local }
-            if $0.pinned != $1.pinned { return $0.pinned }
-            if $0.population != $1.population { return $0.population > $1.population }
-            return $0.name < $1.name
-        }
+    /// Live online count first, then a dated online estimate; unknown worlds alphabetically.
+    /// The local development server stays last. A population refresh never changes selection.
+    var ordered: [Server] { ordered(populations: [:]) }
+
+    func ordered(populations: [String: Int]) -> [Server] {
+        Server.ordered(servers, populations: populations)
     }
 
     var selected: Server? { servers.first { $0.name == selectedID } }
 
     func select(_ s: Server) {
         selectedID = s.name
-        UserDefaults.standard.set(s.name, forKey: "server.selected")
+        AppDefaults.store.set(s.name, forKey: "server.selected")
     }
 
     func update(_ s: Server) {
@@ -422,9 +798,11 @@ final class ServerStore: ObservableObject {
 
     func add(name: String, host: String, profile: String) {
         guard !name.isEmpty, !servers.contains(where: { $0.name == name }) else { return }
-        servers.append(Server(name: name, host: host,
-                              bootProfile: profile.isEmpty ? "horizonxi.ini" : profile,
-                              verified: false, note: "Added by you.", era: "", population: 0))
+        var added = Server(name: name, host: host,
+                           bootProfile: profile.isEmpty ? "horizonxi.ini" : profile,
+                           verified: false, note: Server.addedNote, era: "", population: 0)
+        added.fillFromCatalogue()
+        servers.append(added)
         save()
     }
 
@@ -436,5 +814,6 @@ final class ServerStore: ObservableObject {
 
     func save() {
         if let d = try? JSONEncoder().encode(servers) { try? d.write(to: Self.url) }
+        Guide.shareSession(worlds: ordered.map(\.name))
     }
 }

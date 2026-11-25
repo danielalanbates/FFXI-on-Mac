@@ -9,24 +9,117 @@
 # rendered natively on macOS. Every step here is load-bearing; see docs/FINDINGS.md for the
 # instrumented evidence behind each one.
 #
-#   ./install.sh /path/to/wrapper.app [prefix-name]
+#   ./install.sh /path/to/wrapper.app [prefix-name] [game dir] [SquareEnix as C:\ or Z:\ path] [SquareEnix dir]
+#
+# The launcher's Repair passes all five, plus HXI_WINE (the wine Play runs, so a Repair does not
+# leave the prefix stamped by another wine and make the next Play stop to update it). With only
+# the first two it configures the classic <prefix>/drive_c/HorizonXI layout with the wrapper's
+# own wine, as it always did.
+#
+# Nothing is written until the game data is known to be reachable: on 2026-10-15 a Repair ran
+# against a ghost-mounted 'Games' drive, rewrote the registry, re-updated the prefix and then died
+# in regsvr32 with a bare "exited 3". Every failure now ends in one "!!" line saying what.
 
 set -euo pipefail
 
-APP="${1:?usage: install.sh /path/to/wrapper.app [prefix-name]}"
+APP="${1:?usage: install.sh /path/to/wrapper.app [prefix-name] [game dir] [SquareEnix C:\\ path] [SquareEnix dir]}"
 PREFIX_NAME="${2:-prefix10}"
 SHARED="$APP/Contents/SharedSupport"
 export WINEPREFIX="$SHARED/$PREFIX_NAME"
-WINE="$SHARED/wine/bin/wine"
-GAME_C='C:\HorizonXI'
-GAME_DIR="$WINEPREFIX/drive_c/HorizonXI"
-SE_C="$GAME_C\\SquareEnix"
+WINE="${HXI_WINE:-$SHARED/wine/bin/wine}"
+GAME_DIR="${3:-$WINEPREFIX/drive_c/HorizonXI}"
+SE_C="${4:-C:\\HorizonXI\\SquareEnix}"
+SE_DIR="${5:-$GAME_DIR/SquareEnix}"
 REG32='C:\windows\syswow64\reg.exe'
+WINESERVER="${WINE:h}/wineserver"
+# Never the Mono/Gecko install prompts (they would wait forever for a click), never a stray
+# DYLD_* from whoever started this.
+#
+# And no window driver: nothing here draws, and Wine's Mac driver started from a script (not
+# through `open`) crashes in a loop inside explorer.exe. 2026-10-15, b60 Setup on a fresh prefix
+# with the game's Wine: regsvr32 waited on that explorer for good and the button said "Setting
+# up…" forever. With winemac.drv off the same calls finish in about a second. The session is
+# ended at the bottom, so Play starts a new one with the driver on.
+export WINEDEBUG=-all WINEDLLOVERRIDES="mscoree,mshtml=;winemac.drv=d" WINEBOOT_HIDE_DIALOG=1
+unset DYLD_FALLBACK_LIBRARY_PATH DYLD_LIBRARY_PATH
 
-[[ -x "$WINE" ]] || { echo "no wine at $WINE" >&2; exit 1; }
-[[ -d "$WINEPREFIX/drive_c/HorizonXI" ]] || { echo "no client at $WINEPREFIX/drive_c/HorizonXI" >&2; exit 1; }
+info() { print -r -- "==> $*"; }
+die() { print -r -- "!! $*" >&2; exit "${2:-1}"; }
 
-info() { print -P "%F{cyan}==>%f $*"; }
+# Every wine call is bounded. One that has not returned after $1 seconds ends this prefix's
+# whole session (that is what a hang holds) and returns 124, so the step names itself instead of
+# leaving the button spinning.
+wine_t() {
+  local limit=$1 n=0 pid; shift
+  "$WINE" "$@" >/dev/null 2>&1 &
+  pid=$!
+  while kill -0 $pid 2>/dev/null; do
+    if (( n >= limit * 2 )); then
+      "$WINESERVER" -k >/dev/null 2>&1 || true
+      wait $pid 2>/dev/null || true
+      return 124
+    fi
+    sleep 0.5; n=$((n + 1))
+  done
+  wait $pid
+}
+
+# End this prefix's session and wait (bounded) for it to go. The launcher runs Repair only with
+# no game live in any launcher, so what is left here is wine's own programs or a leftover from an
+# interrupted Setup -- e.g. that regsvr32 still waiting on a crash-looping explorer.
+end_session() {
+  "$WINESERVER" -k >/dev/null 2>&1 || return 0
+  "$WINESERVER" -w >/dev/null 2>&1 &
+  local pid=$! n=0
+  while kill -0 $pid 2>/dev/null && (( n < 60 )); do sleep 0.5; n=$((n + 1)); done
+  kill $pid 2>/dev/null || true
+}
+# Stop or Quit in the launcher (SIGTERM): this prefix's session ends too, so nothing this script
+# started -- a regsvr32 waiting on explorer -- is left running. Silent: nobody may be reading.
+trap 'end_session; exit 143' TERM INT HUP
+
+[[ -x "$WINE" ]] || die "Wine isn't installed in $APP — press Setup."
+[[ -d "$GAME_DIR" ]] || die "The game isn't installed yet (no $GAME_DIR) — press Setup."
+
+# ---------------------------------------------------------------------------
+# 0. Is the game data there at all? A drive that is gone and files that are gone need different
+# answers (reconnect the drive / get the files again), and neither is something Repair can fix.
+# Checked before anything is written.
+# ---------------------------------------------------------------------------
+# The mount point serving $1. /Volumes is case-insensitive: with 'Games' ghost-mounted, a stick
+# named 'GAMES' answered at /Volumes/Games (2026-10-15), so "it exists" is not enough.
+mount_of() { /bin/df -P "$1" 2>/dev/null | /usr/bin/awk 'NR == 2 { for (i = 6; i <= NF; i++) printf "%s%s", $i, (i < NF ? " " : "") }'; }
+vol_gone() {
+  [[ -e "$1" ]] || return 0
+  local m; m=$(mount_of "$1")
+  [[ "$m" == /Volumes/* && "$m" != "$1" ]]
+}
+# The /Volumes/<name> that $1 lives on or links into, when that volume is not there.
+missing_drive() {
+  local p="$1" hops=0 t
+  while (( hops < 16 )); do
+    if [[ "$p" == /Volumes/* ]]; then
+      local vol="/Volumes/${${p#/Volumes/}%%/*}"
+      vol_gone "$vol" && { print -r -- "${vol:t}"; return 0; }
+    fi
+    [[ -L "$p" ]] || break
+    t=$(readlink "$p"); [[ "$t" == /* ]] || t="${p:h}/$t"
+    p="$t"; hops=$((hops + 1))
+  done
+  return 1
+}
+if [[ ! -d "$SE_DIR/FINAL FANTASY XI" ]]; then
+  if d=$(missing_drive "$SE_DIR"); then
+    die "The '$d' drive isn't connected — reconnect it or press Setup. Nothing was changed." 4
+  fi
+  die "The game's files aren't in $SE_DIR — press Setup to get them again. Nothing was changed." 4
+fi
+missing=()
+for f in FFXi.dll FFXiMain.dll FFXiVersions.dll; do
+  [[ -f "$SE_DIR/FINAL FANTASY XI/$f" ]] || missing+=("$f")
+done
+(( ${#missing} == 0 )) \
+  || die "Game files missing (${(j:, :)missing}) — press Setup to get them again. Nothing was changed." 4
 
 # ---------------------------------------------------------------------------
 # 1. dylib rpath.
@@ -38,7 +131,8 @@ info() { print -P "%F{cyan}==>%f $*"; }
 # unexplained "dyld: Library not loaded". Symlinking removes the env dependency entirely.
 # ---------------------------------------------------------------------------
 info "fixing dylib rpath"
-"${0:h}/fix-wine-rpath.sh" "$APP" >/dev/null
+rpath_out=$("${0:h}/fix-wine-rpath.sh" "$APP" 2>&1) \
+  || die "Couldn't fix Wine's library links: ${${(f)rpath_out}[-1]:-no output}"
 
 # ---------------------------------------------------------------------------
 # 2. PlayOnline registry.
@@ -54,22 +148,32 @@ info "fixing dylib rpath"
 # reg.exe writes only the 64-bit view, so a prefix configured with plain `wine reg add` leaves the
 # game seeing nothing.
 # ---------------------------------------------------------------------------
+end_session
 info "writing PlayOnline registry (both views)"
+# The first call also brings the prefix up to this wine's version, which can take a minute on a
+# slow drive; a second call is quick.
+reg_set() {
+  local rc=0
+  wine_t 300 "$@" || rc=$?
+  (( rc == 0 )) && return 0
+  (( rc == 124 )) && die "Wine stopped answering while writing the game's settings. Press Repair to try again."
+  die "Couldn't write the game's registry settings (reg exit $rc). Quit the game, then press Repair again."
+}
 for REG in "$REG32" reg; do
-  "$WINE" $REG add "HKLM\\SOFTWARE\\PlayOnlineUS\\InstallFolder" /v 0001 /d "$SE_C\\FINAL FANTASY XI" /f >/dev/null 2>&1
-  "$WINE" $REG add "HKLM\\SOFTWARE\\PlayOnlineUS\\InstallFolder" /v 1000 /d "$SE_C\\PlayOnlineViewer" /f >/dev/null 2>&1
-  "$WINE" $REG add "HKLM\\SOFTWARE\\PlayOnlineUS\\Interface"     /v 0001 /d "0" /f >/dev/null 2>&1
+  reg_set $REG add "HKLM\\SOFTWARE\\PlayOnlineUS\\InstallFolder" /v 0001 /d "$SE_C\\FINAL FANTASY XI" /f
+  reg_set $REG add "HKLM\\SOFTWARE\\PlayOnlineUS\\InstallFolder" /v 1000 /d "$SE_C\\PlayOnlineViewer" /f
+  reg_set $REG add "HKLM\\SOFTWARE\\PlayOnlineUS\\Interface"     /v 0001 /d "0" /f
 done
 
 # Option must behave as Alt, or no Alt-based macro can ever be typed. Wine's Mac driver defaults
 # both Option keys to composing special characters instead, which silently costs the player every
 # Alt keybind — Ashita macro books included.
-"$WINE" reg add "HKCU\\Software\\Wine\\Mac Driver" /v LeftOptionIsAlt  /d y /f >/dev/null 2>&1
-"$WINE" reg add "HKCU\\Software\\Wine\\Mac Driver" /v RightOptionIsAlt /d y /f >/dev/null 2>&1
+reg_set reg add "HKCU\\Software\\Wine\\Mac Driver" /v LeftOptionIsAlt  /d y /f
+reg_set reg add "HKCU\\Software\\Wine\\Mac Driver" /v RightOptionIsAlt /d y /f
 
 # The client ships pol.reg / polu.reg; polu.reg holds HKCU video settings the game needs present.
 for r in pol polu; do
-  [[ -f "$WINEPREFIX/drive_c/$r.reg" ]] && "$WINE" regedit /S "C:\\$r.reg" >/dev/null 2>&1 || true
+  [[ -f "$WINEPREFIX/drive_c/$r.reg" ]] && wine_t 120 regedit /S "C:\\$r.reg" || true
 done
 
 # ---------------------------------------------------------------------------
@@ -82,12 +186,37 @@ done
 # The /s flag is mandatory: without it FFXi.dll's DllRegisterServer opens a GUI dialog, and
 # synthetic input (CGEvent) does not reach wine-hosted windows on macOS, so it hangs forever
 # with nothing to click.
+#
+# Every DLL is tried and every failure named (regsvr32's own codes: 3 = could not be loaded,
+# 4 = no DllRegisterServer, 5 = registration refused). polcore.dll is a warning, as it is in the
+# launcher's checks: Play goes ahead without it, so Repair does too, and says so.
 # ---------------------------------------------------------------------------
 info "registering FFXI COM servers"
+failed=()
+register() {
+  local rc=0
+  wine_t 120 regsvr32 /s "$1" || rc=$?
+  case $rc in
+    0) ;;
+    124) failed+=("${1##*\\} didn't answer within two minutes") ;;
+    3) failed+=("${1##*\\} couldn't be loaded (regsvr32 3)") ;;
+    4) failed+=("${1##*\\} has no registration entry (regsvr32 4)") ;;
+    5) failed+=("${1##*\\} refused to register (regsvr32 5)") ;;
+    *) failed+=("${1##*\\} failed to register (regsvr32 $rc)") ;;
+  esac
+}
 for d in FFXi.dll FFXiMain.dll FFXiVersions.dll; do
-  "$WINE" regsvr32 /s "$SE_C\\FINAL FANTASY XI\\$d" >/dev/null 2>&1
+  register "$SE_C\\FINAL FANTASY XI\\$d"
 done
-"$WINE" regsvr32 /s "$SE_C\\PlayOnlineViewer\\viewer\\com\\polcore.dll" >/dev/null 2>&1
+if [[ -f "$SE_DIR/PlayOnlineViewer/viewer/com/polcore.dll" ]]; then
+  register "$SE_C\\PlayOnlineViewer\\viewer\\com\\polcore.dll"
+else
+  print -r -- "!! polcore.dll is missing — the game may not start. Press Setup to get the game files again."
+fi
+(( ${#failed} == 0 )) || die "Couldn't register the game: ${(j:; :)failed}." 3
+# GameRegistry (the launcher's per-Play twin of §2–3) caches what the registry names; it now
+# names this folder.
+print -r -- "$SE_C" > "$WINEPREFIX/.ffxi-on-mac-registry-target"
 
 # ---------------------------------------------------------------------------
 # 3b. Metal renderer (the performance fix).
@@ -141,8 +270,8 @@ if [[ -n "${HXI_METAL:-}" && -f "${0:h}/../vendor/d3d8to9.dll" && -f "${0:h}/../
   done
 
   for REG in "$REG32" reg; do
-    "$WINE" $REG add "HKCU\\Software\\Wine\\DllOverrides" /v "*d3d8" /d native /f >/dev/null 2>&1
-    "$WINE" $REG add "HKCU\\Software\\Wine\\DllOverrides" /v "*d3d9" /d native /f >/dev/null 2>&1
+    wine_t 120 $REG add "HKCU\\Software\\Wine\\DllOverrides" /v "*d3d8" /d native /f || true
+    wine_t 120 $REG add "HKCU\\Software\\Wine\\DllOverrides" /v "*d3d9" /d native /f || true
   done
 
   # 3. the MoltenVK that can actually create a Vulkan 1.2 device
@@ -156,6 +285,9 @@ if [[ -n "${HXI_METAL:-}" && -f "${0:h}/../vendor/d3d8to9.dll" && -f "${0:h}/../
   fi
 fi
 
+# Play must not join this session: its explorer has no window driver.
+end_session
+
 # ---------------------------------------------------------------------------
 # 4. Launcher.
 #
@@ -164,8 +296,10 @@ fi
 # runs. Always pass the absolute C:\ path — wine resolves a bare exe name against
 # C:\windows\system32, not the cwd.
 # ---------------------------------------------------------------------------
-info "writing launcher"
+# A convenience only: a folder that cannot be written (a read-only drive, /Applications without
+# admin) must not turn a Repair that did all the real work into a failure.
 LAUNCHER="${APP:h}/Play HorizonXI.command"
+write_launcher() {
 cat > "$LAUNCHER" <<EOF
 #!/bin/zsh
 W="$APP"
@@ -176,6 +310,12 @@ cd "\$WINEPREFIX/drive_c/HorizonXI" || { echo "game dir missing"; exit 1; }
 exec "\$W/Contents/SharedSupport/wine/bin/wine" "C:\\\\HorizonXI\\\\Ashita-cli.exe" horizonxi.ini
 EOF
 chmod +x "$LAUNCHER"
+}
+if write_launcher 2>/dev/null; then
+  info "wrote $LAUNCHER"
+else
+  info "skipped $LAUNCHER (that folder can't be written)"
+fi
 
 info "done — launch with: $LAUNCHER"
 echo

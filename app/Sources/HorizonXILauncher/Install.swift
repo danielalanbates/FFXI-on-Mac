@@ -1,20 +1,40 @@
 import Foundation
 
+/// The app's own preferences, whichever binary reads them: the install and folder in use, the
+/// account names, the selected world. The window runs from the bundle, where `.standard` is
+/// `org.batesai.horizonxi-on-mac`. A `swift build` binary (`--check`, `--next-action`, `--fix`)
+/// has no bundle identifier, so its `.standard` is a domain of its own with its own, older
+/// `install.last`: on Daniel's Mac (2026-10-15) the window used ".../FFXI on Mac/FFXI on Mac
+/// Wine.app" while `--check` reported siku.app. Self-tests keep `.standard`: they must never
+/// write the real choice.
+enum AppDefaults {
+    static let store: UserDefaults = {
+        guard Bundle.main.bundleIdentifier == nil,
+              !CommandLine.arguments.contains(where: { $0.hasPrefix("--selftest-") }) else { return .standard }
+        return UserDefaults(suiteName: UpdateRules.bundleID) ?? .standard
+    }()
+}
+
 /// Locating and describing a Sikarugir/Kegworks-style wine wrapper that holds the HorizonXI prefix.
 struct Install: Identifiable, Hashable {
     let wrapper: URL          // .../siku.app
-    let prefixName: String    // e.g. prefix10
+    var prefixName: String    // e.g. prefix10
+    /// The ordinary shared drive when this install is routed to a multi-server drive. Kept
+    /// separately so resolving the same world twice never nests or changes its prefix.
+    var basePrefixName: String? = nil
     /// Where this world's game files live. nil = the classic `drive_c/HorizonXI`. Any other
     /// folder on the Mac works: wine sees the whole disk as `Z:`, so a world's data can sit on
     /// an external drive and the wrapper stays small and shared. Set per server from
     /// `Server.dataPath`; see `Install.for(server:)`.
     var gameDirOverride: URL? = nil
 
-    init(wrapper: URL, prefixName: String, gameDirOverride: URL? = nil) {
+    init(wrapper: URL, prefixName: String, gameDirOverride: URL? = nil, basePrefixName: String? = nil) {
         self.wrapper = wrapper; self.prefixName = prefixName; self.gameDirOverride = gameDirOverride
+        self.basePrefixName = basePrefixName
     }
 
     var id: String { wrapper.path + "#" + prefixName }
+    var isWorldPrefix: Bool { WorldPrefix.isManaged(name: prefixName) }
 
     /// A sibling prefix in the same wrapper where server installers run, so a running
     /// download is never killed by Play's `wineserver -k` on the game prefix (and vice versa).
@@ -37,6 +57,9 @@ struct Install: Identifiable, Hashable {
     /// The same wrapper and prefix, pointed at a world's own game folder.
     func forServer(_ s: Server) -> Install {
         var c = self
+        let baseName = basePrefixName ?? prefixName
+        c.prefixName = baseName
+        c.basePrefixName = nil
         c.worldName = s.name
         // Only HorizonXI (whose client the wrapper was built around) and the local server, which
         // plays through that same client, may legitimately run with no folder of their own.
@@ -44,6 +67,13 @@ struct Install: Identifiable, Hashable {
 
         c.gameDirOverride = s.dataPath.isEmpty ? nil : Self.resolveAshitaDir(URL(fileURLWithPath: s.dataPath), world: s.name)
         c.dataRoot = s.dataPath.isEmpty ? nil : URL(fileURLWithPath: s.dataPath)
+        if s.multiServerPlay {
+            // Freeze the existing client path before changing drive_c. The new drive contains
+            // Windows configuration only: it must never duplicate or hide HorizonXI's data.
+            if c.gameDirOverride == nil { c.gameDirOverride = c.gameDir }
+            c.prefixName = WorldPrefix.prefixName(base: c, server: s)
+            c.basePrefixName = baseName
+        }
         return c
     }
 
@@ -62,8 +92,15 @@ struct Install: Identifiable, Hashable {
     // and the SquareEnix folder (FINAL FANTASY XI + PlayOnlineViewer, what the registry must
     // name). Both searches are shallow (3 levels), skip the huge ROM trees, and are cached.
 
-    private static var ashitaCache: [String: URL] = [:]
-    private static var seCache: [String: URL] = [:]
+    // Read and written from the main thread and from Sessions.refreshElsewhere's detached task:
+    // unguarded, two writers corrupted the dictionary (b95 launch crash, 2026-10-28).
+    private static let cacheLock = NSLock()
+    private static var _ashitaCache: [String: URL] = [:]
+    private static var _seCache: [String: URL] = [:]
+    private static func cachedAshita(_ k: String) -> URL? { cacheLock.withLock { _ashitaCache[k] } }
+    private static func cacheAshita(_ k: String, _ v: URL) { cacheLock.withLock { _ashitaCache[k] = v } }
+    private static func cachedSE(_ k: String) -> URL? { cacheLock.withLock { _seCache[k] } }
+    private static func cacheSE(_ k: String, _ v: URL) { cacheLock.withLock { _seCache[k] = v } }
     private static let heavyDirs: Set<String> = ["SquareEnix", "ROM", "ROM2", "ROM3", "ROM4", "ROM5", "ROM6", "ROM7", "ROM8", "ROM9", "addons", "plugins", "polplugins", "resources", "sound", "sound2", "sound3", "sound4", "sound5", "sound6", "sound7", "sound8", "sound9", "docs", "logs", "screenshots", "downloads", "updates", "backups", "builds", "deps"]
 
     /// First folder at or under `root` (depth ≤ 3) that holds Ashita-cli.exe. Falls back to
@@ -78,11 +115,11 @@ struct Install: Identifiable, Hashable {
     static func resolveAshitaDir(_ root: URL, world: String? = nil) -> URL {
         if Self.isAshitaDir(root) { return root }
         let key = root.path + "#" + (world ?? "")
-        if let c = ashitaCache[key], Self.isAshitaDir(c) { return c }
+        if let c = cachedAshita(key), Self.isAshitaDir(c) { return c }
         let hits = ashitaCandidates(under: root)
         guard !hits.isEmpty else { return root }
         let pick = world.flatMap { w in hits.first { matches(world: w, path: $0, under: root) } } ?? hits[0]
-        ashitaCache[key] = pick
+        cacheAshita(key, pick)
         return pick
     }
 
@@ -136,20 +173,20 @@ struct Install: Identifiable, Hashable {
         func ok(_ u: URL) -> Bool { fm.fileExists(atPath: u.appendingPathComponent("FINAL FANTASY XI").path) }
         let direct = gameDir.appendingPathComponent("SquareEnix")
         if ok(direct) { return direct }
-        if let c = seCache[gameDir.path], ok(c) { return c }
+        if let c = cachedSE(gameDir.path), ok(c) { return c }
         guard let root else { return direct }
         // Nearest first: the Ashita folder's own parents (within the root), then anything under
         // the root up to four levels down.
         var p = gameDir
         while p.path.hasPrefix(root.path), p.path != root.deletingLastPathComponent().path {
             for c in [p, p.appendingPathComponent("SquareEnix"), p.appendingPathComponent("Game"), p.appendingPathComponent("Game/SquareEnix")] where ok(c) {
-                seCache[gameDir.path] = c; return c
+                cacheSE(gameDir.path, c); return c
             }
             if p.path == root.path { break }
             p = p.deletingLastPathComponent()
         }
         if let hit = find(under: root, depth: 4, where: ok, descendIntoHeavy: ["SquareEnix"]) {
-            seCache[gameDir.path] = hit; return hit
+            cacheSE(gameDir.path, hit); return hit
         }
         return direct
     }
@@ -298,17 +335,38 @@ struct Install: Identifiable, Hashable {
     private static let key = "install.last"
 
     /// The install used last time, if it is still on disk. Lets the UI be usable before the
-    /// volume scan finishes.
-    static func remembered() -> Install? {
-        guard let s = UserDefaults.standard.string(forKey: key) else { return nil }
-        let parts = s.components(separatedBy: "#")
-        guard parts.count == 2 else { return nil }
-        let i = Install(wrapper: URL(fileURLWithPath: parts[0]), prefixName: parts[1])
-        return FileManager.default.fileExists(atPath: i.gameDir.path) ? i : nil
+    /// volume scan finishes. Its prefix is what must be there, not the game: right after Setup
+    /// builds Wine in the chosen folder the game is not downloaded yet, and that install (not
+    /// an older one with a game elsewhere) is the one being set up.
+    static func remembered(_ defaults: UserDefaults = AppDefaults.store) -> Install? {
+        guard let i = lastChosen(defaults) else { return nil }
+        return FileManager.default.fileExists(atPath: i.prefix.path) ? i : nil
     }
 
-    func remember() {
-        UserDefaults.standard.set(id, forKey: Self.key)
+    /// `install.last` as written, whether or not it is on disk now (InstallSelection).
+    static func lastChosen(_ defaults: UserDefaults = AppDefaults.store) -> Install? {
+        guard let p = lastParts(defaults) else { return nil }
+        return Install(wrapper: URL(fileURLWithPath: p.wrapper), prefixName: p.prefix)
+    }
+
+    /// The remembered install's wrapper, from defaults alone: nothing on disk is checked, so
+    /// it is cheap enough for every process scan (`OwnWine`).
+    static func rememberedWrapper() -> URL? {
+        lastParts(AppDefaults.store).map { URL(fileURLWithPath: $0.wrapper) }
+    }
+
+    /// `install.last` (`id`) split at its last "#": the prefix is a folder name ("prefix10"), the
+    /// wrapper any folder the user chose, "#" included ("Games #2"). Split at every "#", such a
+    /// folder read as no `install.last` at all, and the next rescan picked another install.
+    private static func lastParts(_ defaults: UserDefaults) -> (wrapper: String, prefix: String)? {
+        guard let s = defaults.string(forKey: key), let h = s.range(of: "#", options: .backwards) else { return nil }
+        let wrapper = String(s[..<h.lowerBound]), prefix = String(s[h.upperBound...])
+        guard !wrapper.isEmpty, !prefix.isEmpty, !prefix.contains("/") else { return nil }
+        return (wrapper, prefix)
+    }
+
+    func remember(_ defaults: UserDefaults = AppDefaults.store) {
+        defaults.set(id, forKey: Self.key)
     }
 
     // MARK: - Discovery
@@ -317,25 +375,10 @@ struct Install: Identifiable, Hashable {
     /// Deliberately shallow: a full-disk crawl on an 8GB machine is not worth it.
     static func discover() -> [Install] {
         let fm = FileManager.default
-        var roots: [URL] = [
-            URL(fileURLWithPath: "/Applications"),
-            fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications"),
-            // Wrapper apps are large, so people keep them with their games rather than in
-            // /Applications. Missing this one is why the launcher was running the copy on an
-            // external drive while an identical install sat on the internal SSD.
-            fm.homeDirectoryForCurrentUser.appendingPathComponent("Games"),
-            // Downloads is deliberately *not* scanned -- see `tccGatedNames`. An install that
-            // really is in Downloads is reached by the "Choose install…" button instead.
-        ]
-        if let vols = try? fm.contentsOfDirectory(at: URL(fileURLWithPath: "/Volumes"),
-                                                  includingPropertiesForKeys: nil) {
-            roots.append(contentsOf: vols)
-        }
-
         var found: [Install] = []
         var seen = Set<String>()
 
-        for root in roots {
+        for root in discoveryRoots() {
             // depth 4: "Video Games/Mac/FFXI/siku.app" on an external drive is four deep.
             for app in appsUnder(root, depth: 4) {
                 guard seen.insert(app.path).inserted else { continue }
@@ -354,7 +397,8 @@ struct Install: Identifiable, Hashable {
                 // the game nowhere, it is a fresh wrapper waiting for an install, and its
                 // prefixes are exactly what the user needs to see.
                 let candidates = kids
-                    .filter { $0.lastPathComponent.hasPrefix("prefix") }
+                    .filter { $0.lastPathComponent.hasPrefix("prefix") && !WorldPrefix.isManaged(name: $0.lastPathComponent)
+                        && $0.lastPathComponent != Install.installerPrefixName }
                     .map { Install(wrapper: app, prefixName: $0.lastPathComponent) }
                 let withGame = candidates.filter(\.hasGame)
                 found.append(contentsOf: withGame.isEmpty ? candidates : withGame)
@@ -376,6 +420,56 @@ struct Install: Identifiable, Hashable {
         }
     }
 
+    /// One entry per set of game files: never two installs of the same world in the picker
+    /// (Daniel, 2026-10-15). Entries whose game files are one folder on disk -- the same wrapper
+    /// reached through a link, a second prefix or wrapper whose HorizonXI links to the first's,
+    /// the link Setup leaves where it moved a client from (ExistingInstall.moveIn) -- are one
+    /// install: `keep` (the one in use) stays, otherwise the first. Only the list changes, never
+    /// anything on disk. Entries without game files are told apart by their prefix.
+    static func dedupe(_ list: [Install], keep: String? = nil) -> [Install] {
+        let fm = FileManager.default
+        func key(_ i: Install) -> String {
+            let ffxi = i.squareEnix.appendingPathComponent("FINAL FANTASY XI").path
+            if fm.fileExists(atPath: ffxi), let r = InstallMove.canonical(ffxi) { return "game:" + r }
+            return "prefix:" + (InstallMove.canonical(i.prefix.path) ?? i.prefix.standardizedFileURL.path)
+        }
+        var at: [String: Int] = [:]
+        var out: [Install] = []
+        for i in list {
+            let k = key(i)
+            if let n = at[k] {
+                if i.id == keep { out[n] = i }
+                continue
+            }
+            at[k] = out.count
+            out.append(i)
+        }
+        return out
+    }
+
+    /// Where `discover()` looks, in order. The folder Setup was told to use comes first: it
+    /// can be anywhere the user chose, deeper than the shallow scan below reaches.
+    static func discoveryRoots(location: URL? = InstallLocation.remembered) -> [URL] {
+        let fm = FileManager.default
+        var roots: [URL] = []
+        if let l = location, fm.fileExists(atPath: l.path) { roots.append(l) }
+        roots += [
+            URL(fileURLWithPath: "/Applications"),
+            fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications"),
+            // Wrapper apps are large, so people keep them with their games rather than in
+            // /Applications. Missing this one is why the launcher was running the copy on an
+            // external drive while an identical install sat on the internal SSD.
+            fm.homeDirectoryForCurrentUser.appendingPathComponent("Games"),
+            // Downloads is deliberately *not* scanned -- see `tccGatedNames`. An install that
+            // really is in Downloads is reached by the "Choose install…" button instead.
+        ]
+        if let vols = try? fm.contentsOfDirectory(at: URL(fileURLWithPath: "/Volumes"),
+                                                  includingPropertiesForKeys: nil) {
+            roots.append(contentsOf: vols)
+        }
+        return roots
+    }
+
     /// Every install a given wrapper .app holds, whether or not it sits anywhere `discover()`
     /// looks. This is what the "Choose install…" button hands its result to.
     static func installs(inWrapper app: URL) -> [Install] {
@@ -385,7 +479,7 @@ struct Install: Identifiable, Hashable {
               let kids = try? fm.contentsOfDirectory(at: shared, includingPropertiesForKeys: nil)
         else { return [] }
         return kids
-            .filter { $0.lastPathComponent.hasPrefix("prefix") }
+            .filter { $0.lastPathComponent.hasPrefix("prefix") && $0.lastPathComponent != Install.installerPrefixName }
             .map { Install(wrapper: app, prefixName: $0.lastPathComponent) }
             .sorted { a, b in
                 if a.hasGame != b.hasGame { return a.hasGame }

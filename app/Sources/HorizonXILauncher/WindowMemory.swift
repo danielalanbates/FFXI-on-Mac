@@ -71,7 +71,7 @@ enum WindowMemory {
         // only in the stored settings.
         let stored = GraphicsSettings.load(world: world)
         guard stored.rememberWindowSize else { return nil }
-        var g = GraphicsSettings.read(from: install, profile: profile) ?? stored
+        var g = GraphicsSettings.read(from: install, profile: profile, fallback: stored) ?? stored
         g.rememberWindowSize = true
         // Even numbers only: the client rounds odd back buffers and the next sample would then
         // differ by a pixel forever.
@@ -81,8 +81,85 @@ enum WindowMemory {
         let old = "\(g.width)x\(g.height)"
         g.width = w
         g.height = h
-        g.write(to: install, profile: profile)
-        g.save(world: world)
+        // The size only, in the profile and in the stored settings (b64). Every other key stays
+        // as it was: a profile an older build wrote wrong keys into must not be rewritten, nor
+        // copied into the stored choice that Setup gives a new install.
+        g.write(to: install, profile: profile, only: g.sizeKeys)
+        // Only a value the user saved for this world is updated. `stored` may be the fallback
+        // (the shared value, the defaults, the local world's Low); saving it here would make it
+        // this world's own choice, which a new profile is then made with.
+        if var s = GraphicsSettings.shared ?? GraphicsSettings.stored(forWorld: world) {
+            s.width = w
+            s.height = h
+            if GraphicsSettings.shared != nil { s.saveShared() }
+            else { s.save(world: world) }
+        }
         return "==> window size remembered for \(world): \(w)x\(h) (was \(old)); next Play opens at that size"
+    }
+
+    // MARK: - Opening whole on this screen
+
+    /// The biggest client, in game pixels, that opens whole on the screen wine's Mac driver puts
+    /// it on: the menu-bar screen (wine's primary; Ashita centres the window there), less the menu
+    /// bar, the Dock and wine's title bar and frame. Nil without a screen.
+    @MainActor
+    static func screenLimit(scale: Int) -> Size? {
+        guard let screen = NSScreen.screens.first else { return nil }
+        let titleBar = Int(NSWindow.frameRect(forContentRect: .zero, styleMask: [.titled]).height.rounded())
+        let v = screen.visibleFrame
+        return Size(width: (Int(v.width) - 2) * scale, height: (Int(v.height) - titleBar - 2) * scale)
+    }
+
+    /// `size` scaled down, both sides by one factor, until it fits `limit`, so the picture keeps
+    /// its shape; even numbers. Unchanged when it already fits. A shape so wide or tall that one
+    /// factor would go under the client's 640x480 floor is clamped side by side instead: a back
+    /// buffer of a new shape is better than one macOS squeezes.
+    static func fitted(_ size: Size, into limit: Size) -> Size {
+        guard size.width > limit.width || size.height > limit.height,
+              size.width > 0, size.height > 0 else { return size }
+        let f = min(Double(limit.width) / Double(size.width), Double(limit.height) / Double(size.height))
+        let out = Size(width: Int(Double(size.width) * f) & ~1, height: Int(Double(size.height) * f) & ~1)
+        if out.width >= 640 && out.height >= 480 { return out }
+        return Size(width: max(640, min(size.width, limit.width)) & ~1, height: max(480, min(size.height, limit.height)) & ~1)
+    }
+
+    /// The settings Play opens the client with, given the profile `g`, the world's stored choice
+    /// and the screen `limit`; nil when the profile can stay as it is.
+    ///
+    /// A size remembered on a bigger display, or by an older build, can be wider or taller than
+    /// the screen. macOS then cuts the window down on that side only, and FFXI, which never
+    /// resizes its back buffer, draws everything squeezed (2026-10-16: a 2074x784 profile on a
+    /// 1440-point-wide screen drew every name about 30% too narrow). Both sides are scaled by one
+    /// factor instead, so the window opens whole and keeps its shape.
+    ///
+    /// - When the profile is an earlier fit of the stored choice (same shape, smaller), the stored
+    ///   choice is fitted again, so a bigger screen gets the bigger size back.
+    /// - An interface drawn at its own size (0037/0038) that is bigger than the new window is
+    ///   scaled down to fit inside it.
+    static func playSettings(_ g: GraphicsSettings, stored: GraphicsSettings?, limit: Size) -> GraphicsSettings? {
+        let size = Size(width: g.width, height: g.height)
+        var want = size
+        var storedUI: Size?
+        // Same shape within what rounding both sides down to even numbers can move it.
+        if let s = stored, s.width > g.width, s.height > g.height, s.height > 0, g.height > 0,
+           (-2 * s.width ... 2 * s.height).contains(s.width * g.height - s.height * g.width) {
+            want = Size(width: s.width, height: s.height)
+            if !s.uiFollowsResolution, !g.uiFollowsResolution { storedUI = Size(width: s.uiWidth, height: s.uiHeight) }
+        }
+        let fit = fitted(want, into: limit)
+        guard fit != size else { return nil }
+        // A profile that fits is only ever grown back toward the stored choice, never cut.
+        if size.width <= limit.width, size.height <= limit.height,
+           !(fit.width > size.width && fit.height > size.height) { return nil }
+        var n = g
+        n.width = fit.width
+        n.height = fit.height
+        if let ui = storedUI { n.uiWidth = ui.width; n.uiHeight = ui.height }
+        if !n.uiFollowsResolution, n.uiWidth > fit.width || n.uiHeight > fit.height, n.uiWidth > 0, n.uiHeight > 0 {
+            let f = min(Double(fit.width) / Double(n.uiWidth), Double(fit.height) / Double(n.uiHeight))
+            n.uiWidth = max(640, Int(Double(n.uiWidth) * f) & ~1)
+            n.uiHeight = max(480, Int(Double(n.uiHeight) * f) & ~1)
+        }
+        return n
     }
 }

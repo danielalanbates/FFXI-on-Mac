@@ -1,31 +1,45 @@
 import Foundation
 import Security
 
-/// Account handling. The password lives in the macOS Keychain, never in a plist, never in the
-/// repo. It is written into Ashita's boot profile only at launch time, and that file is chmod 600.
+/// Account handling. Remembered passwords live in a mode-600 Application Support JSON file and
+/// are written to Ashita's mode-600 boot profile for autologin. The loader also receives the
+/// password in its command line; see RELEASE-WHEN-STABLE.md for the unresolved exposure.
 enum Credentials {
     private static let service = "org.batesai.horizonxi-on-mac"
 
     static var username: String {
-        get { UserDefaults.standard.string(forKey: "account.user") ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: "account.user") }
+        get { AppDefaults.store.string(forKey: "account.user") ?? "" }
+        set { AppDefaults.store.set(newValue, forKey: "account.user") }
     }
 
     // Accounts are per server on LandSandBoat worlds, so remember which account name was last
     // used on each world and recall it when the user switches back. Falls back to the global
     // last-used name so existing installs keep their filled-in field.
     static func username(forWorld world: String) -> String {
-        UserDefaults.standard.string(forKey: "account.user.\(world)") ?? username
+        if let own = AppDefaults.store.string(forKey: "account.user.\(world)") { return own }
+        return inheritsLegacyAccount(world) ? username : ""
+    }
+
+    /// May `world` use what the store kept before accounts were per world (the global
+    /// `account.user`, a password under the bare account name)? Only HorizonXI, the one world the
+    /// launcher played when those were written. b71: a world never played here (AscensionXI) came
+    /// up with Daniel's HorizonXI name *and password* filled in, and Play would have sent both to
+    /// that world's login server. A new world starts with empty fields instead.
+    static func inheritsLegacyAccount(_ world: String) -> Bool { world.isEmpty || world == "HorizonXI" }
+
+    /// An account name was saved for this world itself (not the global fallback above).
+    static func hasSavedAccount(forWorld world: String) -> Bool {
+        !(AppDefaults.store.string(forKey: "account.user.\(world)") ?? "").isEmpty
     }
 
     static func setUsername(_ name: String, forWorld world: String) {
         username = name
-        UserDefaults.standard.set(name, forKey: "account.user.\(world)")
+        AppDefaults.store.set(name, forKey: "account.user.\(world)")
     }
 
     static var remember: Bool {
-        get { UserDefaults.standard.bool(forKey: "account.remember") }
-        set { UserDefaults.standard.set(newValue, forKey: "account.remember") }
+        get { AppDefaults.store.bool(forKey: "account.remember") }
+        set { AppDefaults.store.set(newValue, forKey: "account.remember") }
     }
 
     // MARK: - Stored password
@@ -62,23 +76,25 @@ enum Credentials {
 
     /// Passwords are keyed per world AND user, because the same account name on two servers is
     /// two different accounts with two different passwords — keying on the name alone let a
-    /// CatsEye login overwrite the HorizonXI password for "danielalanbates" (2026-08-19). The
-    /// bare-username key survives as a read fallback for stores written before this.
-    private static func key(_ user: String, _ world: String) -> String {
+    /// CatsEye login overwrite the HorizonXI password of an account with the same name
+    /// (2026-08-19). The bare-username key survives as a read fallback for stores written before
+    /// this.
+    static func passwordKey(_ user: String, world: String) -> String {
         world.isEmpty ? user : "\(world)|\(user)"
     }
 
     static func savePassword(_ password: String, for user: String, world: String = "") {
         var m = load()
-        if password.isEmpty { m.removeValue(forKey: key(user, world)) }
-        else { m[key(user, world)] = password }
+        let storageKey = passwordKey(user, world: world)
+        if password.isEmpty { m.removeValue(forKey: storageKey) }
+        else { m[storageKey] = password }
         store(m)
     }
 
     static func password(for user: String, world: String = "") -> String {
         let m = load()
-        if let p = m[key(user, world)], !p.isEmpty { return p }
-        if let p = m[user], !p.isEmpty { return p }
+        if let p = m[passwordKey(user, world: world)], !p.isEmpty { return p }
+        if inheritsLegacyAccount(world), let p = m[user], !p.isEmpty { return p }
         return ""
     }
 
@@ -88,25 +104,57 @@ enum Credentials {
         store(m)
     }
 
-    /// One-time pickup of a password that is already sitting in a boot profile, so moving off the
-    /// Keychain does not silently present an empty password box to someone who never typed it
-    /// into this build. Reads only `--pass` from the live `command` line.
-    static func adoptPasswordFromProfile(user: String, install: Install, profile: String) {
-        guard password(for: user).isEmpty else { return }
+    /// One-time pickup of a password already sitting in a boot profile, so moving to per-world
+    /// storage does not silently present an empty password box. Reads only `--pass` from the live
+    /// `command` line and adopts it under that world's key.
+    static func adoptPasswordFromProfile(user: String, world: String, install: Install, profile: String) {
+        let current = password(for: user, world: world)
         let url = install.gameDir.appendingPathComponent("config/boot/\(profile)")
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+        guard let text = readFile(at: url) else { return }
+        guard let adoption = passwordAdoption(from: text, user: user, world: world,
+                                              currentWorldPassword: current) else { return }
+        savePassword(adoption.password, for: user, world: world)
+    }
+
+    static func passwordAdoption(from text: String, user: String, world: String,
+                                 currentWorldPassword: String) -> (key: String, password: String)? {
+        guard currentWorldPassword.isEmpty,
+              let password = passwordInBootProfile(text) else { return nil }
+        return (passwordKey(user, world: world), password)
+    }
+
+    private static func passwordInBootProfile(_ text: String) -> String? {
         for raw in text.split(separator: "\n") {
             let line = raw.trimmingCharacters(in: .whitespaces)
             guard !line.hasPrefix(";"), line.hasPrefix("command"),
                   let r = line.range(of: "--pass ") else { continue }
             let rest = line[r.upperBound...].trimmingCharacters(in: .whitespaces)
             let pass = rest.split(separator: " ").first.map(String.init) ?? ""
-            if !pass.isEmpty { savePassword(pass, for: user) }
-            return
+            return pass.isEmpty ? nil : pass
         }
+        return nil
     }
 
     // MARK: - Ashita boot profile
+
+    /// Write a file safely, falling back to headless shell copy if GUI process file write
+    /// is denied by macOS TCC / Seatbelt sandbox on an external volume.
+    @discardableResult
+    static func writeFile(_ text: String, to target: URL) -> Bool {
+        Bridge.writeFile(text, to: target)
+    }
+
+    /// Read a file safely, falling back to headless shell base64 read if GUI process file read
+    /// is denied by macOS TCC / Seatbelt sandbox on an external volume.
+    static func readFile(at url: URL) -> String? {
+        Bridge.readFile(at: url)
+    }
+
+    /// Boot-profile read-modify-writes, one at a time. Each rewrites the whole file from what it
+    /// read, and the window size is written back off the main actor (WindowMemory) while a
+    /// further client's launch writes its account line on it; interleaved, the older account
+    /// came back just before the new client read the profile.
+    static let profileLock = NSLock()
 
     /// Make sure `config/boot/<profile>` exists, seeding it from a profile that already works.
     ///
@@ -114,8 +162,13 @@ enum Credentials {
     /// server it points at, so copying the configured one and letting `apply` rewrite the single
     /// `command` line gives a new world the same working setup rather than Ashita's bare example.
     /// Needed for the local server, whose profile no HorizonXI install ships.
+    ///
+    /// A world with its own template (`Server.bootTemplate`: HorizonXI) is made from that instead,
+    /// with the graphics the user saved for `world` (b64), and every new profile then boots the
+    /// world's own loader when it is there (`loader`).
     @discardableResult
-    static func ensureProfile(_ profile: String, in install: Install) -> Bool {
+    static func ensureProfile(_ profile: String, in install: Install, loader: String = "",
+                              template: String = "", host: String = "", world: String = "") -> Bool {
         let fm = FileManager.default
         let dir = install.gameDir.appendingPathComponent("config/boot")
         let name = install.bootProfileName(profile)
@@ -133,7 +186,7 @@ enum Credentials {
                 .filter { $0.lowercased().hasSuffix(".xml") }.sorted()
             let widest = xmls.max { a, b in
                 func width(_ n: String) -> Int {
-                    guard let t = try? String(contentsOf: dir.appendingPathComponent(n), encoding: .utf8)
+                    guard let t = readFile(at: dir.appendingPathComponent(n))
                     else { return 0 }
                     return Int(xmlSetting("window_x", in: t) ?? "0") ?? 0
                 }
@@ -144,17 +197,32 @@ enum Credentials {
             // So when there is nothing to seed from, write a minimal one.
             let text: String
             if let seed = widest,
-               let t = try? String(contentsOf: dir.appendingPathComponent(seed), encoding: .utf8) {
+               let t = readFile(at: dir.appendingPathComponent(seed)) {
                 text = t
             } else {
                 text = v3Profile(loader: defaultLoaderName(in: install),
                                  folder: install.bootLoaderDir.lastPathComponent)
             }
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-            guard (try? text.write(to: target, atomically: true, encoding: .utf8)) != nil
-            else { return false }
-            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+            guard writeFile(text, to: target) else { return false }
             return true
+        }
+
+        // HorizonXI's client ships no horizonxi.ini (their launcher writes it at Play), and
+        // Ashita's examples boot the wrong loader: its own profile comes from the app (b61).
+        // Without the template (a damaged bundle) the copies below still apply, and Play's
+        // `prepareProfile` adds what HorizonXI needs.
+        if name.hasSuffix(".ini"), var text = BootProfile.seed(template, for: install, host: host) {
+            // The graphics the user saved for this world go in with it. Setup's fresh install on
+            // 2026-10-15 got the template's 1920 × 1080 and 4096 textures while Daniel's own saved
+            // 1280 × 720 / 512 never reached it, and the 8 GB Mac swapped. Only here, where the
+            // file is being made: a profile that exists is the user's, and is not rewritten.
+            if let g = GraphicsSettings.shared ?? GraphicsSettings.stored(forWorld: world) { text = g.applied(to: text) }
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            if writeFile(text, to: target) {
+                fixBootLoader(profile, in: install, loader: loader)
+                return true
+            }
         }
 
         // Seed order: a profile the world's own installer shipped (any non-example .ini in the
@@ -170,11 +238,9 @@ enum Credentials {
         for seed in seeds {
             let src = dir.appendingPathComponent(seed)
             guard fm.fileExists(atPath: src.path),
-                  let text = try? String(contentsOf: src, encoding: .utf8) else { continue }
-            guard (try? text.write(to: target, atomically: true, encoding: .utf8)) != nil
-            else { continue }
-            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
-            fixBootLoader(profile, in: install)
+                  let text = readFile(at: src) else { continue }
+            guard writeFile(text, to: target) else { continue }
+            fixBootLoader(profile, in: install, loader: loader)
             return true
         }
         return false
@@ -224,34 +290,43 @@ enum Credentials {
 
     /// Boot loaders this launcher knows how to find, in preference order, when a profile names one
     /// that is not in the install.
-    static let knownLoaders = ["horizon-loader.exe", "xiloader.exe", "pol.exe", "catseye-loader.exe", "gxiloader.exe"]
+    static let knownLoaders = BootProfile.knownLoaders
 
-    /// Make `[ashita.boot] file =` name a loader that exists in `bootloader/`.
-    static func fixBootLoader(_ profile: String, in install: Install) {
+    /// Make `[ashita.boot] file =` name the loader to boot: the world's own (`loader`, see
+    /// `Server.loader`) whenever it is in `bootloader/`, whatever the profile named; otherwise the
+    /// profile's choice while it exists, or a known one that does. Returns "old -> new" when it
+    /// changed the file.
+    @discardableResult
+    static func fixBootLoader(_ profile: String, in install: Install, loader: String = "") -> String? {
         let fm = FileManager.default
         let name = install.bootProfileName(profile)
         // v3 profiles are seeded from the world's own XML, which already names its own loader.
-        guard name.hasSuffix(".ini") else { return }
+        guard name.hasSuffix(".ini") else { return nil }
         let url = install.gameDir.appendingPathComponent("config/boot/\(name)")
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
-        let bl = install.bootLoaderDir
-        let present = ((try? fm.contentsOfDirectory(atPath: bl.path)) ?? []).filter { $0.lowercased().hasSuffix(".exe") }
-        guard !present.isEmpty else { return }
-        let named = bootLoaderName(in: install, profile: profile) ?? ""
-        if present.contains(where: { $0.caseInsensitiveCompare(named) == .orderedSame }) { return }
-        let pick = knownLoaders.first { k in present.contains { $0.caseInsensitiveCompare(k) == .orderedSame } } ?? present.sorted()[0]
-        let eol = TextFile.terminator(of: text)
-        var replaced = false
-        let lines = TextFile.lines(of: text).map { l -> String in
-            let t = l.trimmingCharacters(in: .whitespaces)
-            if !t.hasPrefix(";"), t.hasPrefix("file"), t.contains("="), !replaced {
-                replaced = true
-                return "file        = .\\\\bootloader\\\\\(pick)"
-            }
-            return String(l)
+        profileLock.lock(); defer { profileLock.unlock() }
+        guard let text = readFile(at: url) else { return nil }
+        let present = ((try? fm.contentsOfDirectory(atPath: install.bootLoaderDir.path)) ?? [])
+            .filter { $0.lowercased().hasSuffix(".exe") }
+        let named = BootProfile.loaderName(in: text)
+        guard let pick = BootProfile.loaderToName(named: named, present: present, worldLoader: loader),
+              let out = BootProfile.withLoader(pick, in: text, addIfMissing: !loader.isEmpty,
+                                               folder: install.bootLoaderDir.lastPathComponent),
+              writeFile(out, to: url) else { return nil }
+        return "\(named ?? "none") -> \(pick)"
+    }
+
+    /// Everything Play puts right in a world's boot profile before Ashita reads it (b61): the
+    /// world's loader, the settings its template requires (`BootProfile.complete`), and XIPivot's
+    /// overlay folder. Never a key the user set, never the account line. One line per change,
+    /// for launcher.log -- none of it is anything the player has to know or do.
+    static func prepareProfile(for server: Server, in install: Install) -> [String] {
+        var said: [String] = []
+        if let change = fixBootLoader(server.bootProfile, in: install, loader: server.loader) {
+            said.append("boot profile: \(install.bootProfileName(server.bootProfile)) loader \(change)")
         }
-        guard replaced else { return }
-        try? TextFile.join(lines, terminator: eol).write(to: url, atomically: true, encoding: .utf8)
+        said += BootProfile.complete(server.bootProfile, in: install, template: server.bootTemplate,
+                                     host: server.host)
+        return said
     }
 
 
@@ -291,45 +366,80 @@ enum Credentials {
     static func bootLoaderName(in install: Install, profile: String) -> String? {
         let name = install.bootProfileName(profile)
         let url = install.gameDir.appendingPathComponent("config/boot/\(name)")
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        guard let text = readFile(at: url) else { return nil }
         if name.hasSuffix(".xml") {
             guard let v = xmlSetting("boot_file", in: text), !v.isEmpty else { return nil }
             let base = v.replacingOccurrences(of: "/", with: "\\")
                 .split(separator: "\\").last.map(String.init) ?? v
             return base.isEmpty ? nil : base
         }
+        // The `file` key of [ashita.boot] itself; `hasPrefix("file")` also took any other key that
+        // happened to start with those letters, in whatever section came first.
+        return BootProfile.loaderName(in: text)
+    }
+
+    /// The `--server` the profile's boot command really passes the loader, which is what a
+    /// running client is filed under. `apply` rewrites it only when a user and password are set,
+    /// so it can differ from the world's Host field.
+    static func bootServer(in install: Install, profile: String) -> String? {
+        option("--server", in: bootCommand(in: install, profile: profile))
+    }
+
+    /// The boot command carries both an account name and a password, so the loader logs in by
+    /// itself. Without them it goes straight to its account menu, which nothing here can answer.
+    static func bootHasAccount(in install: Install, profile: String) -> Bool {
+        let command = bootCommand(in: install, profile: profile)
+        return option("--user", in: command) != nil && option("--pass", in: command) != nil
+    }
+
+    /// The boot profile's live command line (v4 `command`, v3 `boot_command`), or "".
+    private static func bootCommand(in install: Install, profile: String) -> String {
+        let name = install.bootProfileName(profile)
+        guard let text = readFile(at: install.gameDir.appendingPathComponent("config/boot/\(name)"))
+        else { return "" }
+        if name.hasSuffix(".xml") { return xmlSetting("boot_command", in: text) ?? "" }
         for raw in TextFile.lines(of: text) {
             let t = raw.trimmingCharacters(in: .whitespaces)
-            guard !t.hasPrefix(";"), t.hasPrefix("file"), let eq = t.firstIndex(of: "=") else { continue }
-            let v = t[t.index(after: eq)...].trimmingCharacters(in: .whitespaces)
-            guard !v.isEmpty else { return nil }
-            let name = v.replacingOccurrences(of: "/", with: "\\").split(separator: "\\").last.map(String.init) ?? v
-            return name.isEmpty ? nil : name
+            guard !t.hasPrefix(";"), t.hasPrefix("command"), let eq = t.firstIndex(of: "=") else { continue }
+            return String(t[t.index(after: eq)...])
+        }
+        return ""
+    }
+
+    /// The value `--key value` or `--key=value` gives in `command`, when it is not empty.
+    static func option(_ key: String, in command: String) -> String? {
+        let tokens = command.split(separator: " ").map(String.init)
+        for (n, t) in tokens.enumerated() {
+            if t == key, n + 1 < tokens.count, !tokens[n + 1].hasPrefix("--") { return tokens[n + 1] }
+            if t.hasPrefix(key + "="), t.count > key.count + 1 { return String(t.dropFirst(key.count + 1)) }
         }
         return nil
     }
 
     /// Rewrite the `command = ...` line of the Ashita boot profile with these credentials.
     /// Returns false if the profile is missing or unwritable.
+    ///
+    /// `options` (`Server.loaderOptions`) go after the account: arguments the world's own profile
+    /// passes its loader, which this line would otherwise drop (AscensionXI's `--hairpin`).
     @discardableResult
     static func apply(user: String, password: String, to install: Install,
                       profile: String = "horizonxi.ini",
-                      server: String = "play.horizonxi.com") -> Bool {
+                      server: String = "play.horizonxi.com", options: [String] = []) -> Bool {
         let name = install.bootProfileName(profile)
         let url = install.gameDir.appendingPathComponent("config/boot/\(name)")
-        guard var text = try? String(contentsOf: url, encoding: .utf8) else { return false }
+        profileLock.lock(); defer { profileLock.unlock() }
+        guard var text = readFile(at: url) else { return false }
+        let tail = options.isEmpty ? "" : " " + options.joined(separator: " ")
 
         if name.hasSuffix(".xml") {
             guard let out = xmlSetting("boot_command",
-                                       to: "--server \(server) --user \(user) --pass \(password)",
-                                       in: text),
-                  (try? out.write(to: url, atomically: true, encoding: .utf8)) != nil
+                                       to: "--server \(server) --user \(user) --pass \(password)" + tail,
+                                       in: text)
             else { return false }
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-            return true
+            return writeFile(out, to: url)
         }
 
-        let line = "command     = --server \(server) --user \(user) --pass \(password)"
+        let line = "command     = --server \(server) --user \(user) --pass \(password)" + tail
         var replaced = false
         let eol = TextFile.terminator(of: text)
         let lines = TextFile.lines(of: text).map { l -> String in
@@ -342,10 +452,8 @@ enum Credentials {
             return String(l)
         }
         text = TextFile.join(lines, terminator: eol)
-        guard replaced, (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil
-        else { return false }
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-        return true
+        guard replaced else { return false }
+        return writeFile(text, to: url)
     }
 
     /// Set `key = value` lines in the boot profile, leaving commented examples alone.
@@ -357,7 +465,8 @@ enum Credentials {
         // v3's XML has no `[ffxi.direct3d8]` section, so there is nothing to override there.
         guard name.hasSuffix(".ini") else { return }
         let url = install.gameDir.appendingPathComponent("config/boot/\(name)")
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+        profileLock.lock(); defer { profileLock.unlock() }
+        guard let text = readFile(at: url) else { return }
 
         let eol = TextFile.terminator(of: text)
         let out = TextFile.lines(of: text).map { l -> String in
@@ -371,7 +480,6 @@ enum Credentials {
             return key + String(repeating: " ", count: pad) + "= " + v
         }.joined(separator: eol)
 
-        try? out.write(to: url, atomically: true, encoding: .utf8)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        writeFile(out, to: url)
     }
 }

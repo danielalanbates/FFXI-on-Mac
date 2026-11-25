@@ -62,6 +62,7 @@ struct AddonSuite {
     static let pluginsStop  = "# --HORIZON_PLUGINS_STOP--"
     static let addonsStart  = "# --HORIZON_ADDONS_START--"
     static let addonsStop   = "# --HORIZON_ADDONS_STOP--"
+    private static let launcherManagedAddons: Set<String> = ["vanavoice", "vanaguide"]
 
     /// Plugins are DLLs and carry no readable metadata block, unlike addons, which declare
     /// theirs in Lua. Three of these are the plugin's own description string, read verbatim out
@@ -80,14 +81,15 @@ struct AddonSuite {
         "sequencer":  "Plays and manages animation sequences.",
     ]
 
-    static func scriptURL(_ i: Install) -> URL {
-        i.gameDir.appendingPathComponent("scripts/default.txt")
+    static func scriptURL(_ i: Install, profile: String = "horizonxi.ini") -> URL {
+        let script = Narration.scriptName(in: i, profile: profile)
+        return i.gameDir.appendingPathComponent("scripts/\(script)")
     }
 
     /// Everything installed, with the ones the script currently loads marked enabled.
-    static func scan(_ i: Install) -> [Item] {
+    static func scan(_ i: Install, profile: String = "horizonxi.ini") -> [Item] {
         let fm = FileManager.default
-        let text = (try? String(contentsOf: scriptURL(i), encoding: .utf8)) ?? ""
+        let text = Credentials.readFile(at: scriptURL(i, profile: profile)) ?? ""
         let onPlugins = Set(loadedNames(in: text, start: pluginsStart, stop: pluginsStop,
                                         prefix: "/load "))
         let onAddons = Set(loadedNames(in: text, start: addonsStart, stop: addonsStop,
@@ -114,6 +116,7 @@ struct AddonSuite {
                 guard fm.fileExists(atPath: k.path, isDirectory: &isDir), isDir.boolValue
                 else { continue }
                 let name = k.lastPathComponent
+                guard !launcherManagedAddons.contains(name.lowercased()) else { continue }
                 guard fm.fileExists(atPath: k.appendingPathComponent("\(name).lua").path)
                 else { continue }
                 let meta = metadata(ofLuaAt: k.appendingPathComponent("\(name).lua"))
@@ -150,9 +153,10 @@ struct AddonSuite {
     /// case nothing is written — better to do nothing than to guess where the block belongs in a
     /// file the server's own launcher also edits.
     @discardableResult
-    static func write(_ items: [Item], to install: Install) -> Bool {
-        let url = scriptURL(install)
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return false }
+    static func write(_ items: [Item], to install: Install,
+                      profile: String = "horizonxi.ini") -> Bool {
+        let url = scriptURL(install, profile: profile)
+        guard let text = Credentials.readFile(at: url) else { return false }
         let eol = TextFile.terminator(of: text)
         var lines = TextFile.lines(of: text)
 
@@ -163,6 +167,20 @@ struct AddonSuite {
         let pluginBody = items.filter { $0.isPlugin && $0.enabled }
             .map { "/load \($0.name)" }
 
+        // AscensionXI's launcher owns one fenced block of this file (AscensionScript). Markers of
+        // our own beside it would leave two blocks that each launcher rewrites in turn; write
+        // theirs instead, switching only the items shown here (winefix and the launcher's own
+        // addons are not offered, and keep whatever line they have).
+        if AscensionScript.hasFence(text), !(text.contains(pluginsStart) && text.contains(addonsStart)) {
+            var script = AscensionScript(text)
+            for item in items {
+                let kind = item.isPlugin ? "plugin" : "addon"
+                if item.enabled { script.enable(kind: kind, item.name) } else { script.disable(kind: kind, item.name) }
+            }
+            guard let out = script.changed else { return true }
+            return Credentials.writeFile(out, to: url)
+        }
+
         if !(text.contains(pluginsStart) && text.contains(addonsStart)) {
             adoptScript(&lines)
         }
@@ -171,8 +189,7 @@ struct AddonSuite {
               replace(&lines, start: pluginsStart, stop: pluginsStop, with: pluginBody)
         else { return false }
 
-        return (try? TextFile.join(lines, terminator: eol).write(to: url, atomically: true,
-                                                                 encoding: .utf8)) != nil
+        return Credentials.writeFile(TextFile.join(lines, terminator: eol), to: url)
     }
 
     /// Put the managed markers into a script that has none, so the launcher can own the load
@@ -188,7 +205,8 @@ struct AddonSuite {
             let t = line.trimmingCharacters(in: .whitespaces).lowercased()
             let isLoad = (t.hasPrefix("/load ") || t.hasPrefix("/addon load "))
                 && t != "/load winefix"
-            if isLoad {
+            let launcherManaged = t == "/addon load vanavoice" || t == "/addon load vanaguide"
+            if isLoad && !launcherManaged {
                 if insertAt == nil { insertAt = kept.count }
                 continue
             }
@@ -207,6 +225,59 @@ struct AddonSuite {
         else { return false }
         lines.replaceSubrange((a + 1)..<b, with: body)
         return true
+    }
+
+    /// What the Addons… sheet shows. Worked out off the main actor (b69): the folder listing and
+    /// the newest client log are slow to read on an external drive, and reading them before the
+    /// sheet opened made the click look like it did nothing.
+    struct SheetContents: Equatable {
+        var items: [Item]
+        /// Installed items the server's list hides.
+        var hidden: Int
+        /// Plugins Ashita refused on the last run; "" when none.
+        var warning: String
+    }
+
+    /// What a sheet scan was for. A result is shown only while this still matches what is selected:
+    /// the local world and HorizonXI share one game folder but not the boot profile or the list,
+    /// and Apply writes the list on screen into the world selected when it is pressed.
+    struct SheetKey: Equatable {
+        let folder: String
+        let profile: String
+        let policy: AddonPolicy
+        init(_ i: Install, profile: String, policy: AddonPolicy) {
+            folder = i.gameDir.standardizedFileURL.path
+            self.profile = profile
+            self.policy = policy
+        }
+    }
+
+    /// What the sheet says where the list will be while it scans.
+    static let scanningLabel = "Searching…"
+
+    /// The items the sheet lists and how many the server's list hides: on a restricting policy
+    /// only what it allows, otherwise everything.
+    static func sheetItems(_ all: [Item], policy: AddonPolicy) -> (items: [Item], hidden: Int) {
+        guard policy.isRestricting else { return (all, 0) }
+        let shown = all.filter { policy.allows($0.name) }
+        return (shown, all.count - shown.count)
+    }
+
+    /// The sheet's line about plugins Ashita refused (`mismatchedPlugins`); "" when none.
+    static func mismatchWarning(_ bad: [String]) -> String {
+        guard !bad.isEmpty else { return "" }
+        return "Ashita refused these plugins on the last run because they are built for a different "
+            + "interface version than this Ashita core: \(bad.joined(separator: ", ")). "
+            + (bad.contains { $0.lowercased() == "addons" }
+               ? "That includes the Lua host, so no addon below can run until it is fixed."
+               : "")
+    }
+
+    /// Everything the sheet shows for `i`. Reads the disk: call it off the main actor.
+    static func sheetContents(_ i: Install, profile: String, policy: AddonPolicy) -> SheetContents {
+        let shown = sheetItems(scan(i, profile: profile), policy: policy)
+        return SheetContents(items: shown.items, hidden: shown.hidden,
+                             warning: mismatchWarning(mismatchedPlugins(i)))
     }
 
     /// Ashita refuses any plugin built against a different interface version than its core, and

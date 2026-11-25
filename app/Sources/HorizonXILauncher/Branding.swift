@@ -38,7 +38,7 @@ enum Branding {
     @discardableResult
     static func apply(stockBranding: Bool, to install: Install) -> Bool {
         let url = pivotINI(install)
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return false }
+        guard let text = Credentials.readFile(at: url) else { return false }
         if stockBranding && !overlayInstalled(install) { return false }
 
         var head: [String] = []
@@ -70,7 +70,7 @@ enum Branding {
         out += "[overlays]" + eol
         for (i, name) in overlays.enumerated() { out += "\(i)=\(name)" + eol }
 
-        return (try? out.write(to: url, atomically: true, encoding: .utf8)) != nil
+        return Credentials.writeFile(out, to: url)
     }
 
     /// What the selected server should show. HorizonXI keeps its own branding; everything else,

@@ -1,31 +1,226 @@
 import Foundation
+import Darwin
 import Combine
 import AppKit
 
-/// Runs the repair script and the game itself, streaming output back to the UI.
+/// Runs the repair script and the game itself, streaming output back to the UI. One per world
+/// session (see `Sessions`): several worlds can play at once in the same prefix.
 @MainActor
 final class Runner: ObservableObject {
     @Published var log: String = ""
-    @Published var running = false
-    @Published var busy = false { didSet { Runner.workInFlight = busy } }
+    @Published var running = false {
+        didSet {
+            if !running {
+                Runner.playing[ObjectIdentifier(self)] = nil; starting = false
+                clearStopState()   // b70
+            }
+            else if !oldValue {
+                // Wine boots its prefix before the game window appears; after a Repair that takes
+                // ~30-60s and looks like a hang unless the UI says so.
+                starting = true
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 90_000_000_000)
+                    self?.starting = false
+                }
+            }
+        }
+    }
+    @Published var starting = false
+    /// True while update-client.sh is applying HorizonXI updates, or game-wine.sh is fetching the
+    /// game's Wine: its progress feeds the button and the UI offers Stop.
+    @Published var updatingHorizon = false
+    /// 0...1 across every pending update zip, and a short label ("2.0.4 · 1 of 2").
+    @Published var updateProgress: Double = 0
+    @Published var updateLabel = ""
+    /// 0...1 while Move… copies (InstallMove), for the main button's "Moving… 40%".
+    @Published var moveProgress: Double?
+    /// What the running script is at ("Downloading HorizonXI", "Unpacking HorizonXI"), for Setup's
+    /// button. A fresh install's base download and unzip fill the first 85% of `updateProgress`,
+    /// its updates the rest; it never goes back (ScriptProgress).
+    @Published private(set) var stage: SetupStage?
+    private var scriptProgress = ScriptProgress(.horizonUpdate)
+    private func beginProgress(_ job: ScriptProgress.Job) {
+        scriptProgress = ScriptProgress(job)
+        updateProgress = 0; updateLabel = ""; stage = scriptProgress.stage
+    }
+    @Published var busy = false {
+        didSet {
+            if busy != oldValue { Runner.busyCount += busy ? 1 : -1 }
+            if busy { Runner.busyReasons[ObjectIdentifier(self)] = busyReason }
+            else {
+                Runner.busyReasons[ObjectIdentifier(self)] = nil; busyReason = ""
+                // An installer's figure belongs to its job only, however that job ended.
+                installerTimer?.invalidate(); installerTimer = nil
+                if installerProgress != nil { installerProgress = nil }
+                if installerWritten != nil { installerWritten = nil }
+            }
+        }
+    }
+    /// What `busy` is, in a few words ("Updating Wine"): what the button's progress, its Stop
+    /// and the quit alert name. Set through `beginBusy`.
+    @Published private(set) var busyReason = ""
+    private func beginBusy(_ reason: String) {
+        busyReason = reason
+        busy = true
+        errorsAtJobStart = errorsShown
+        stopRequested = false
+        jobWine = nil
+    }
+
+    /// The user pressed Stop on the running job (update, installer): its exit is not a failure.
+    private var stopRequested = false
+    /// "!!" lines sent to the strip, and how many there were when the current job began.
+    private var errorsShown = 0
+    private var errorsAtJobStart = 0
+
+    /// A job that failed says so in one line, unless the user stopped it or it already printed
+    /// its own "!!" reason. Scripts' `set -e` aborts and wine's errors carry no "!!", and with
+    /// the strip showing errors only, a failed Repair otherwise left no text at all.
+    private func reportFailure(_ code: Int32, _ line: String) {
+        guard code != 0, !stopRequested, errorsShown == errorsAtJobStart else { return }
+        appendLine("!! " + line)
+    }
+    /// The world, or "<world> #2" for a further client of a world that allows several.
+    let session: String
+
+    init(session: String = "") { self.session = session }
 
     /// Read by the app delegate on quit. Downloads and installs are child processes of this app,
     /// so quitting kills them -- a 7.7 GB download that was 6 GB in simply vanished, and the card
     /// went back to saying "Download…" with nothing to say why. Quitting mid-download now asks.
-    static var workInFlight = false
+    /// Counted across every session: installers share one installer prefix, so one at a time.
+    private static var busyCount = 0
+    static var workInFlight: Bool { busyCount > 0 }
+    private static var busyReasons: [ObjectIdentifier: String] = [:]
+    /// The work `workInFlight` is about, for the quit alert.
+    static var workInFlightReason: String? { busyReasons.values.filter { !$0.isEmpty }.sorted().first }
+
+    /// Every session of this launcher that is playing, from the moment its launch passes the
+    /// checks. A scan cannot see a launch until its injector exists; this can.
+    private struct Playing {
+        var world: String; var host: String; var group: pid_t?
+        var prefix: String = ""
+        var gameDir: String = ""
+        var renderer: Renderer? = nil
+        /// The group has been seen holding the loader; see `MultiWorld.sessionPIDs`.
+        var groupHeldLoader = false
+    }
+    private static var playing: [ObjectIdentifier: Playing] = [:]
+    /// A launch of this launcher's own is under way or playing, even before any client exists.
+    static var anyPlaying: Bool { !playing.isEmpty }
+
+    private func othersPlaying() -> Int { Runner.playing.keys.filter { $0 != ObjectIdentifier(self) }.count }
+
+    private func othersPlaying(in install: Install) -> Int {
+        let path = OwnWine.resolve(install.prefix.path)
+        return Runner.playing.filter { $0.key != ObjectIdentifier(self) }
+            .values.filter { $0.prefix.isEmpty || $0.prefix == path }.count
+    }
+
+    static var playingPrefixes: [pid_t: String] {
+        Dictionary(playing.values.compactMap { p in
+            p.group.map { ($0, p.prefix) }
+        }, uniquingKeysWith: { a, _ in a })
+    }
+
+    nonisolated static func prefixPaths(_ install: Install) -> [String] {
+        let children = (try? FileManager.default.contentsOfDirectory(at: install.sharedSupport,
+                                                                    includingPropertiesForKeys: nil)) ?? []
+        return children.filter { $0.lastPathComponent.hasPrefix("prefix") }.map(\.path)
+            + [install.prefix.path]
+    }
+
+    /// Unknown processes stay in the set. Only evidence of another prefix permits a mutation.
+    private func prefixClients(_ snapshot: LiveClients.Snapshot, install: Install) -> [LiveClients.Client] {
+        PrefixScope.clients(in: snapshot, prefix: install.prefix, knownGroups: Self.playingPrefixes,
+                            knownPrefixes: Self.prefixPaths(install))
+    }
+
+    /// Separate Windows drives may still share actual client files (Horizon and the local world).
+    /// Those files must stay untouched while either uses them.
+    private func sharedGameClients(_ snapshot: LiveClients.Snapshot, install: Install) -> Bool {
+        let path = OwnWine.resolve(install.gameDir.path)
+        let known = Self.playing.values.filter { $0.gameDir == path }
+        if known.contains(where: { $0.world != currentWorld || $0.group != sessionGroup }) { return true }
+        let ownGroups = Set(Self.playing.values.compactMap(\.group))
+        // An untracked client cannot prove which client files it uses. Preserve the files until
+        // adoption supplies that evidence, while prefix-only work can still proceed.
+        return snapshot.clients.contains { !ownGroups.contains($0.group) }
+    }
+
+    /// A session whose group has not yet held its loader is also known by its host, in case
+    /// the loader turns up in a group of its own.
+    static var playingGroups: (groups: Set<pid_t>, hostsWithoutGroup: Set<String>) {
+        (Set(playing.values.compactMap(\.group)),
+         Set(playing.values.filter { $0.group == nil || !$0.groupHeldLoader }.map(\.host)))
+    }
+
+    /// Why another client of `world` must not start now, counting this launcher's own sessions
+    /// of it (even ones still injecting), every client the scan can see, and every injector
+    /// the scan can see, by the world its boot profile names in `install` (another launcher
+    /// process's launch is visible only that way for its first seconds).
+    static func duplicateRefusal(world: String, hosts: [String], maxClients: Int,
+                                 clients: [LiveClients.Client], install: Install?) -> String? {
+        var own: Set<pid_t> = []
+        for (n, p) in playing.values.enumerated() where p.world == world {
+            // A session whose group is unknown still counts once; negative ids never collide.
+            own.insert(p.group ?? pid_t(-1 - n))
+        }
+        return MultiWorld.refusal(world: world, hosts: hosts, maxClients: maxClients,
+                                  clients: clients, sessionGroups: own,
+                                  ownGroups: Set(playing.values.compactMap(\.group)),
+                                  injectorHost: { file in
+                                      install.flatMap { Credentials.bootServer(in: $0, profile: file) }
+                                  })
+    }
 
     /// Every long-running action refuses to start while another one is going. That refusal used
     /// to be a silent `return`, so pressing Download on a second world did nothing at all and
     /// said nothing about why -- which is exactly what "I pressed Download on all the servers and
     /// they still say Download" looked like. Now it says so in the log.
     private func refuseWhileBusy(_ what: String) -> Bool {
-        guard busy || running else { return false }
+        guard Runner.workInFlight || running else { return false }
         appendLine("!! not starting \(what): something else is already running in the wrapper. "
                  + "Wait for it to finish (or press Stop), then try again.")
         return true
     }
 
+    /// Repair runs wine in the game prefix and an update rewrites the shared client folder;
+    /// neither belongs under a client that is playing or starting, from this window or another
+    /// launcher. On success the launch lock is held until `endMaintenance`, so no launch in any
+    /// launcher process can start underneath it.
+    private func claimForMaintenance(_ what: String, prefixOnly install: Install? = nil) -> Bool {
+        let lock = LaunchLock.acquire()
+        let snap = LiveClients.snapshot()
+        let clients = install.map { prefixClients(snap, install: $0) } ?? snap.clients
+        let sessions = install.map { othersPlaying(in: $0) } ?? Runner.playing.count
+        if let why = MultiWorld.maintenanceBlocker(LiveClients.byHost(clients), sessionsPlaying: sessions,
+                                                   lockHeldElsewhere: lock == nil) {
+            if let lock { LaunchLock.release(lock) }
+            appendLine("!! not starting \(what): \(why). Wait for it to finish or stop it first.")
+            return false
+        }
+        maintenanceLock = lock   // never nil here: a held lock is a blocker
+        return true
+    }
+
+    private var maintenanceLock: Int32?
+
+    private func endMaintenance() {
+        if let l = maintenanceLock { LaunchLock.release(l) }
+        maintenanceLock = nil
+    }
+
+    static func describe(_ live: [String: [pid_t]]) -> String { LiveClients.describe(live) }
+
     private var proc: Process?
+    /// The Wine session the running job works in (Repair, an installer), ended with it by Stop
+    /// and Quit (JobKill). nil for a job that runs no Wine.
+    private var jobWine: JobKill.Wine?
+    /// Stop on work this process does itself: Wine's prefix update (`updatePrefix`).
+    private let prefixUpdateStop = StopFlag()
+    /// Stop for the installers' prefix while it is made (ensureInstallerPrefix).
+    private let installerStop = StopFlag()
     /// Executable Ashita boots the game in for the current launch (the boot profile's
     /// `[ashita.boot] file`): horizon-loader.exe on HorizonXI, pol.exe on CatsEyeXI, xiloader.exe
     /// elsewhere. Both the exit watcher and the x87 sidecar look for this, by name.
@@ -76,6 +271,13 @@ final class Runner: ObservableObject {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("HorizonXI-on-Mac", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // `--fix` runs against test prefixes, and self-tests may drive a Runner: neither may
+        // rotate the real launcher.log away.
+        if CommandLine.arguments.contains("--fix") || CommandLine.arguments.contains(where: { $0.hasPrefix("--selftest-") }) {
+            let f = FileManager.default.temporaryDirectory.appendingPathComponent("ffxi-on-mac-fix.log")
+            FileManager.default.createFile(atPath: f.path, contents: nil)
+            return f
+        }
         let f = dir.appendingPathComponent("launcher.log")
         let prev = dir.appendingPathComponent("launcher.log.1")
         try? FileManager.default.removeItem(at: prev)
@@ -84,6 +286,15 @@ final class Runner: ObservableObject {
         return f
     }()
     private lazy var logHandle: FileHandle? = try? FileHandle(forWritingTo: Self.logFile)
+
+    /// A line for the launcher log from outside any session (a forwarded request dropped while
+    /// no window was open), and stderr.
+    static func appendToLogFile(_ s: String) {
+        let line = s.hasSuffix("\n") ? s : s + "\n"
+        FileHandle.standardError.write(Data(line.utf8))
+        guard let h = try? FileHandle(forWritingTo: logFile) else { return }
+        h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close()
+    }
 
     private func tee(_ s: String) {
         // A headless run (--play/--check) has no log strip to read, and its silence is exactly
@@ -95,6 +306,12 @@ final class Runner: ObservableObject {
         h.seekToEndOfFile(); h.write(d)
     }
 
+    /// A line for launcher.log (and stderr on a headless run) that the window never shows:
+    /// state worth having when reading a log, not worth a line in front of the player.
+    func logFileOnly(_ s: String) {
+        tee(s.hasSuffix("\n") ? s : s + "\n")
+    }
+
     /// The boot loader's verdict when a login is refused ("Failed to login. Invalid username or
     /// password." / "…Account already logged in." / "…xiloader version mismatch…"). Every xiloader
     /// fork prints one of these and then sits at an interactive menu that no window ever shows,
@@ -104,86 +321,460 @@ final class Runner: ObservableObject {
     private var currentProfile = "horizonxi.ini"
     private var currentWorld = ""
 
-    func appendChunk(_ s: String) {
-        tee(s)
-        // Every xiloader fork prints one of these and drops to an interactive menu no window shows.
-        let failMarkers = ["Failed to login", "Bad json reply from remote", "Error from remote",
-                           "version mismatch", "xi_connect", "Account already logged in"]
-        if loginFailure.isEmpty, let hit = failMarkers.first(where: { s.contains($0) }),
-           let r = s.range(of: hit) {
-            let raw = String(s[r.lowerBound...]).split(whereSeparator: { $0.isNewline }).first.map(String.init) ?? hit
-            let clean = raw.trimmingCharacters(in: CharacterSet(charactersIn: " \u{1b}[m")).trimmingCharacters(in: .whitespaces)
-            loginFailure = hit == "Bad json reply from remote"
-                ? "The login server sent a reply this client could not read. Usually the wrong password, an account that does not exist, or a client-version mismatch."
-                : (clean.isEmpty ? hit : clean)
-            appendLine("!! login refused: \(loginFailure) — stopping the loader")
+    /// `capped`: the game's own output, whose repeats `gameOutputCap` keeps out of launcher.log.
+    func appendChunk(_ s: String, capped: Bool = false) {
+        var s = s
+        if updatingHorizon {
+            // aria2's readout and the unzip's percentages become the button's progress instead
+            // of hundreds of log lines.
+            scriptProgress.read(s)
+            if scriptProgress.fraction != updateProgress { updateProgress = scriptProgress.fraction }
+            if scriptProgress.label != updateLabel { updateLabel = scriptProgress.label }
+            if scriptProgress.stage != stage { stage = scriptProgress.stage }
+            s = ScriptProgress.loggable(s)
+            if s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return }
+        }
+        let logged = capped ? gameOutputCap.filter(s) : s
+        tee(logged)
+        if capped { noteRender(LoaderOutput.renderEvents(in: logged)) }
+        if !x87Settled { checkX87Output(s) }
+        // Every xiloader fork prints its refusal and drops to an interactive menu no window shows;
+        // a loader that never logged in (b60: Ashita's pol.exe on HorizonXI) shows only the menu.
+        if loginFailure.isEmpty, let refusal = LoaderOutput.refusal(in: s, world: currentWorld, menu: capped,
+                                                                     account: launchHasAccount) {
+            loginFailure = refusal.message
+            if refusal.atMenu {
+                logFileOnly("i  the loader is at its account menu, which nothing can answer — stopping it")
+                appendLine("!! " + refusal.message)
+            } else {
+                appendLine("!! login refused: \(loginFailure) — stopping the loader")
+            }
             if let i = currentInstall { stop(i) }
         }
-        log += s
-        if log.count > 200_000 { log = String(log.suffix(150_000)) }
+        let errors = Self.errorLines(in: logged)
+        if !errors.isEmpty { uiAppend(errors) }
     }
 
+    /// Repeats of the game's output kept out of launcher.log, per launch (LoaderOutput.RepeatCap).
+    private var gameOutputCap = LoaderOutput.RepeatCap()
+    /// Bytes the game's stdout file has given this launch, and whether a poll ever found any of
+    /// this session's processes alive: both zero/false means wine ended before Ashita said a word.
+    private var gameOutputBytes = 0
+    private var sessionSeenAlive = false
+    /// How this launch ended is already said or asked for: a Stop (the player's, or a refused
+    /// login's), or a spawn that failed.
+    private var sessionExplained = false
+    /// The boot command this launch handed the loader had an account in it (`launch` reads it
+    /// after `beforeLaunch` wrote it), which is what its menu means (LoaderOutput.refusal).
+    private var launchHasAccount = true
+
+    /// Every line goes to launcher.log; only errors ("!! …", the login refusal among them) reach
+    /// the window. Progress, wine and Ashita output there was text nobody had to act on.
     func appendLine(_ s: String) {
-        tee(s.hasSuffix("\n") ? s : s + "\n")
-        log += s.hasSuffix("\n") ? s : s + "\n"
-        if log.count > 200_000 { log = String(log.suffix(150_000)) }
+        let line = s.hasSuffix("\n") ? s : s + "\n"
+        tee(line)
+        if line.hasPrefix("!!") { uiAppend(line) }
+    }
+
+    /// The "!!" lines of a chunk of raw output (scripts mark their errors that way).
+    nonisolated static func errorLines(in s: String) -> String {
+        guard s.contains("!!") else { return "" }
+        return s.split(whereSeparator: \.isNewline)
+            .map { $0.drop(while: { $0 == " " || $0 == "\t" }) }
+            .filter { $0.hasPrefix("!!") }
+            .map { $0 + "\n" }
+            .joined()
+    }
+
+    /// Empties the window's error strip (launcher.log keeps everything).
+    func clearLog() {
+        pendingLog = ""
+        uiLogLines = 0
+        log = ""
+    }
+
+    // MARK: - Log strip
+
+    /// What the log strip shows (errors only, see `appendLine`): the last 200 lines, at most
+    /// 16 KB, published at most four times a second. launcher.log keeps every byte (`tee`). The
+    /// strip used to hold up to 200 KB, recounted with String.count and re-laid out by SwiftUI on
+    /// every 0.3 s chunk of game output, on the main thread, for the whole session.
+    static let uiLogMaxBytes = 16 * 1024
+    static let uiLogMaxLines = 200
+    private var pendingLog = ""
+    private var logFlushScheduled = false
+    /// Line breaks in `log`, kept as text is added rather than recounted.
+    private var uiLogLines = 0
+
+    private func uiAppend(_ s: String) {
+        errorsShown += 1
+        pendingLog += s
+        // A burst (an update's progress, a chatty client) is cut down before it waits.
+        if pendingLog.utf8.count > 4 * Self.uiLogMaxBytes {
+            pendingLog = Self.uiTail(pendingLog, maxBytes: Self.uiLogMaxBytes, maxLines: Self.uiLogMaxLines)
+        }
+        guard !logFlushScheduled else { return }
+        logFlushScheduled = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            self?.flushUILog()
+        }
+    }
+
+    private func flushUILog() {
+        logFlushScheduled = false
+        guard !pendingLog.isEmpty else { return }
+        let chunk = pendingLog
+        pendingLog = ""
+        uiLogLines += Self.lineBreaks(in: chunk)
+        var next = log + chunk
+        if next.utf8.count > Self.uiLogMaxBytes || uiLogLines > Self.uiLogMaxLines {
+            next = Self.uiTail(next, maxBytes: Self.uiLogMaxBytes, maxLines: Self.uiLogMaxLines)
+            uiLogLines = Self.lineBreaks(in: next)
+        }
+        log = next
+    }
+
+    nonisolated static func lineBreaks(in s: String) -> Int {
+        s.utf8.reduce(0) { $1 == 0x0A ? $0 + 1 : $0 }
+    }
+
+    /// The end of `s`: its last `maxLines` lines and at most `maxBytes` UTF-8 bytes, starting at
+    /// the beginning of a line whenever one is in range.
+    nonisolated static func uiTail(_ s: String, maxBytes: Int, maxLines: Int) -> String {
+        let u = Array(s.utf8)
+        var start = max(0, u.count - maxBytes)
+        // Walk back over line breaks; a break at the very end closes the last line.
+        var seen = 0
+        var i = u.count - 1
+        if i >= 0, u[i] == 0x0A { i -= 1 }
+        while i >= start {
+            if u[i] == 0x0A {
+                seen += 1
+                if seen == maxLines { start = i + 1; break }
+            }
+            i -= 1
+        }
+        // The byte limit can land mid-line: begin at the next line instead, if there is one.
+        if start > 0, u[start - 1] != 0x0A, let nl = u[start...].firstIndex(of: 0x0A), nl + 1 < u.count {
+            start = nl + 1
+        }
+        return start == 0 ? s : String(decoding: u[start...], as: UTF8.self)
+    }
+
+    /// Working directory for bundled scripts. Never the bundle itself: wine tools (regsvr32)
+    /// drop log files into their cwd, and one stray file inside the .app breaks its signature.
+    static var scratchDir: URL {
+        let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("HorizonXI-on-Mac/work", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
     }
 
     /// install.sh ships inside the app bundle; fall back to the repo copy when running from
-    /// `swift run`.
+    /// `swift run` (or `--fix` from a `swift build` binary).
     static func repairScript() -> URL? {
         if let u = Bundle.main.url(forResource: "install", withExtension: "sh") { return u }
+        return devScript("install.sh")
+    }
+
+    /// `<repo>/scripts/<name>`, from this source file's own path.
+    nonisolated static func devScript(_ name: String) -> URL? {
         let dev = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // HorizonXILauncher
             .deletingLastPathComponent()   // Sources
             .deletingLastPathComponent()   // app
-            .appendingPathComponent("scripts/install.sh")
+            .deletingLastPathComponent()   // the repo
+            .appendingPathComponent("scripts/\(name)")
         return FileManager.default.isExecutableFile(atPath: dev.path) ? dev : nil
     }
 
-    func repair(_ install: Install) {
-        guard let script = Self.repairScript() else {
-            appendLine("!! install.sh not found in the bundle"); return
+    /// Why Repair cannot help, before anything is written: the game data is behind a drive that
+    /// is not there, or its DLLs are gone. 2026-10-15: Repair ran against a ghost-mounted
+    /// 'Games' drive, rewrote the registry, re-updated the prefix with the wrong wine, and then
+    /// died in regsvr32 with a bare "exited 3". On the main thread, so the drive's line is the
+    /// plain one: telling "unmounted" apart runs `diskutil list`, which can stall (the main
+    /// button's own line comes from the checks, off the main thread).
+    nonisolated static func repairBlocker(_ install: Install) -> String? {
+        let se = install.squareEnix
+        if let d = Preflight.unavailableDrive(for: se.appendingPathComponent("FINAL FANTASY XI").path) {
+            return Preflight.driveMessage(d) + " Repair can't fix that; nothing was changed."
         }
-        busy = true
+        let need = ["FINAL FANTASY XI/FFXi.dll", "FINAL FANTASY XI/FFXiMain.dll", "FINAL FANTASY XI/FFXiVersions.dll"]
+        let missing = need.filter { !FileManager.default.fileExists(atPath: se.appendingPathComponent($0).path) }
+        if !missing.isEmpty {
+            return "Game files missing (\(missing.map { ($0 as NSString).lastPathComponent }.joined(separator: ", "))). Download them again; nothing was changed."
+        }
+        return nil
+    }
+
+    func repair(_ install: Install, done: @escaping (Bool) -> Void = { _ in }) {
+        if let why = Self.repairBlocker(install) { appendLine("!! " + why); done(false); return }
+        guard claimForMaintenance("Repair") else { done(false); return }
+        guard let script = Self.repairScript() else {
+            endMaintenance()
+            appendLine("!! install.sh not found in the bundle"); done(false); return
+        }
+        beginBusy("Repairing")
+        // install.sh runs this Wine in this prefix: Stop and Quit end that session too.
+        let wine = Self.playWine(install)
+        jobWine = .init(server: wine.deletingLastPathComponent().appendingPathComponent("wineserver"), prefix: install.prefix)
         appendLine("==> repairing \(install.wrapper.path) [\(install.prefixName)]")
         // Cheap, local, and the difference between "logs in then quits" and a playable game.
         Sandbox.repair(install) { [weak self] in self?.appendLine($0) }
+        // The wine Play runs, so Repair does not flip the prefix to another wine's timestamp
+        // (which made every Play after a Repair stop for "Updating Wine").
         spawn(URL(fileURLWithPath: "/bin/zsh"),
-              args: [script.path, install.wrapper.path, install.prefixName],
-              env: [:], cwd: script.deletingLastPathComponent()) { [weak self] code in
+              args: [script.path, install.wrapper.path, install.prefixName,
+                     install.gameDir.path, install.squareEnixWine, install.squareEnix.path],
+              env: ["HXI_WINE": wine.path], cwd: Self.scratchDir) { [weak self] code in
+            self?.jobWine = nil
+            self?.endMaintenance()
             self?.busy = false
             self?.appendLine("==> repair exited \(code)")
+            self?.reportFailure(code, "Repair didn't finish — Open log in Setup & Diagnostics")
+            if code == 0, let self {
+                Task { await self.syncPrefixIfStale(install); done(true) }
+            } else { done(false) }
+        }
+    }
+
+    /// Move…: copy the install into `folder` (InstallMove) as one job, under the same lock as
+    /// Repair, so no launch in any launcher starts against it. Nothing of the old install is
+    /// changed; `done` gets the new install once the copy is verified and in place.
+    func moveInstall(_ plan: InstallMove.Plan, into folder: URL, done: @escaping (Install?) -> Void) {
+        if refuseWhileBusy("Move") { done(nil); return }
+        guard claimForMaintenance("Move") else { done(nil); return }
+        beginBusy("Moving")
+        InstallMove.copyStop.reset()
+        moveProgress = 0
+        appendLine("==> moving \(plan.install.wrapper.path) [\(plan.install.prefixName)] to \(folder.path): "
+                   + "\(plan.expected)")
+        let note: @Sendable (String) -> Void = { [weak self] line in Task { @MainActor in self?.logFileOnly(line) } }
+        let report: @Sendable (Double) -> Void = { [weak self] f in Task { @MainActor in self?.moveProgress = f } }
+        // The job holds its runner until it ends: the lock and `busy` must be released.
+        Task.detached(priority: .userInitiated) { [self] in
+            let result = Result { try InstallMove.copy(plan, into: folder, log: note, progress: report) }
+            await MainActor.run {
+                self.endMaintenance()
+                self.busy = false
+                self.moveProgress = nil
+                switch result {
+                case .success(let moved):
+                    self.appendLine("==> moved and verified: \(moved.wrapper.path) [\(moved.prefixName)]")
+                    done(moved)
+                case .failure(let e):
+                    // Stopped: said in the log only, like any other Stop.
+                    if self.stopRequested { self.appendLine("==> Move stopped; the game still plays from where it was") }
+                    else { self.appendLine("!! " + ((e as? InstallMove.Refusal)?.line ?? "Move didn't finish: \(e.localizedDescription)")) }
+                    done(nil)
+                }
+            }
+        }
+    }
+
+    /// Setup's copy of a HorizonXI client found on another drive into the install
+    /// (ExistingInstall, InstallMove.copyTree), as one job under the maintenance lock, with its
+    /// progress on the button. The original is never changed.
+    func copyIn(_ source: URL, to dest: URL, done: @escaping (Bool) -> Void) {
+        if refuseWhileBusy("the copy") { done(false); return }
+        guard claimForMaintenance("Copy") else { done(false); return }
+        beginBusy("Copying")
+        InstallMove.copyStop.reset()
+        moveProgress = 0
+        appendLine("==> copying \(source.path) to \(dest.path) (the original stays)")
+        let note: @Sendable (String) -> Void = { [weak self] line in Task { @MainActor in self?.logFileOnly(line) } }
+        let report: @Sendable (Double) -> Void = { [weak self] f in Task { @MainActor in self?.moveProgress = f } }
+        Task.detached(priority: .userInitiated) { [self] in
+            let result = Result { try InstallMove.copyTree(source, to: dest, log: note, progress: report) }
+            await MainActor.run {
+                self.endMaintenance()
+                self.busy = false
+                self.moveProgress = nil
+                switch result {
+                case .success:
+                    self.appendLine("==> copied and verified: \(dest.path)")
+                    done(true)
+                case .failure(let e):
+                    if self.stopRequested { self.appendLine("==> copy stopped; the original is unchanged") }
+                    else { self.appendLine("!! " + ((e as? InstallMove.Refusal)?.line ?? "The copy didn't finish: \(e.localizedDescription)")) }
+                    done(false)
+                }
+            }
         }
     }
 
     /// `scripts/update-client.sh` ships next to install.sh in the bundle.
     static func updateScript() -> URL? {
         if let u = Bundle.main.url(forResource: "update-client", withExtension: "sh") { return u }
-        let dev = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("scripts/update-client.sh")
-        return FileManager.default.isExecutableFile(atPath: dev.path) ? dev : nil
+        return devScript("update-client.sh")
     }
 
     /// Apply every pending HorizonXI game update (torrent, so it can take a while), then report.
     func updateHorizon(_ install: Install, done: @escaping (Bool) -> Void) {
-        guard !busy, !running else { appendLine("!! something else is running in the wrapper — try again when it finishes"); done(false); return }
+        guard !Runner.workInFlight, !running else { appendLine("!! something else is running in the wrapper — try again when it finishes"); done(false); return }
+        if let d = Preflight.unavailableDrive(for: install.squareEnix.path) {
+            appendLine("!! " + Preflight.driveMessage(d)); done(false); return
+        }
+        guard claimForMaintenance("the HorizonXI update") else { done(false); return }
         guard let script = Self.updateScript() else {
+            endMaintenance()
             appendLine("!! update-client.sh not found in the bundle"); done(false); return
         }
-        busy = true
+        beginBusy("Updating")
+        updatingHorizon = true
+        beginProgress(.horizonUpdate)
         appendLine("==> updating HorizonXI game files in \(install.gameDir.path)")
-        var env: [String: String] = [:]
-        // aria2c comes from Homebrew; a bundled app's PATH does not include it.
-        env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")
         spawn(URL(fileURLWithPath: "/bin/zsh"),
               args: [script.path, "horizon", install.gameDir.path],
-              env: env, cwd: script.deletingLastPathComponent()) { [weak self] code in
+              env: Self.downloadEnvironment(), cwd: Self.scratchDir) { [weak self] code in
+            self?.endMaintenance()
             self?.busy = false
+            self?.updatingHorizon = false
             self?.appendLine("==> update exited \(code)")
+            self?.reportFailure(code, "HorizonXI update failed — Open log in Setup & Diagnostics")
             done(code == 0)
         }
+    }
+
+    /// What update-client.sh needs to fetch: Homebrew's aria2c when there is one (a bundled
+    /// app's PATH does not include it), otherwise the script fetches aria2's own macOS build once
+    /// into `tools/` (pinned by size and SHA-256; see update-client.sh `ensure_aria2`).
+    static func downloadEnvironment() -> [String: String] {
+        var env: [String: String] = [:]
+        env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")
+        env["HXI_TOOLS"] = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("HorizonXI-on-Mac/tools", isDirectory: true).path
+        return env
+    }
+
+    /// Stop a running HorizonXI update. aria2c resumes from its .aria2 file next time, and a zip
+    /// is only extracted once fully downloaded, so stopping mid-download leaves the client as it was.
+    func stopHorizonUpdate() {
+        guard updatingHorizon, let p = proc, p.isRunning else { return }
+        stopRequested = true
+        // Everything the script started (aria2c, ditto, du), then the script, whose trap removes
+        // its half-unpacked folder.
+        let pid = p.processIdentifier
+        Task.detached { JobKill.end(pid, wine: nil) }
+        appendLine("==> update stopped")
+    }
+
+    /// Stop beside the main button, for every other job of this window's: Repair, an installer,
+    /// a client download, Setup's copy, a Move, Wine's prefix update. What it started ends with
+    /// it, its Wine session included; what it finished stays, and the main button carries on.
+    func stopJob() {
+        guard busy else { return }
+        if updatingHorizon { stopHorizonUpdate(); return }
+        stopRequested = true
+        InstallMove.copyStop.raise()
+        prefixUpdateStop.raise()
+        installerStop.raise()
+        ascensionStop.raise()
+        let pid = proc.flatMap { $0.isRunning ? $0.processIdentifier : nil }
+        let wine = jobWine
+        Task.detached { JobKill.end(pid, wine: wine) }
+        appendLine("==> stopped")
+    }
+
+    // MARK: - Worlds updated by this launcher (AscensionSync, VanadreamsSync)
+
+    /// 0...1 while a world's client or its update is fetched, for the main button.
+    @Published private(set) var ascensionProgress: Double?
+    private let ascensionStop = StopFlag()
+    /// One such job at a time across every session.
+    private static var ascensionJobRunning = false
+
+    /// A world's client, and the update its own launcher makes before every Play, as a job of this
+    /// window's: the button shows its progress and Stop sits beside it. No Wine runs. `install`:
+    /// every file is checked (Setup, Repair). `work` runs off the main actor with the job's Stop,
+    /// its log (lines starting "i  " go to launcher.log only) and its progress.
+    func runWorldJob(world: String, root: URL, install: Bool,
+                     work: @escaping @Sendable (StopFlag, @escaping (String) -> Void, @escaping (Double) -> Void) -> AscensionSync.Outcome,
+                     done: @escaping (AscensionSync.Outcome) -> Void) {
+        // Not beside any other job either (a Move… may be copying this very folder), as every job here.
+        guard !busy, !running, !Self.ascensionJobRunning, !Runner.workInFlight else {
+            appendLine("!! not starting \(world)'s update: another job is running. Wait for it to finish (or press Stop), then try again.")
+            done(.failed("Another job is running.")); return
+        }
+        Self.ascensionJobRunning = true
+        beginBusy(install ? "Setting up \(world)" : "Updating \(world)")
+        ascensionStop.reset()
+        ascensionProgress = 0
+        let stop = ascensionStop
+        if install { appendLine("==> \(world): \(root.path)") } else { logFileOnly("==> \(world): checking for updates") }
+        // Everything back on the main actor goes through these, so the detached task holds no
+        // reference to the runner itself.
+        let onLine: @MainActor (String) -> Void = { [weak self] line in
+            guard let self else { return }
+            if line.hasPrefix("i  ") { self.logFileOnly(line) } else { self.appendLine(line) }
+        }
+        let onProgress: @MainActor (Double) -> Void = { [weak self] f in self?.ascensionProgress = min(max(f, 0), 1) }
+        let finish: @MainActor (AscensionSync.Outcome) -> Void = { [weak self] outcome in
+            Runner.ascensionJobRunning = false
+            if let self {
+                self.ascensionProgress = nil
+                self.busy = false
+                switch outcome {
+                case .ok(let n):
+                    if n > 0 || install { self.appendLine("==> \(world) is up to date (\(n) file\(n == 1 ? "" : "s") written)") }
+                    else { self.logFileOnly("==> \(world) is up to date") }
+                case .offline(let why): self.logFileOnly("i  " + why)
+                case .stopped: self.appendLine("==> \(world)'s update stopped")
+                case .failed(let why): if !self.stopRequested { self.appendLine("!! " + why) }
+                }
+            }
+            done(outcome)
+        }
+        Task.detached(priority: .userInitiated) {
+            let outcome = work(stop, { line in Task { @MainActor in onLine(line) } },
+                               { f in Task { @MainActor in onProgress(f) } })
+            await finish(outcome)
+        }
+    }
+
+    /// AscensionXI's client and its Play-time update (AscensionSync).
+    func syncAscension(root: URL, datsWine: String, install: Bool, donors: [URL],
+                       done: @escaping (AscensionSync.Outcome) -> Void) {
+        runWorldJob(world: AscensionChannel.worldName, root: root, install: install, work: { stop, log, progress in
+            AscensionSync(root: root, datsWine: datsWine, stop: stop, log: log, progress: { _, f in progress(f) })
+                .run(install: install, donors: donors)
+        }, done: done)
+    }
+
+    /// Vanadreams' client package, Ashita and loader, and its Play-time update (VanadreamsSync).
+    func syncVanadreams(root: URL, install: Bool, done: @escaping (AscensionSync.Outcome) -> Void) {
+        runWorldJob(world: VanadreamsChannel.worldName, root: root, install: install, work: { stop, log, progress in
+            VanadreamsSync(root: root, stop: stop, log: log, progress: { _, f in progress(f) }).run(install: install)
+        }, done: done)
+    }
+
+    /// Scythe's signed release: client from `donors` and their objects, their Ashita and loader (ScytheSync).
+    func syncScythe(root: URL, install: Bool, donors: [URL], done: @escaping (AscensionSync.Outcome) -> Void) {
+        runWorldJob(world: ScytheChannel.worldName, root: root, install: install, work: { stop, log, progress in
+            ScytheSync(root: root, stop: stop, log: log, progress: { _, f in progress(f) }).run(install: install, donors: donors)
+        }, done: done)
+    }
+
+    /// A plain retail world: client from `donors`, Ashita, the loader its server takes (RetailWorldSync).
+    func syncRetailWorld(_ spec: RetailWorld.Spec, root: URL, install: Bool, donors: [URL], done: @escaping (AscensionSync.Outcome) -> Void) {
+        runWorldJob(world: spec.world, root: root, install: install, work: { stop, log, progress in
+            RetailWorldSync(spec: spec, root: root, stop: stop, log: log, progress: { _, f in progress(f) }).run(install: install, donors: donors)
+        }, done: done)
+    }
+
+    /// PegasusXI's client out of their release zip (PegasusSync).
+    func syncPegasus(root: URL, install: Bool, done: @escaping (AscensionSync.Outcome) -> Void) {
+        runWorldJob(world: PegasusChannel.worldName, root: root, install: install, work: { stop, log, progress in
+            PegasusSync(root: root, stop: stop, log: log, progress: { _, f in progress(f) }).run(install: install)
+        }, done: done)
+    }
+
+    /// DriftwoodXI's client (retail files from `donors`), Ashita and addons (DriftwoodSync).
+    func syncDriftwood(root: URL, install: Bool, donors: [URL], done: @escaping (AscensionSync.Outcome) -> Void) {
+        runWorldJob(world: DriftwoodChannel.worldName, root: root, install: install, work: { stop, log, progress in
+            DriftwoodSync(root: root, stop: stop, log: log, progress: { _, f in progress(f) }).run(install: install, donors: donors)
+        }, done: done)
     }
 
     /// Run CatsEyeXI's own launcher inside the prefix (scripts/catseye-launcher.sh). Their
@@ -195,47 +786,205 @@ final class Runner: ObservableObject {
         let games = install.driveC.appendingPathComponent("Games")
         try? FileManager.default.createDirectory(at: games, withIntermediateDirectories: true)
         let link = games.appendingPathComponent(name)
-        try? FileManager.default.removeItem(at: link)
+        // Only ever a link is replaced: a real folder there is a client an installer wrote (it is
+        // brought into the world's folder afterwards, InstallerClient), and was deleted here before.
+        let isLink = (try? link.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
+        if isLink { try? FileManager.default.removeItem(at: link) }
+        else if InstallerClient.lexists(link.path) { return }
         try? FileManager.default.createSymbolicLink(at: link, withDestinationURL: URL(fileURLWithPath: dataPath))
+    }
+
+    /// Wine compares the prefix's `.update-timestamp` with `wine.inf`'s mtime at every start and,
+    /// when they differ (a new wrapper, a Repair, a copied drive), stops to "update the Wine
+    /// configuration" -- with Mono/Gecko install prompts -- in front of the game. Do that update
+    /// here, quietly, while nothing is running, so Play never meets it.
+    nonisolated static func prefixStale(_ install: Install) -> Bool {
+        // The wine Play really runs (see launch): its wine.inf is the one it compares against.
+        let inf = playWine(install).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("share/wine/wine.inf")
+        guard let m = (try? FileManager.default.attributesOfItem(atPath: inf.path))?[.modificationDate] as? Date
+        else { return false }
+        let ts = install.prefix.appendingPathComponent(".update-timestamp")
+        guard let txt = try? String(contentsOf: ts, encoding: .utf8) else { return true }
+        // Wine writes CRLF here. Splitting only on "\n" leaves a trailing "\r", so Int fails
+        // and we run wineboot -u again on every launch, bringing its progress window forward.
+        let first = txt.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? ""
+        if first == "disable" { return false }
+        return Int(first) != Int(m.timeIntervalSince1970)
+    }
+
+    nonisolated static func playWine(_ install: Install) -> URL { X87Sidecar.patchedWine() ?? install.wine }
+
+    /// Explicit setup only: participates in the existing quit alert and Stop cancellation.
+    func prepareMultiServer(base: Install, server: Server) async throws {
+        guard !refuseWhileBusy("multi-server setup") else {
+            throw WorldPrefix.Failure("Wait for the current job to finish, then try Setup again.")
+        }
+        beginBusy("Setting up multi-server play")
+        prefixUpdateStop.reset()
+        defer { busy = false }
+        try await WorldPrefix.prepare(base: base, server: server, stop: prefixUpdateStop, log: { [weak self] line in
+            Task { @MainActor in self?.appendLine(line) }
+        })
+    }
+
+    /// Runs `wineboot -u` with Mono and Gecko disabled (their installers are what ask questions).
+    /// Bounded: a wineboot (or the wait for its wineserver) still going after `limit` seconds, or
+    /// ended by Stop, ends this prefix's Wine session and counts as not done -- "Updating Wine"
+    /// never holds the main button for good. Quit ends it too (JobKill).
+    ///
+    /// `wine`: the Wine to boot it with (Play's by default). `mono`: let wineboot install Mono and
+    /// Gecko -- the installers' prefix keeps them (a world's installer may be .NET), and the
+    /// wrapper's Wine carries both, so they install without a question (measured 2026-11-24).
+    nonisolated static func updatePrefix(_ install: Install, limit: Double = 300, stop: StopFlag? = nil,
+                                         wine wineOverride: URL? = nil, mono: Bool = false) -> Bool {
+        var env = ProcessInfo.processInfo.environment
+        env["WINEPREFIX"] = install.prefix.path; env["WINEDEBUG"] = "-all"
+        if !mono { env["WINEDLLOVERRIDES"] = "mscoree,mshtml=" }
+        env["WINEBOOT_HIDE_DIALOG"] = "1"
+        env.removeValue(forKey: "DYLD_FALLBACK_LIBRARY_PATH"); env.removeValue(forKey: "DYLD_LIBRARY_PATH")
+        let wine = wineOverride ?? playWine(install)
+        let session = JobKill.Wine(server: wine.deletingLastPathComponent().appendingPathComponent("wineserver"),
+                                   prefix: install.prefix)
+        let deadline = Date().addingTimeInterval(limit)
+        // True when the process ended by itself in time; otherwise it, and the session, are ended.
+        func finish(_ q: Process) -> Bool {
+            JobKill.track(q.processIdentifier, wine: session)
+            defer { JobKill.untrack(q.processIdentifier) }
+            while q.isRunning {
+                if Date() >= deadline || stop?.raised == true {
+                    JobKill.end(q.processIdentifier, wine: session)
+                    for _ in 0..<50 where q.isRunning { Thread.sleep(forTimeInterval: 0.1) }
+                    return false
+                }
+                Thread.sleep(forTimeInterval: 0.25)
+            }
+            return q.terminationStatus == 0
+        }
+        let p = Process(); p.executableURL = wine; p.arguments = ["wineboot", "-u"]; p.environment = env
+        p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil, finish(p) else { return false }
+        let k = Process(); k.executableURL = session.server; k.arguments = ["-w"]
+        k.environment = ["WINEPREFIX": install.prefix.path]
+        k.standardOutput = FileHandle.nullDevice; k.standardError = FileHandle.nullDevice
+        guard (try? k.run()) != nil else { return false }
+        return finish(k)
+    }
+
+    /// Background check at launcher start and after a Repair. Skipped while any client runs.
+    func syncPrefixIfStale(_ install: Install) async {
+        guard !running, prefixClients(LiveClients.snapshot(), install: install).isEmpty,
+              othersPlaying(in: install) == 0, WorldPrefix.ready(install) else { return }
+        guard await Task.detached(operation: { Self.prefixStale(install) }).value else { return }
+        // A stale prefix is shared maintenance. Hold the same lock as Play and Repair so a
+        // click during wineboot cannot start the client against half-updated registry files.
+        guard claimForMaintenance("Wine prefix update", prefixOnly: install) else { return }
+        beginBusy("Updating Wine")
+        defer { busy = false; endMaintenance() }
+        guard await Task.detached(operation: { Self.prefixStale(install) }).value else { return }
+        appendLine("==> updating Wine's configuration (one time, about 20 s)")
+        // Wine's update progress is a native Wine window. A Wine process may activate after its
+        // launch notification, so also hide it if it comes forward while maintenance is running.
+        // Match only this install's Wine tree; never hide Terminal or another application.
+        // The configured /Volumes/Games path is a symlink into /Volumes/x10, while macOS
+        // reports the launched Wine executable at the resolved path.
+        let wineRoot = Self.playWine(install).deletingLastPathComponent()
+            .deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL.path + "/"
+        let notifications = NSWorkspace.shared.notificationCenter
+        let hideMaintenanceWine: @Sendable (Notification) -> Void = { note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  let path = app.executableURL?.resolvingSymlinksInPath().standardizedFileURL.path,
+                  path.hasPrefix(wineRoot) else { return }
+            app.hide()
+        }
+        let launchObserver = notifications.addObserver(
+            forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main,
+            using: hideMaintenanceWine
+        )
+        let activateObserver = notifications.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main,
+            using: hideMaintenanceWine
+        )
+        prefixUpdateStop.reset()
+        let stop = prefixUpdateStop
+        let ok = await Task.detached { Self.updatePrefix(install, stop: stop) }.value
+        notifications.removeObserver(launchObserver)
+        notifications.removeObserver(activateObserver)
+        if ok { appendLine("==> Wine is up to date") }
+        else if stopRequested { appendLine("==> Wine's update stopped; Play runs it again first") }
+        else { appendLine("!! Wine prefix update did not finish") }
     }
 
     /// Make sure the wrapper's installer prefix exists (see `Install.installerPrefix`). Slow the
     /// first time only; runs off the main actor and calls back on it.
-    func ensureInstallerPrefix(_ install: Install, then: @escaping (Install) -> Void) {
+    ///
+    /// Made the way every other prefix here is (issue #92): bounded (`updatePrefix`, 300 s), no
+    /// "updating configuration" window, output to nowhere rather than a pipe nobody reads, and
+    /// this job's Stop ends it and its Wine session. Before, Stop did nothing here and the button
+    /// sat at "Setting up…" for as long as wineboot liked. A prefix with no system.reg afterwards
+    /// is a failure said in one line, never an installer started into it. `failed` runs after
+    /// the job has ended (busy is false), stopped or not.
+    func ensureInstallerPrefix(_ install: Install, then: @escaping (Install) -> Void,
+                               failed: @escaping () -> Void = {}) {
         let ip = install.installerPrefix
-        if FileManager.default.fileExists(atPath: ip.systemReg.path) { then(ip); return }
+        // Made, and not left half-made by a Stop or a time-out (its marker goes only once wineboot
+        // finished): then it is ready. Otherwise wineboot runs again; it only adds what is missing.
+        let booting = ip.prefix.appendingPathComponent(".ffxi-on-mac-booting")
+        let fm = FileManager.default
+        if fm.fileExists(atPath: ip.systemReg.path), !fm.fileExists(atPath: booting.path) { then(ip); return }
         appendLine("==> creating \(ip.prefixName) (a second wine prefix for installers, so a download is never killed by Play) — about 30 s")
-        var env = ProcessInfo.processInfo.environment
-        env["WINEPREFIX"] = ip.prefix.path; env["WINEDEBUG"] = "-all"
-        env.removeValue(forKey: "DYLD_FALLBACK_LIBRARY_PATH"); env.removeValue(forKey: "DYLD_LIBRARY_PATH")
-        Task.detached {
-            let p = Process()
-            p.executableURL = ip.wine; p.arguments = ["wineboot", "-u"]; p.environment = env
-            p.standardOutput = Pipe(); p.standardError = Pipe()
-            try? p.run(); p.waitUntilExit()
-            let k = Process(); k.executableURL = ip.wineserver; k.arguments = ["-k"]; k.environment = ["WINEPREFIX": ip.prefix.path]
-            try? k.run(); k.waitUntilExit()
-            await MainActor.run { then(ip) }
+        jobWine = .init(server: ip.wineserver, prefix: ip.prefix)
+        installerStop.reset()
+        let stop = installerStop
+        Task { [weak self] in
+            let made = await Task.detached(priority: .userInitiated) { () -> Bool in
+                try? FileManager.default.createDirectory(at: ip.prefix, withIntermediateDirectories: true)
+                FileManager.default.createFile(atPath: booting.path, contents: Data())
+                let ok = Runner.updatePrefix(ip, stop: stop, wine: ip.wine, mono: true)
+                    && FileManager.default.fileExists(atPath: ip.systemReg.path)
+                if ok { try? FileManager.default.removeItem(at: booting) }
+                return ok
+            }.value
+            guard let self else { return }
+            self.jobWine = nil
+            if self.stopRequested { self.busy = false; failed(); return }
+            guard made else {
+                self.appendLine("!! Couldn't make the Windows drive installers run in (\(ip.prefix.path)). Press the button again to retry.")
+                self.busy = false; failed(); return
+            }
+            then(ip)
         }
+    }
+
+    /// How a world's installer job ended (`runInstaller`, `runLocalInstaller`).
+    enum InstallerOutcome: Equatable {
+        /// The client is in this folder now: the world's own folder, or wherever the installer
+        /// put it when it could not be moved (another drive, a name already taken).
+        case installed(URL)
+        case failed
+        case stopped
     }
 
     /// Download a server's Windows installer and run it inside the *installer* prefix. The user
     /// drives the installer's own UI; `dataPath` is pre-linked as `C:\Games\<name>` for it to
     /// install into (and the same link is made in the game prefix, so a path the installer wrote
-    /// into a config file resolves at play time too).
-    func runInstaller(from url: URL, in gameInstall: Install, dataPath: String, name: String = "") {
-        if refuseWhileBusy("the installer for \(name.isEmpty ? url.lastPathComponent : name)") { return }
-        busy = true
+    /// into a config file resolves at play time too). Wherever it really installs, the client is
+    /// brought into `dataPath` (InstallerClient). `done` runs once, after the job has ended.
+    func runInstaller(from url: URL, in gameInstall: Install, dataPath: String, name: String = "",
+                      done: @escaping (InstallerOutcome) -> Void = { _ in }) {
+        if refuseWhileBusy("the installer for \(name.isEmpty ? url.lastPathComponent : name)") { done(.failed); return }
         let nm = name.isEmpty ? url.deletingPathExtension().lastPathComponent : name
+        beginBusy("Installing \(nm)")
         Self.linkGamesFolder(nm, to: dataPath, in: gameInstall)
-        ensureInstallerPrefix(gameInstall) { [weak self] install in
+        ensureInstallerPrefix(gameInstall, then: { [weak self] install in
             guard let self else { return }
             Self.linkGamesFolder(nm, to: dataPath, in: install)
-            self.runInstallerNow(from: url, in: install, name: nm)
-        }
+            self.runInstallerNow(from: url, in: install, name: nm, dataPath: dataPath, done: done)
+        }, failed: { [weak self] in done(self?.stopRequested == true ? .stopped : .failed) })
     }
 
-    private func runInstallerNow(from url: URL, in install: Install, name nm: String) {
+    private func runInstallerNow(from url: URL, in install: Install, name nm: String, dataPath: String,
+                                 done: @escaping (InstallerOutcome) -> Void) {
         // Installers are big (Eden's is 5.8 GB) and served from places that support ranges, so
         // fetch with curl: resumable (-C -), retried, and its progress bar streams into the log.
         // Saved next to the world's data rather than in the prefix -- that is where the space is.
@@ -248,15 +997,18 @@ final class Runner: ObservableObject {
                      "-A", "FFXI-on-Mac", "-o", file.path, url.absoluteString],
               env: [:], cwd: dl) { [weak self] code in
             guard let self else { return }
+            // Stopped: the part downloaded stays for the next press; no error, no web page.
+            if self.stopRequested { self.busy = false; done(.stopped); return }
             // curl 33 = server refused the range because the file is already complete.
             guard code == 0 || (code == 33 && FileManager.default.fileExists(atPath: file.path)) else {
                 self.appendLine("!! download failed (curl \(code)). If \(nm) has moved its installer, get it from their site and use Run installer….")
                 self.busy = false
                 if let page = self.installPageFallback { NSWorkspace.shared.open(page) }
+                done(.failed)
                 return
             }
             self.appendLine("==> downloaded \(file.lastPathComponent)")
-            self.runDownloadedInstaller(file, in: install, name: nm)
+            self.runDownloadedInstaller(file, in: install, name: nm, dataPath: dataPath, done: done)
         }
     }
 
@@ -268,7 +1020,7 @@ final class Runner: ObservableObject {
     func installClientZip(from url: URL, into dataPath: String, name nm: String) {
         if refuseWhileBusy("the \(nm) client download") { return }
         guard !dataPath.isEmpty else { appendLine("!! no folder chosen for \(nm)"); return }
-        busy = true
+        beginBusy("Downloading \(nm)")
         let dest = URL(fileURLWithPath: dataPath, isDirectory: true)
         let dl = dest.appendingPathComponent("installer-downloads", isDirectory: true)
         try? FileManager.default.createDirectory(at: dl, withIntermediateDirectories: true)
@@ -279,6 +1031,7 @@ final class Runner: ObservableObject {
                      "-A", "FFXI-on-Mac", "-o", file.path, url.absoluteString],
               env: [:], cwd: dl) { [weak self] code in
             guard let self else { return }
+            if self.stopRequested { self.busy = false; return }
             guard code == 0 || (code == 33 && FileManager.default.fileExists(atPath: file.path)) else {
                 self.appendLine("!! download failed (curl \(code)).")
                 self.busy = false
@@ -309,24 +1062,56 @@ final class Runner: ObservableObject {
         return world.replacingOccurrences(of: " ", with: "") + "-installer.zip"
     }
 
-    /// Unpack a zip if it is one, find the installer .exe, run it.
-    private func runDownloadedInstaller(_ file: URL, in install: Install, name nm: String) {
-        var exe = file
+    /// Unpack a zip if it is one, find the installer .exe, run it. A zip is unpacked into the
+    /// world's own `installer-downloads` (the drive its client goes on, never beside a zip in
+    /// Downloads on the Mac's own disk), after a space check, with its progress on the button; the
+    /// unpacked copy is removed once the client is in place.
+    private func runDownloadedInstaller(_ file: URL, in install: Install, name nm: String, dataPath: String,
+                                        done: @escaping (InstallerOutcome) -> Void) {
         let isZip = file.pathExtension.lowercased() == "zip" || Self.looksLikeZip(file)
-        if isZip {
-            let out = file.deletingLastPathComponent().appendingPathComponent(file.deletingPathExtension().lastPathComponent + "-unpacked", isDirectory: true)
-            appendLine("==> unpacking \(file.lastPathComponent)")
-            try? FileManager.default.removeItem(at: out)
-            let d = Process(); d.executableURL = URL(fileURLWithPath: "/usr/bin/ditto"); d.arguments = ["-x", "-k", file.path, out.path]
-            d.standardOutput = Pipe(); d.standardError = Pipe()
-            try? d.run(); d.waitUntilExit()
-            guard d.terminationStatus == 0, let found = Self.firstExe(under: out) else {
-                appendLine("!! could not unpack \(file.lastPathComponent) or no .exe inside it"); busy = false; return
+        guard isZip else { launchInstaller(exe: file, in: install, name: nm, dataPath: dataPath, from: 0, cleanup: nil, done: done); return }
+        let base = file.deletingPathExtension().lastPathComponent + "-unpacked"
+        let home = dataPath.isEmpty ? file.deletingLastPathComponent()
+            : URL(fileURLWithPath: dataPath).appendingPathComponent(InstallerClient.downloadsFolder, isDirectory: true)
+        let out = home.appendingPathComponent(base, isDirectory: true)
+        appendLine("==> unpacking \(file.lastPathComponent) into \(out.path)")
+        // The job's process while it runs, so Stop (and Quit) end it like any other.
+        let d = Process(); d.executableURL = URL(fileURLWithPath: "/usr/bin/ditto"); d.arguments = ["-x", "-k", file.path, out.path]
+        d.standardOutput = FileHandle.nullDevice; d.standardError = FileHandle.nullDevice
+        proc = d
+        Task { [weak self] in
+            // Off the main actor: listing and unpacking a client-sized zip (Eden's is 5.8 GB) takes
+            // minutes of ditto, and the window froze for all of it.
+            let size = await Task.detached(priority: .userInitiated) { InstallerClient.archiveBytes(file) }.value
+            guard let self else { return }
+            if self.stopRequested { self.busy = false; done(.stopped); return }
+            if let size, let short = InstallerClient.shortfall(need: size + Self.installerMargin, at: [out]) {
+                self.appendLine("!! Unpacking \(file.lastPathComponent) needs about \(InstallerClient.gigabytes(size)) free on \(InstallerClient.volumeName(short.volume)); \(InstallerClient.gigabytes(short.free)) is free.")
+                self.busy = false; done(.failed); return
             }
-            exe = found
+            self.startInstallerMeter(watch: [out], expected: size, from: 0, span: Self.unpackShare)
+            let found = await Task.detached(priority: .userInitiated) { () -> URL? in
+                try? FileManager.default.removeItem(at: out)
+                try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+                guard (try? d.run()) != nil else { return nil }
+                JobKill.track(d.processIdentifier, wine: nil)
+                d.waitUntilExit()
+                JobKill.untrack(d.processIdentifier)
+                return d.terminationStatus == 0 ? Runner.firstExe(under: out) : nil
+            }.value
+            self.stopInstallerMeter()
+            if self.stopRequested { self.busy = false; done(.stopped); return }
+            guard let found else {
+                self.appendLine("!! could not unpack \(file.lastPathComponent) or no .exe inside it"); self.busy = false; done(.failed); return
+            }
+            self.launchInstaller(exe: found, in: install, name: nm, dataPath: dataPath, from: Self.unpackShare, cleanup: out, done: done)
         }
-        launchInstaller(exe: exe, in: install, name: nm)
     }
+
+    /// Of an installer job that starts from a zip, the unpack's share of the button's figure.
+    static let unpackShare = 0.2
+    /// Room kept free beyond what an unpack or an install is known to write.
+    static let installerMargin: Int64 = 1_000_000_000
 
     static func looksLikeZip(_ file: URL) -> Bool {
         guard let h = try? FileHandle(forReadingFrom: file) else { return false }
@@ -337,18 +1122,19 @@ final class Runner: ObservableObject {
 
     /// Run an installer the user already has on disk (their server's site, Discord, a USB stick)
     /// inside the installer prefix. Zips are unpacked first and the first .exe inside is run.
-    func runLocalInstaller(_ file: URL, in gameInstall: Install, dataPath: String, name: String) {
-        guard !busy, !running else { return }
-        busy = true
+    func runLocalInstaller(_ file: URL, in gameInstall: Install, dataPath: String, name: String,
+                           done: @escaping (InstallerOutcome) -> Void = { _ in }) {
+        if refuseWhileBusy("the installer for \(name)") { done(.failed); return }
+        beginBusy("Installing \(name)")
         Self.linkGamesFolder(name, to: dataPath, in: gameInstall)
-        ensureInstallerPrefix(gameInstall) { [weak self] install in
+        ensureInstallerPrefix(gameInstall, then: { [weak self] install in
             guard let self else { return }
             Self.linkGamesFolder(name, to: dataPath, in: install)
-            self.runDownloadedInstaller(file, in: install, name: name)
-        }
+            self.runDownloadedInstaller(file, in: install, name: name, dataPath: dataPath, done: done)
+        }, failed: { [weak self] in done(self?.stopRequested == true ? .stopped : .failed) })
     }
 
-    static func firstExe(under dir: URL) -> URL? {
+    nonisolated static func firstExe(under dir: URL) -> URL? {
         guard let e = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil) else { return nil }
         var hits: [URL] = []
         for case let u as URL in e where u.pathExtension.lowercased() == "exe" { hits.append(u) }
@@ -368,7 +1154,7 @@ final class Runner: ObservableObject {
     /// one that needs somebody sitting in front of a wine window clicking Next. Verified
     /// 2026-08-21 on Eden's `Installer.exe` (NSIS 3.06.1) and FFEra's `FFEraInstaller-Jan2023.exe`
     /// (NSIS 3.08). Note `/D=` is advisory: Eden's script overrides it and installs to its own
-    /// `C:\Eden` regardless, which is why `findInstalledClient` runs afterwards.
+    /// `C:\Eden` regardless, which is why `InstallerClient` looks for the client afterwards.
     static func isNSIS(_ exe: URL) -> Bool {
         guard let d = try? Data(contentsOf: exe, options: .mappedIfSafe) else { return false }
         let needle = Array("Nullsoft.NSIS.exehead".utf8)
@@ -378,52 +1164,134 @@ final class Runner: ObservableObject {
         return window.range(of: Data(needle)) != nil
     }
 
-    /// Where a just-run installer actually put the client: the newest folder under the prefix's
-    /// `drive_c` (or under the world's own folder) holding an Ashita launcher. Needed because an
-    /// NSIS script may ignore `/D=` entirely.
-    static func findInstalledClient(in install: Install, world: String) -> URL? {
-        let roots = [install.driveC, install.driveC.appendingPathComponent("Games")]
-        let fm = FileManager.default
-        for root in roots {
-            guard let kids = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { continue }
-            for kid in kids {
-                for probe in ["Ashita-cli.exe", "Ashita/Ashita-cli.exe", "Ashita.exe", "Ashita/Ashita.exe"]
-                where fm.fileExists(atPath: kid.appendingPathComponent(probe).path) {
-                    return kid
+    // MARK: - The installer's progress (issue #92: a disabled "Setting up…" and nothing else)
+
+    /// 0...1 while an installer job unpacks or installs, when how much it writes is known (an
+    /// archive beside it bsdtar can list); nil otherwise. Never goes back.
+    @Published private(set) var installerProgress: Double?
+    /// Bytes it has written so far, for the button when the total is not known.
+    @Published private(set) var installerWritten: Int64?
+    /// A world's installer job is running (download, unpack, install).
+    var installing: Bool { busy && busyReason.hasPrefix("Installing ") }
+    private var installerTimer: Timer?
+
+    /// Reads the free space of the volumes `watch` is on every 2 s: what went is what the job
+    /// wrote. Cheap (one statfs each) and it does not care where an installer writes, which is
+    /// the point -- Eden's writes to `C:\Eden`, not where it was asked to.
+    /// `already`: bytes of the result already on disk (a stopped run's half that this one writes over).
+    private func startInstallerMeter(watch: [URL], expected: Int64?, from start: Double, span: Double, already: Int64 = 0) {
+        installerTimer?.invalidate()
+        let baseline = InstallerClient.freeBytes(watch)
+        // Unknown total: no figure (after an unpack too), so the button counts gigabytes instead
+        // of sitting at the unpack's 20%.
+        installerProgress = expected == nil ? nil : max(installerProgress ?? 0, start)
+        installerWritten = nil
+        let t = Timer(timeInterval: 2, repeats: true) { [weak self] timer in
+            // On the main run loop already: update now, and only for the job that made this timer
+            // (a tick queued behind its end must not leave a figure on the next job).
+            MainActor.assumeIsolated {
+                guard let self, self.installerTimer === timer, self.busy else { return }
+                let w = already + InstallerClient.written(since: baseline, now: InstallerClient.freeBytes(watch))
+                if let e = expected, e > 0 {
+                    let f = start + span * min(0.99, Double(w) / Double(e))
+                    self.installerProgress = max(self.installerProgress ?? 0, f)
+                } else {
+                    self.installerWritten = w
                 }
             }
         }
-        return nil
+        RunLoop.main.add(t, forMode: .common)
+        installerTimer = t
     }
 
-    /// Called with the folder an installer left the client in, when one is found.
-    var onClientInstalled: ((URL) -> Void)? = nil
+    private func stopInstallerMeter() {
+        installerTimer?.invalidate(); installerTimer = nil
+    }
 
-    /// Start `exe` under wine in `install` and stream its output. `busy` clears when it exits.
-    private func launchInstaller(exe: URL, in install: Install, name nm: String) {
-        var args = [Install.winePath(exe, driveC: install.driveC)]
-        let silent = Self.isNSIS(exe)
-        if silent {
-            // /D must be last and unquoted -- that is NSIS's rule, not a preference.
-            args += ["/S", "/D=C:\\Games\\" + nm]
-            appendLine("==> running \(exe.lastPathComponent) in \(install.prefixName) — Nullsoft installer, running it unattended (/S). Nothing to click; this takes a while for a client-sized payload.")
-        } else {
-            appendLine("==> running \(exe.lastPathComponent) in \(install.prefixName) — install into C:\\Games\\\(nm)")
-        }
-        var env = ProcessInfo.processInfo.environment
-        env["WINEPREFIX"] = install.prefix.path; env["WINEDEBUG"] = "-all"
-        env.removeValue(forKey: "DYLD_FALLBACK_LIBRARY_PATH"); env.removeValue(forKey: "DYLD_LIBRARY_PATH")
-        spawn(install.wine, args: args,
-              env: env, cwd: exe.deletingLastPathComponent()) { [weak self] code in
+    /// Start `exe` under wine in `install` and stream its output. When it exits, the client is
+    /// looked for wherever it landed and brought into `dataPath` (InstallerClient); `busy`
+    /// clears before `done` runs. `from`: where the button's figure starts (after an unpack).
+    /// `cleanup`: the folder this job unpacked the installer into, removed once the client is in
+    /// place.
+    private func launchInstaller(exe: URL, in install: Install, name nm: String, dataPath: String,
+                                 from start: Double, cleanup: URL?, done: @escaping (InstallerOutcome) -> Void) {
+        let data = dataPath.isEmpty ? nil : URL(fileURLWithPath: dataPath)
+        // The world's folder first: a shortfall message names it.
+        let watch = (data.map { [$0] } ?? []) + [install.driveC]
+        let driveC = install.driveC
+        Task { [weak self] in
+            let (expected, before, already) = await Task.detached(priority: .userInitiated) {
+                (InstallerClient.payloadBytes(beside: exe, ownFolder: cleanup != nil), InstallerClient.snapshot(driveC: driveC),
+                 InstallerClient.alreadyThere(driveC: driveC, world: nm))
+            }.value
             guard let self else { return }
-            self.busy = false
-            self.appendLine("==> installer exited \(code)")
-            guard let found = Self.findInstalledClient(in: install, world: nm) else {
-                if silent { self.appendLine("!! \(nm)'s installer finished but no client folder was found under \(install.driveC.path). Check the log above.") }
-                return
+            if self.stopRequested { self.busy = false; done(.stopped); return }
+            if let need = expected, let short = InstallerClient.shortfall(need: need + Self.installerMargin, at: watch) {
+                self.appendLine("!! \(nm)'s install needs about \(InstallerClient.gigabytes(need)) free on \(InstallerClient.volumeName(short.volume)); \(InstallerClient.gigabytes(short.free)) is free.")
+                self.busy = false; done(.failed); return
             }
-            self.appendLine("==> \(nm)'s client is at \(found.path)")
-            self.onClientInstalled?(found)
+            var args = [Install.winePath(exe, driveC: install.driveC)]
+            let silent = Self.isNSIS(exe)
+            if silent {
+                // /D must be last and unquoted -- that is NSIS's rule, not a preference -- and wine
+                // quotes an argument with a space in it, so such a name gets the installer's own folder.
+                args.append("/S")
+                if !nm.contains(" ") { args.append("/D=C:\\Games\\" + nm) }
+                self.appendLine("==> running \(exe.lastPathComponent) in \(install.prefixName) — Nullsoft installer, running it unattended (/S). Nothing to click; this takes a while for a client-sized payload.")
+            } else {
+                self.appendLine("==> running \(exe.lastPathComponent) in \(install.prefixName) — install into C:\\Games\\\(nm)")
+            }
+            var env = ProcessInfo.processInfo.environment
+            env["WINEPREFIX"] = install.prefix.path; env["WINEDEBUG"] = "-all"
+            env.removeValue(forKey: "DYLD_FALLBACK_LIBRARY_PATH"); env.removeValue(forKey: "DYLD_LIBRARY_PATH")
+            if let data { InstallerClient.repointLinks(driveC: driveC, world: nm, to: data) }
+            self.jobWine = .init(server: install.wineserver, prefix: install.prefix)
+            let began = Date()
+            self.startInstallerMeter(watch: watch, expected: expected, from: start, span: 1 - start, already: already)
+            self.spawn(install.wine, args: args, env: env, cwd: exe.deletingLastPathComponent()) { [weak self] code in
+                guard let self else { return }
+                self.stopInstallerMeter()
+                let stopped = self.stopRequested
+                // A silent NSIS run says how it went (0 = installed). A window-driven installer's or a
+                // launcher's exit code means nothing; what it left decides.
+                let failed = !stopped && silent && code != 0
+                if !stopped { self.appendLine("==> installer exited \(code)") }
+                Task { [weak self] in
+                    let (client, lines) = await Task.detached(priority: .userInitiated) { () -> (URL?, [String]) in
+                        var lines: [String] = []
+                        // Stopped or failed: nothing is adopted, and whatever it wrote is marked so no
+                        // later look takes a half-written client for a finished one.
+                        if stopped || failed {
+                            InstallerClient.markIncomplete(driveC: driveC, world: nm, before: before, began: began)
+                            return (nil, lines)
+                        }
+                        guard let found = InstallerClient.find(driveC: driveC, world: nm, dataPath: data, before: before)
+                        else { return (nil, lines) }
+                        var now = data.map { InstallerClient.adopt(found, into: $0) { lines.append($0) } } ?? found
+                        // Not brought over (a name already there): the world keeps playing the client it has.
+                        if let d = data, now.path != d.path, InstallerClient.holdsClient(d) { now = d }
+                        // The unpacked installer is this job's own copy; the client is never inside it.
+                        if let c = cleanup, now.path != c.path, !now.path.hasPrefix(c.path + "/") {
+                            try? FileManager.default.removeItem(at: c)
+                        }
+                        return (now, lines)
+                    }.value
+                    guard let self else { return }
+                    lines.forEach { self.appendLine($0) }
+                    self.busy = false
+                    if stopped { done(.stopped); return }
+                    if failed {
+                        self.appendLine("!! \(nm)'s installer stopped with an error (exit \(code)). Press the button to run it again.")
+                        done(.failed); return
+                    }
+                    guard let client else {
+                        self.appendLine("!! No game files appeared after \(nm)'s installer ran. If it came in a .zip, pick the .zip itself, or unzip all of it and pick the installer inside.")
+                        done(.failed); return
+                    }
+                    self.appendLine("==> \(nm)'s client is at \(client.path)")
+                    done(.installed(client))
+                }
+            }
         }
     }
 
@@ -438,7 +1306,7 @@ final class Runner: ObservableObject {
                 ?? (FileManager.default.isExecutableFile(atPath: dev.path) ? dev : nil) else {
             appendLine("!! retail-client.sh not found in the bundle"); return
         }
-        busy = true
+        beginBusy("Downloading \(s.name)")
         Self.linkGamesFolder(s.name, to: s.dataPath, in: gameInstall)
         ensureInstallerPrefix(gameInstall) { [weak self] ip in
             guard let self else { return }
@@ -446,42 +1314,82 @@ final class Runner: ObservableObject {
             self.appendLine("==> retail client for \(s.name) into \(s.dataPath) (Square Enix's 7.7 GB download, then PlayOnline's update — leave this running)")
             var env: [String: String] = [:]
             env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")
+            self.jobWine = .init(server: ip.wineserver, prefix: ip.prefix)
             self.spawn(URL(fileURLWithPath: "/bin/zsh"),
                        args: [script.path, ip.wrapper.path, ip.prefixName, s.dataPath, s.name],
-                       env: env, cwd: script.deletingLastPathComponent()) { [weak self] code in
+                       env: env, cwd: Self.scratchDir) { [weak self] code in
                 self?.busy = false
                 self?.appendLine("==> retail install exited \(code)")
+                self?.reportFailure(code, "\(s.name) install failed — Open log in Setup & Diagnostics")
             }
         }
     }
 
-    /// Stop whatever is running in the installer prefix.
-    func cancelInstaller(_ gameInstall: Install) {
-        let ip = gameInstall.installerPrefix
-        let k = Process(); k.executableURL = ip.wineserver; k.arguments = ["-k"]; k.environment = ["WINEPREFIX": ip.prefix.path]
-        try? k.run()
-        appendLine("==> installer prefix stopped")
-    }
-
     /// Fresh HorizonXI client into `dir` via their published torrent + updates (update-client.sh install).
-    func installHorizon(into dir: URL) {
-        if refuseWhileBusy("the HorizonXI client install") { return }
-        guard let script = Self.updateScript() else { return }
-        busy = true
+    func installHorizon(into dir: URL, done: @escaping (Bool) -> Void = { _ in }) {
+        if refuseWhileBusy("the HorizonXI client install") { done(false); return }
+        // Files behind a drive that is gone cannot be fetched into: say so before anything is
+        // written (update-client.sh checks again, for the CLI).
+        if let d = Preflight.unavailableDrive(for: dir.appendingPathComponent("SquareEnix/FINAL FANTASY XI").path) {
+            appendLine("!! " + Preflight.driveMessage(d)); done(false); return
+        }
+        guard let script = Self.updateScript() else {
+            appendLine("!! update-client.sh not found in the bundle"); done(false); return
+        }
+        beginBusy("Downloading")
+        // The same progress readout as an update (and the same Stop).
+        updatingHorizon = true
+        beginProgress(.horizonInstall)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         appendLine("==> installing HorizonXI into \(dir.path) (9.4 GB torrent — leave this running)")
-        var env: [String: String] = [:]
-        env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")
         spawn(URL(fileURLWithPath: "/bin/zsh"), args: [script.path, "install", dir.path],
-              env: env, cwd: script.deletingLastPathComponent()) { [weak self] code in
-            self?.busy = false; self?.appendLine("==> install exited \(code)")
+              env: Self.downloadEnvironment(), cwd: Self.scratchDir) { [weak self] code in
+            self?.busy = false
+            self?.updatingHorizon = false
+            self?.appendLine("==> install exited \(code)")
+            self?.reportFailure(code, "HorizonXI download didn't finish — press Setup again to resume")
+            done(code == 0)
+        }
+    }
+
+    /// `scripts/game-wine.sh` ships next to install.sh in the bundle.
+    static func gameWineScript() -> URL? {
+        if let u = Bundle.main.url(forResource: "game-wine", withExtension: "sh") { return u }
+        return devScript("game-wine.sh")
+    }
+
+    /// Setup's game-Wine step: athei's pinned wine-coop into `<folder>/wine-coop` (game-wine.sh
+    /// install), its download's progress on the button and the same Stop as a HorizonXI
+    /// download. A Stop or a dropped connection resumes on the next press.
+    func installGameWine(into folder: URL, done: @escaping (Bool) -> Void) {
+        if refuseWhileBusy("the game's Wine") { done(false); return }
+        if let d = Preflight.unavailableDrive(for: folder.path) {
+            appendLine("!! " + Preflight.driveMessage(d)); done(false); return
+        }
+        guard let script = Self.gameWineScript() else {
+            appendLine("!! game-wine.sh not found in the bundle"); done(false); return
+        }
+        beginBusy("Downloading the game's Wine")
+        updatingHorizon = true
+        beginProgress(.gameWine)
+        appendLine("==> installing the game's Wine into \(folder.path)")
+        // The pin is the script's own: its test-only overrides never come from this app.
+        var env = Self.downloadEnvironment()
+        for k in ["HXI_GAME_WINE_URL", "HXI_GAME_WINE_BYTES", "HXI_GAME_WINE_SHA256"] { env[k] = "" }
+        spawn(URL(fileURLWithPath: "/bin/zsh"), args: [script.path, "install", folder.path],
+              env: env, cwd: Self.scratchDir) { [weak self] code in
+            self?.busy = false
+            self?.updatingHorizon = false
+            self?.appendLine("==> game wine exited \(code)")
+            self?.reportFailure(code, "The game's Wine didn't install — press Setup again")
+            done(code == 0)
         }
     }
 
     func runCatsEyeLauncher(_ gameInstall: Install, dataPath: String = "") {
         Self.linkGamesFolder("CatsEyeXI", to: dataPath, in: gameInstall)
-        guard !busy, !running else { return }
-        busy = true
+        if refuseWhileBusy("the CatsEyeXI launcher") { return }
+        beginBusy("Running CatsEyeXI's launcher")
         ensureInstallerPrefix(gameInstall) { [weak self] ip in
             self?.busy = false
             Self.linkGamesFolder("CatsEyeXI", to: dataPath, in: ip)
@@ -497,36 +1405,208 @@ final class Runner: ObservableObject {
                 ?? (FileManager.default.isExecutableFile(atPath: dev.path) ? dev : nil) else {
             appendLine("!! catseye-launcher.sh not found in the bundle"); return
         }
-        busy = true
+        beginBusy("Running CatsEyeXI's launcher")
+        jobWine = .init(server: install.wineserver, prefix: install.prefix)
         appendLine("==> CatsEyeXI launcher in \(install.prefixName)")
         spawn(URL(fileURLWithPath: "/bin/zsh"),
               args: [script.path, install.wrapper.path, install.prefixName],
-              env: [:], cwd: script.deletingLastPathComponent()) { [weak self] code in
+              env: [:], cwd: Self.scratchDir) { [weak self] code in
             self?.busy = false
             self?.appendLine("==> CatsEyeXI launcher exited \(code)")
+            self?.reportFailure(code, "CatsEyeXI's launcher failed — Open log in Setup & Diagnostics")
         }
     }
 
+    struct LaunchGate {
+        var refusal: String?
+        var snapshot = LiveClients.Snapshot()
+        var clientsLive = false
+        var gameFilesLive = false
+        var rendererStep = RendererSetup.Step.stopAndApply
+        /// The sync mode the client must use: the running wineserver's when there is one.
+        var sync = MultiWorld.SyncMode.off
+    }
+
+    /// Everything that would refuse a launch, checked before anything is written. The caller
+    /// runs it first, for an early answer; `launch` runs it again under the launch lock and only
+    /// then makes the caller's writes to shared client files (pivot.ini, the boot profile; its
+    /// `beforeLaunch`).
+    /// `sync` is the mode this world would like; `msyncAllowed` is false for a world whose
+    /// client dies with msync on (Server.msync).
+    func gate(_ install: Install, renderer: Renderer, sync: MultiWorld.SyncMode = .off,
+              msyncAllowed: Bool = true, profile: String, world: String, host: String,
+              maxClients: Int, snapshot: LiveClients.Snapshot? = nil,
+              prefixEvidence: [pid_t: String]? = nil) -> LaunchGate {
+        if running { return LaunchGate(refusal: "\(session.isEmpty ? world : session) is already running.") }
+        guard WorldPrefix.ready(install) else {
+            return LaunchGate(refusal: "Set up multi-server play for this world before pressing Play.")
+        }
+        // Every client shares this prefix and, usually, this game folder. Everything that would
+        // stop the wineserver or pull files out from under a running client is gated on this.
+        var g = LaunchGate(snapshot: snapshot ?? LiveClients.snapshot(), sync: sync)
+        let hosts = [host] + [Credentials.bootServer(in: install, profile: profile)].compactMap { $0 }
+        if let why = Self.duplicateRefusal(world: world, hosts: hosts, maxClients: maxClients,
+                                           clients: g.snapshot.clients, install: install) {
+            g.refusal = why; return g
+        }
+        let local = prefixEvidence.map { PrefixScope.clients(g.snapshot.clients, prefix: install.prefix, groupPrefixes: $0) }
+            ?? prefixClients(g.snapshot, install: install)
+        g.clientsLive = MultiWorld.clientsLive(local,
+                                              otherSessionsPlaying: othersPlaying(in: install))
+        g.gameFilesLive = g.clientsLive || sharedGameClients(g.snapshot, install: install)
+        let dataPath = OwnWine.resolve(install.gameDir.path)
+        if Self.playing.filter({ $0.key != ObjectIdentifier(self) }).values.contains(where: {
+            $0.gameDir == dataPath && $0.renderer != nil && $0.renderer != renderer
+        }) {
+            g.refusal = "This client folder is already using another graphics mode. Use the same mode for worlds sharing game files."
+            return g
+        }
+        // msync/esync belong to the wineserver every client shares; see MultiWorld.SyncMode.
+        if g.clientsLive {
+            let running = LiveClients.runningSyncMode(prefix: install.prefix.path,
+                                                      wineservers: g.snapshot.wineservers)
+            let d = MultiWorld.syncDecision(want: sync, running: running, msyncAllowed: msyncAllowed, world: world)
+            if let why = d.refusal { g.refusal = why; return g }
+            g.sync = d.use
+        }
+        g.rendererStep = RendererSetup.step(for: renderer,
+                                            current: g.clientsLive ? RendererSetup.current(install) : nil,
+                                            clientsLive: g.clientsLive)
+        if case .refuse(let why) = g.rendererStep { g.refusal = why; return g }
+        // GameRegistry.point re-registers through wine and then stops the wineserver. A world whose
+        // client takes its registry and COM from Sandbox reads none of it, so it starts beside a
+        // client whatever the registry names (b80, Daniel 2026-10-25: AscensionXI beside HorizonXI).
+        // Nothing is re-pointed for it: with a client live the renderer step is never stopAndApply.
+        if g.clientsLive, GameRegistry.current(install) != install.squareEnixWine,
+           !Sandbox.suppliesRegistry(install, profile: profile) {
+            g.refusal = "\(world) plays from \(install.squareEnixWine), but the running world's "
+                      + "registry names \(GameRegistry.current(install) ?? "another folder"). "
+                      + "Stop the other world first; the game folder cannot change under a running client."
+        }
+        return g
+    }
+
+    /// Returns why the launch was refused, or nil once it is under way.
+    @discardableResult
     func launch(_ install: Install, perf: PerfSettings, profile: String = "horizonxi.ini",
-                useX87: Bool = true, world: String = "", addonPolicy: AddonPolicy = .unknown) {
-        guard !running else { return }
+                useX87: Bool = true, world: String = "", host: String = "",
+                maxClients: Int = 1, msyncAllowed: Bool = true,
+                addonPolicy: AddonPolicy = .unknown,
+                beforeLaunch: () -> Void = {}) -> String? {
+        let worldName = world.isEmpty ? "Vana'diel" : world
+        guard let lock = LaunchLock.acquire() else {
+            // Another game starting, a Repair/update, or a Stop's wineserver flush, in this
+            // window or another launcher. The caller shows it; the strip would repeat it.
+            let why = "Busy — try Play again in a few seconds"
+            logFileOnly("!! " + why)
+            return why
+        }
+        // Handed off once the game is spawned: see LaunchLock.release(_:whenVisible:).
+        var lockHandedOff = false
+        defer { if !lockHandedOff { LaunchLock.release(lock) } }
+        let wantSync = MultiWorld.syncMode(msync: perf.msync, esync: perf.esync)
+        let g = gate(install, renderer: perf.renderer, sync: wantSync, msyncAllowed: msyncAllowed,
+                     profile: profile, world: worldName, host: host, maxClients: maxClients)
+        if let why = g.refusal {
+            logFileOnly("!! " + why)
+            return why
+        }
+        // A Stop's wineserver wait is still stuck past its limit (a flush on a dropped drive).
+        // With no client live this launch stops that same wineserver on the main thread (the
+        // renderer step, then `wineserver -w`) and the window would hang on it: refuse instead.
+        if !g.clientsLive, WineserverStopWait.anyStuck {
+            let why = "Wine is still closing from the last game — try Play again in a minute."
+            logFileOnly("!! " + why)
+            return why
+        }
+        // The startup check can still be between its stale read and maintenance lock when
+        // someone clicks Play. Check again while holding the launch lock: never hand a stale
+        // prefix to Wine, whose own update opens a foreground progress window.
+        if Self.prefixStale(install) {
+            let why = g.clientsLive
+                ? "Finish the running game before Wine updates its configuration, then press Play."
+                : "Updating Wine first — press Play again when it finishes."
+            logFileOnly("i  " + why)
+            if !g.clientsLive {
+                // Runs after this call returns and its defer releases the launch lock.
+                Task { await syncPrefixIfStale(install) }
+            }
+            return why
+        }
+        // The caller's writes to shared client files (pivot.ini branding, the boot profile's
+        // account line), now that the lock is held and the gate has passed: a refused launch
+        // rewrites nothing another world is using. Before `hostKey`, which reads the `--server`
+        // this writes.
+        beforeLaunch()
+        let clientsLive = g.clientsLive
+        let rendererStep = g.rendererStep
+        let live = g.snapshot.byHost
         running = true
+        launchGeneration += 1
+        // What the loader will really be given, for the fallback in `sessionPIDs`.
+        hostKey = LiveClients.normalize(Credentials.bootServer(in: install, profile: profile) ?? host)
+        launchHasAccount = Credentials.bootHasAccount(in: install, profile: profile)
+        Runner.playing[ObjectIdentifier(self)] = Playing(world: worldName, host: hostKey,
+                                                         prefix: OwnWine.resolve(install.prefix.path),
+                                                         gameDir: OwnWine.resolve(install.gameDir.path), renderer: perf.renderer)
         loginFailure = ""
         currentInstall = install
         currentProfile = profile
-        currentWorld = world.isEmpty ? "Vana'diel" : world
+        currentWorld = worldName
+        sessionGroup = nil
+        groupHeldLoader = false
+        serverLost = false
+        serverHolder = nil
+        loaderUpSince = nil
+        sessionServerDir = nil
+        sessionPaths = []
+        clearStopState()
+        preexistingPIDs = Set(live[hostKey] ?? [])
+        if !live.isEmpty { appendLine("==> also running: \(Self.describe(live))") }
         // The renderer lives in the prefix's registry and DLLs, not in the environment, so it has
         // to be written before the process starts — and after any wineserver holding the old copy
         // of the registry has exited.
         // A wrapper that has been copied or moved still has its dylib links aimed at the old
         // copy; fix that before anything tries to load one. See relinkStrayDylibs.
-        RendererSetup.relinkStrayDylibs(install) { [weak self] in self?.appendLine($0) }
-        RendererSetup.apply(perf.renderer, to: install) { [weak self] in self?.appendLine($0) }
-        // Same moment, same reason: the registry has to name *this* world's SquareEnix folder.
-        GameRegistry.point(install) { [weak self] in self?.appendLine($0) }
+        if g.snapshot.clients.isEmpty { RendererSetup.relinkStrayDylibs(install) { [weak self] in self?.appendLine($0) } }
+        if rendererStep == .stopAndApply {
+            RendererSetup.apply(perf.renderer, to: install, sharedGameLive: g.gameFilesLive,
+                                sharedRuntimeLive: !g.snapshot.clients.isEmpty) { [weak self] in self?.appendLine($0) }
+            // Same moment, same reason: the registry has to name *this* world's SquareEnix folder.
+            GameRegistry.point(install) { [weak self] in self?.appendLine($0) }
+        } else {
+            logFileOnly("renderer: \(perf.renderer.title) already set up; left alone for the running world")
+            RendererSetup.ensureFiles(perf.renderer, for: install, sharedGameLive: g.gameFilesLive) { [weak self] in self?.appendLine($0) }
+        }
+        // b70: what a Wine session that already died left running ends before a new one starts
+        // beside it (2026-10-16 16:37: five of the 14:15 session's programs were still spinning
+        // next to the new session). Decided under the launch lock this launch holds, by a scan
+        // that stops at `staleEndLimit` and is dropped unless it finished by then; the signals,
+        // with their 1.5 s grace, go from a task of their own and never hold up Play (b70
+        // review: the grace used to block the window). One line to launcher.log.
+        let staleDirs = Runner.serverDirs.union([Leftovers.serverDir(forPrefix: install.prefix.path)].compactMap { $0 })
+        let staleUntil = DispatchTime.now() + Self.staleEndLimit
+        let staleScan = Leftovers.Flagged()
+        let scanned = Self.finishes(within: Self.staleEndLimit) {
+            staleScan.result = Leftovers.flagStale(dirs: staleDirs, lockHeld: true) {
+                Leftovers.stale(LiveClients.snapshot(), dirs: $0, until: staleUntil)
+            }
+        }
+        let staleFlagged = scanned ? staleScan.result : []
+        if !staleFlagged.isEmpty {
+            Task.detached(priority: .utility) {
+                let ended = Leftovers.signalStale(staleFlagged, grace: 1.5)
+                if !ended.isEmpty { await MainActor.run { Runner.appendToLogFile(Leftovers.endedLine(ended)) } }
+            }
+        }
         Self.cleanStaleWineSockets()
         gameExe = Credentials.bootLoaderName(in: install, profile: profile) ?? "horizon-loader.exe"
         Self.currentGameExe = gameExe
+        // Start warm: the pipelines this Mac has already built, in any install, go into this
+        // prefix's DXVK state cache before DXVK reads it. Only with no client running anywhere:
+        // a running DXVK appends to that file. See DXVKStateCache.
+        if !clientsLive, perf.renderer == .metal { warmDXVKCache(install, exe: gameExe) }
+        GraphicsSettings.shared?.write(to: install, profile: profile)
         Credentials.applyIniOverrides(perf.renderer.iniOverrides, to: install, profile: profile)
         // Launching with Sandbox loaded and its interface bypass off produces the worst failure
         // this project has: a clean login followed by a silent exit, no window, no error. Put it
@@ -546,42 +1626,100 @@ final class Runner: ObservableObject {
             appendLine("==> local world: no graphics settings yet, seeding 640x480 "
                        + "(change them in Graphics; they will be kept)")
         }
-        // Every launch: make sure no addon can take the LuaJIT trace-patch fault that Ashita 4.3
-        // hits on this Mac (see LuaJITGuard). Idempotent, so this is cheap after the first run.
-        LuaJITGuard.apply(install) { [weak self] in self?.appendLine($0) }
+        // The game in its own titled window on every world (GraphicsSettings.windowedOnMac): a
+        // borderless mode from the world's own profile cannot be moved, resized or fitted here.
+        if let was = GraphicsSettings.makeWindowed(install, profile: profile) {
+            logFileOnly("==> window mode: windowed (the profile had \(was)); on the Mac the game needs its own titled window")
+        }
+        // A window bigger than this screen opens cut down on one side and FFXI draws it squeezed;
+        // open it whole, same shape (WindowMemory.playSettings). Logged to launcher.log only.
+        if let limit = WindowMemory.screenLimit(scale: WindowMemory.scale(for: install)),
+           let g = GraphicsSettings.read(from: install, profile: profile, fallback: GraphicsSettings.load(world: worldName)),
+           let n = WindowMemory.playSettings(g, stored: GraphicsSettings.stored(forWorld: worldName), limit: limit) {
+            let ui: Set<String> = n.uiWidth != g.uiWidth || n.uiHeight != g.uiHeight ? ["0037", "0038"] : []
+            n.write(to: install, profile: profile, only: n.sizeKeys.union(ui))
+            logFileOnly("==> game window \(g.width)x\(g.height) on a \(limit.width)x\(limit.height) screen: opening at \(n.width)x\(n.height)")
+        }
         // Cutscene narration, if the user asked for it: install VanaVoice's addon and start the
         // narrator. Never fatal -- a failure here leaves the game exactly as silent as before.
         Narration.prepare(install, enabled: perf.narrateCutscenes, policy: addonPolicy,
-                          profile: profile) { [weak self] in self?.appendLine($0) }
+                          profile: profile, othersLive: g.gameFilesLive) { [weak self] in self?.appendLine($0) }
+        if perf.narrateCutscenes, Narration.allowed(by: addonPolicy), Narration.narratorAvailable {
+            Runner.narratorStarted = true
+        }
+        // Quest guide, same policy gate as narration: LSB / unrestricted only; scrubbed on
+        // allowlist worlds. Never fatal.
+        Guide.prepare(install, enabled: perf.enableVanaguide, policy: addonPolicy,
+                      profile: profile, othersLive: g.gameFilesLive) { [weak self] in self?.appendLine($0) }
+        CursorFix.prepare(install, policy: addonPolicy, profile: profile,
+                          othersLive: g.gameFilesLive) { [weak self] in
+            self?.appendLine($0)
+        }
+        // Frame-rate monitors never load on a hosted world, even if they were switched on earlier.
+        if addonPolicy.isRestricting {
+            var items = AddonSuite.scan(install, profile: profile)
+            let off = items.indices.filter {
+                items[$0].enabled && AddonPolicy.localOnly.contains(AddonPolicy.normalize(items[$0].name))
+            }
+            if !off.isEmpty {
+                for k in off { items[k].enabled = false }
+                if AddonSuite.write(items, to: install, profile: profile) {
+                    appendLine("==> fps monitor: off on this world (local server only)")
+                }
+            }
+        }
+        // Every launch: make sure no allowed addon can take the LuaJIT trace-patch fault that Ashita 4.3
+        // hits on this Mac (see LuaJITGuard). Idempotent, so this is cheap after the first run.
+        LuaJITGuard.apply(install, policy: addonPolicy) { [weak self] in self?.appendLine($0) }
         appendLine("==> launching \(install.bootProfileName(profile)) (Ashita \(install.ashitaGeneration.rawValue))")
-        // Make the Dock tile say which world is running, under this project's own icon.
-        DockIcon.apply(to: install, world: world.isEmpty ? "Vana'diel" : world) { [weak self] in self?.appendLine($0) }
-        var env = perf.environment(for: install, x87: useX87)
+        // Make the Dock tile say which world is running, under this project's own icon. The
+        // wrapper is one bundle for every world, so with several playing it names them all.
+        let playingWorlds = Set(Runner.playing.values.map(\.world)).sorted().joined(separator: " + ")
+        DockIcon.apply(to: install, world: playingWorlds) { [weak self] in self?.appendLine($0) }
+        // x87 acceleration on every macOS version: the best in-world numbers on record were
+        // taken on macOS 27.0 with it on, and stock Rosetta is ~11 fps in-world. What is guarded
+        // instead is the one bad case, a hook that does not attach (X87Guard): once recorded, this
+        // macOS build + sidecar pairing runs stock Rosetta from the next launch on.
+        // FFXI_ON_MAC_X87=0 forces it off; =1 forces it on past a recorded failure.
+        let x87Override = ProcessInfo.processInfo.environment["FFXI_ON_MAC_X87"]
+        let x87Broken = useX87 && x87Override == nil
+            && X87Sidecar.coopBinary().map { X87Guard.isBroken(sidecar: $0) } == true
+        let x87Enabled = X87Guard.enabled(worldAllows: useX87, override: x87Override, brokenHere: x87Broken)
+        // Looked up once: the environment (WINE_DISABLE_NX_COMPAT) and the command must agree on it.
+        let gameWine = X87Sidecar.patchedWine()
+        // The size the client is started at, read after the Play-time fit above may have changed
+        // it: the game window is kept at exactly that shape (GameWindow).
+        let gameSize = GameWindow.launchSize(install, profile: profile)
+        var env = perf.environment(for: install, x87: x87Enabled, world: worldName, gameWine: gameWine != nil,
+                                   gameSize: gameSize)
+        if let shape = env[GameWindow.aspectKey] {
+            logFileOnly("i  window shape: kept at \(shape) when the game window is resized")
+        }
+        if !x87Enabled {
+            env.removeValue(forKey: "ROSETTA_X87_PATH")
+            env.removeValue(forKey: "ROSETTA_DISABLE_AOT")
+        }
+        if x87Broken {
+            logFileOnly("i  x87: standard Rosetta; the sidecar did not attach on macOS \(X87Guard.osBuild()) "
+                        + "with this sidecar (FFXI_ON_MAC_X87=1 retries it)")
+        }
+        if g.sync != wantSync {
+            env["WINEMSYNC"] = g.sync == .msync ? "1" : "0"
+            env["WINEESYNC"] = g.sync == .esync ? "1" : "0"
+            appendLine("i  sync: \(g.sync.rawValue), not \(wantSync.rawValue), to match the wineserver "
+                       + "the running world already started (a client that disagrees with it exits at start-up)")
+        }
         // The tile the *wine process* wears: CrossOver wine's CX_ROOT icon fallback, since the
         // loader has no icon resource of its own. See DockIcon.cxRoot.
         if env["CX_ROOT"] == nil, let cx = DockIcon.cxRoot(for: world.isEmpty ? "Vana'diel" : world,
                                                           log: { [weak self] in self?.appendLine($0) }) {
             env["CX_ROOT"] = cx.path
         }
-        // x87 acceleration, two generations:
-        //  * Cooperative (preferred): x87sidecar --cooperative launching the patched CX wine
-        //    (athei/wine-build at COOP_WINE). Every wine process — including horizon-loader,
-        //    a *grandchild* via Ashita — does its own handshake and flushes its own i-cache,
-        //    which is the only reliable way since macOS 26.5.2's Rosetta. No entitlements.
-        //  * attach-by-pid (legacy, x87sidecar_entitled in Resources): broken on 26.5.2 —
-        //    cross-process i-cache flush is unreliable, the client page-faults minutes after
-        //    attach. Kept only as a fallback for older macOS; the binary is currently NOT
-        //    bundled for that reason.
-        // ROSETTA_DISABLE_AOT only pays off when a sidecar actually patches x87; without one
-        // it forces Rosetta's slow path and costs ~half the stock frame rate (measured
-        // 2026-08-19: ~5 fps vs ~11 stock). Set it only when acceleration will engage.
-        // A world may have to run without x87 acceleration (see Server.x87).
-        // x87 acceleration rides on ROSETTA_X87_PATH now (set in PerfSettings.environment), so
-        // there is nothing to wrap here: wine re-execs every i386 process through the sidecar
-        // itself, including the client Ashita spawns. See Settings.swift for the measurements.
+        // The patched wine re-execs i386 children through the cooperative sidecar via
+        // ROSETTA_X87_PATH; see docs/X87-SIDECAR.md.
         if !useX87 {
             appendLine("i  x87 acceleration is off for this world — its client exits at boot with it on.")
-        } else if X87Sidecar.coopBinary() == nil {
+        } else if x87Enabled && X87Sidecar.coopBinary() == nil {
             appendLine("!! x87sidecar-coop missing from the bundle — the client will run at "
                        + "Rosetta's stock x87 speed (single-digit fps in-world).")
         }
@@ -599,29 +1737,34 @@ final class Runner: ObservableObject {
         // `injector.exe <profile>.xml`. Same shape, different names — see Install.AshitaGeneration.
         let injector = install.gameDirWine + "\\" + install.ashitaCLI.lastPathComponent
         let bootFile = install.bootProfileName(profile)
-        if let wine = X87Sidecar.patchedWine() {
+        if let wine = gameWine {
             // Not about x87: the wrapper's own wine exits one second after login. See
             // X87Sidecar.patchedWine.
             exe = wine
             args = [injector, bootFile]
             appendLine("==> wine: \(wine.path)"
-                       + (useX87 && X87Sidecar.coopBinary() != nil ? " + x87 sidecar" : ""))
+                       + (x87Enabled && X87Sidecar.coopBinary() != nil ? " + x87 sidecar" : ""))
         } else {
             exe = install.wine
             args = [injector, bootFile]
             appendLine("!! falling back to the wrapper's own wine — expect the client to exit "
                        + "about a second after login (docs/WINE-BUILD.md)")
         }
-        // Every registry edit above (renderer, SquareEnix path) went through the *wrapper's*
-        // wine, which leaves the wrapper's wineserver alive on this prefix for ~3 s after its
-        // last client. The game runs on the cooperative wine, a different protocol -- and
-        // joining that server is "wine client error: version mismatch 856/1809" followed by a
-        // refused login (2026-08-27, two launches in a row). Wait for it to be gone first;
-        // this is a no-op when a game is already running in the prefix.
-        if RendererSetup.stopWineserver(install) {
-            appendLine("==> wrapper wineserver stopped; the game starts its own")
+        // Registry edits now use this same wine build, so they do not bounce the prefix between
+        // two wine.inf versions. Still wait for its server to flush before launching the client;
+        // never stop it when another client is running.
+        if !clientsLive, RendererSetup.stopWineserver(install, log: { [weak self] in self?.logFileOnly($0) }) {
+            appendLine("==> wineserver stopped; the game starts its own")
         }
-        spawnViaShell(exe,
+        // Watched only where the sidecar can be reached: ROSETTA_X87_PATH means nothing to the
+        // wrapper's own wine, and a check there would always "fail".
+        x87Sidecar = gameWine == nil ? nil
+            : env["ROSETTA_X87_PATH"].map { URL(fileURLWithPath: $0) }
+        x87Forced = x87Override == "1"
+        x87Settled = x87Sidecar == nil
+        x87Carry = ""
+        loaderSeenAt = nil
+        let spawned = spawnViaShell(exe,
               args: args,
               env: env,
               cwd: install.gameDir) { [weak self] code in
@@ -633,41 +1776,500 @@ final class Runner: ObservableObject {
             self?.appendLine("==> injector exited \(code)")
             self?.watchGameProcess()
         }
+        if spawned == nil { x87Settled = true }
+        // Keep other launches out until a scan can see this one.
+        if let pid = spawned {
+            lockHandedOff = true
+            LaunchLock.release(lock, whenVisible: pid, group: sessionGroup)
+            // b70: the server folder this session's wineserver will hold, and where its prefix
+            // and wine really are, while every path still resolves.
+            keepSpawnFacts(Self.spawnFacts(install))
+        }
+        return nil
+    }
+
+    /// The loader's `--server`, normalised; what this session's pids are filed under.
+    private var hostKey = ""
+    /// The process group this launch's spawn started in; see LiveClients. nil until the spawn,
+    /// and for good if the spawned process was gone before its group could be read.
+    private var sessionGroup: pid_t? {
+        didSet { Runner.playing[ObjectIdentifier(self)]?.group = sessionGroup }
+    }
+    /// `sessionGroup` has been seen holding this session's loader. Until then the session is
+    /// also tracked by host; see MultiWorld.sessionPIDs.
+    private var groupHeldLoader = false {
+        didSet { Runner.playing[ObjectIdentifier(self)]?.groupHeldLoader = groupHeldLoader }
+    }
+    /// Only for the no-group fallback: clients of the same host already running when this
+    /// session started. Never this session's to watch or stop.
+    private var preexistingPIDs: Set<pid_t> = []
+    /// Bumped by every launch, so a Stop that is still waiting can tell the session has since
+    /// been started again.
+    private var launchGeneration = 0
+
+    /// Other sessions' groups: never this session's to watch or stop.
+    private var otherGroups: Set<pid_t> {
+        Set(Runner.playing.filter { $0.key != ObjectIdentifier(self) }.values.compactMap(\.group))
+    }
+
+    /// This session's client pids (injector, loader, sidecar), and nobody else's.
+    private func sessionPIDs(in scanned: LiveClients.Snapshot? = nil) -> [pid_t] {
+        let others = otherGroups
+        let snap = scanned ?? LiveClients.snapshot()
+        if !groupHeldLoader, MultiWorld.groupHoldsLoader(sessionGroup, in: snap) { groupHeldLoader = true }
+        return MultiWorld.sessionPIDs(group: sessionGroup, groupHeldLoader: groupHeldLoader, host: hostKey,
+                                      preexisting: preexistingPIDs, otherGroups: others, in: snap)
+    }
+
+    // MARK: - x87 attach check
+
+    /// The sidecar this launch handed to wine through ROSETTA_X87_PATH, or nil when it is off.
+    private var x87Sidecar: URL?
+    private var x87Forced = false
+    /// One verdict per launch: set once the sidecar was seen live in the session, or failed.
+    private var x87Settled = true
+    /// The tail of the previous output chunk, so a marker split across two reads still matches.
+    private var x87Carry = ""
+    /// When the watch loop first saw this session's loader.
+    private var loaderSeenAt: Date?
+
+    private func checkX87Output(_ s: String) {
+        let text = x87Carry + s
+        x87Carry = String(text.suffix(200))
+        if let line = X87Guard.failure(in: text) { x87Failed(line) }
+    }
+
+    /// A minute after the loader appeared, its sidecar must still be alive in this session: a
+    /// cooperative sidecar exits only when its process does, or when it could not hook it.
+    private func checkX87Alive(snap: LiveClients.Snapshot, pids: [pid_t]) {
+        let mine = Set(pids)
+        guard snap.clients.contains(where: { $0.knownLoader && mine.contains($0.pid) }) else { return }
+        guard let seen = loaderSeenAt else { loaderSeenAt = Date(); return }
+        guard Date().timeIntervalSince(seen) >= 60 else { return }
+        let group = sessionGroup
+        if snap.sidecars.contains(where: { mine.contains($0) || (group != nil && snap.groups[$0] == group) }) {
+            x87Settled = true
+            X87Guard.clearSuspect()
+            logFileOnly("x87: sidecar live beside the client a minute after it appeared")
+        } else {
+            x87Failed("no x87 sidecar alive in this session a minute after the loader appeared",
+                      timingOnly: true)
+        }
+    }
+
+    /// Records the failure for this macOS build + sidecar and says so once. Never touches the
+    /// running client: it plays on at stock speed, and the next launch leaves the sidecar off.
+    /// `timingOnly` (no sidecar a minute in, no failure line): recorded only when the previous
+    /// checked session of this pairing showed it too; the first time goes to launcher.log.
+    private func x87Failed(_ why: String, timingOnly: Bool = false) {
+        guard !x87Settled, let sidecar = x87Sidecar else { return }
+        x87Settled = true
+        if timingOnly, !X87Guard.timingFailure(sidecar: sidecar) {
+            logFileOnly("x87: did not attach (\(why)); recorded for macOS \(X87Guard.osBuild()) "
+                        + "only if the next session shows it too")
+            return
+        }
+        X87Guard.markBroken(sidecar: sidecar)
+        logFileOnly("x87: did not attach (\(why)); recorded for macOS \(X87Guard.osBuild())")
+        appendLine(x87Forced ? "!! x87 acceleration didn't attach (FFXI_ON_MAC_X87=1 keeps trying it)."
+                             : "!! x87 acceleration didn't attach — next launch uses standard Rosetta.")
+    }
+
+    // MARK: - Wine gone under the game (b70)
+
+    /// The wineserver under this session's client died, or the drive its Wine or prefix is on
+    /// went away, while the client still ran. 2026-10-16 14:15:40: the X10 dropped off USB for
+    /// ~3 s, the wineserver died (SIGBUS on its own paged-out code) and the game froze at
+    /// character select for good, its window impossible to close; nothing on screen said so.
+    /// Wine has no way back to a server, so the button says Force Stop and Stop sends SIGKILL at
+    /// once (`stop(force:)`). Set once per launch, and it never ends anything by itself: only the
+    /// player's Stop does.
+    @Published private(set) var serverLost = false
+    /// This session's prefix's server folder (`Leftovers.serverDir`), read when it started.
+    private var sessionServerDir: String?
+    /// Realpaths of this session's prefix and of the wine it runs, read when it started: once
+    /// their volume is gone nothing on it resolves any more (`Sessions.volumeGone`).
+    private(set) var sessionPaths: [String] = []
+    /// The wineserver holding that folder's lock, as first seen once the loader had been up 30 s.
+    /// From then on the watch loop asks that process, not the lock file (`Leftovers.state`).
+    private var serverHolder: Leftovers.LockHolder?
+    /// When the watch loop first saw this session's loader.
+    private var loaderUpSince: Date?
+    /// Every server folder a session of this run started in: where `Leftovers.endStale` looks,
+    /// besides the selected prefix's own. A drive that comes back under another device number
+    /// gives its prefix a new folder; what ran in the old one is still looked for here.
+    private(set) static var serverDirs: Set<String> = []
+
+    /// What a session keeps from its start for the checks above. Reads the drive (a stat, three
+    /// realpaths).
+    nonisolated static func spawnFacts(_ install: Install) -> (serverDir: String?, paths: [String]) {
+        let paths = [install.prefix.path, install.wine.path, playWine(install).path].map(OwnWine.resolve)
+        return (Leftovers.serverDir(forPrefix: install.prefix.path), Array(Set(paths)).sorted())
+    }
+
+    private func keepSpawnFacts(_ facts: (serverDir: String?, paths: [String])) {
+        sessionServerDir = facts.serverDir
+        sessionPaths = facts.paths
+        if let d = facts.serverDir { Runner.serverDirs.insert(d) }
+    }
+
+    /// What the watch loop reads this tick: from 30 s after the loader appeared (its wineserver
+    /// is long up by then) until the server is found lost, the session's server folder, and the
+    /// wineserver already seen holding it, if one was.
+    private var serverPoll: (dir: String, first: Leftovers.LockHolder?)? {
+        guard !serverLost, let since = loaderUpSince, Date().timeIntervalSince(since) >= 30,
+              let dir = sessionServerDir else { return nil }
+        return (dir, serverHolder)
+    }
+
+    /// One tick's read for `serverPoll`, off the main actor: the folder's lock holder until one
+    /// has been seen (one open, one fcntl, one identity read), then what became of that one
+    /// (one identity read).
+    nonisolated static func readServer(_ poll: (dir: String, first: Leftovers.LockHolder?))
+        -> (found: Leftovers.LockHolder?, state: Leftovers.ServerState?) {
+        guard let first = poll.first else { return (Leftovers.lockHolder(poll.dir), nil) }
+        return (nil, Leftovers.state(of: first))
+    }
+
+    /// Each tick of the watch loop: the first wineserver seen holding the session's folder is
+    /// remembered, and that process gone while the loader is alive marks the session
+    /// (`MultiWorld.serverLost`). A read that failed decides nothing.
+    private func watchServer(snap: LiveClients.Snapshot, pids: [pid_t], found: Leftovers.LockHolder?,
+                             state: Leftovers.ServerState?) {
+        let mine = Set(pids)
+        let loaderAlive = snap.clients.contains { $0.knownLoader && mine.contains($0.pid) }
+        if loaderAlive, loaderUpSince == nil { loaderUpSince = Date() }
+        guard !serverLost else { return }
+        guard let first = serverHolder else { serverHolder = found; return }
+        if MultiWorld.serverLost(first: first, now: state, loaderAlive: loaderAlive) { markServerLost() }
+    }
+
+    /// One "!!" line, the Dock icon bounces until the launcher is brought forward (the frozen
+    /// game is usually in front of it), and Stop becomes Force Stop. Nothing is ended here.
+    /// `drive`: the volume that went away, when that is how it was found.
+    func markServerLost(drive: String? = nil) {
+        guard running, !serverLost else { return }
+        serverLost = true
+        let now = Date()
+        let pid = serverHolder.map { String($0.pid) } ?? "?"
+        let how = drive.map { "drive '\($0)' unmounted" } ?? "wineserver pid \(pid) of \(sessionServerDir ?? "?") gone"
+        logFileOnly("i  \(session): \(how) at \(Self.timeOfDay(now)), the client still running")
+        appendLine("!! " + Self.serverLostLine(at: now, drive: drive))
+        _ = NSApp?.requestUserAttention(.criticalRequest)
+    }
+
+    /// The watch loop's server check, at once: after a wake, when its own next tick may be
+    /// seconds away. Reads only (one `ps`, one identity read).
+    func checkServerNow() {
+        guard running, !serverLost, let first = serverHolder else { return }
+        Task { [weak self] in
+            let (snap, state) = await Task.detached(priority: .utility) {
+                () -> (LiveClients.Snapshot, Leftovers.ServerState) in
+                (LiveClients.snapshot(), Leftovers.state(of: first))
+            }.value
+            guard let self, self.running, !self.serverLost, self.serverHolder == first else { return }
+            let mine = Set(self.sessionPIDs(in: snap))
+            let loaderAlive = snap.clients.contains { $0.knownLoader && mine.contains($0.pid) }
+            if MultiWorld.serverLost(first: first, now: state, loaderAlive: loaderAlive) { self.markServerLost() }
+        }
+    }
+
+    /// The line said when Wine went away under the game, with when it was noticed and, when that
+    /// is how it was found, the drive.
+    nonisolated static func serverLostLine(at time: Date, drive: String? = nil) -> String {
+        let t = timeOfDay(time)
+        if let drive {
+            return "The '\(drive)' drive disconnected under the game at \(t). The game can't recover; press Force Stop."
+        }
+        return "Wine stopped under the game at \(t) — the game drive may have disconnected. "
+             + "The game can't recover; press Force Stop."
+    }
+
+    /// Local time, 24-hour, to the second, whatever the Mac's own clock format: what `pmset -g
+    /// log` prints, so a line can be matched against it.
+    nonisolated static func timeOfDay(_ time: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "HH:mm:ss"
+        return f.string(from: time)
+    }
+
+    /// launcher.log only (LauncherDelegate): the Mac going to sleep, and what was playing.
+    nonisolated static func sleepLine(at time: Date, sessions: [String]) -> String {
+        "i  sleep at \(timeOfDay(time)) with " + (sessions.isEmpty ? "no game" : sessions.joined(separator: ", "))
+    }
+
+    /// … and waking, with how long it slept; just the time when the sleep was not seen.
+    nonisolated static func wakeLine(at time: Date, sleptAt: Date?) -> String {
+        guard let s = sleptAt else { return "i  wake at \(timeOfDay(time))" }
+        return "i  wake at \(timeOfDay(time)) after \(Int((time.timeIntervalSince(s) / 60).rounded())) min"
+    }
+
+    /// … and the displays going off and on with the Mac awake: a lid closed on AC (2026-10-16,
+    /// 20:13 to 22:10) never sleeps, and the GPU reset at 21:31 came inside that window.
+    nonisolated static func displayLine(on: Bool, at time: Date, sessions: [String]) -> String {
+        "i  display \(on ? "on" : "off") at \(timeOfDay(time)) with "
+            + (sessions.isEmpty ? "no game" : sessions.joined(separator: ", "))
+    }
+
+    // MARK: - Graphics gone under the game (b70)
+
+    /// The client's GPU device is lost, which nothing brings back: MoltenVK never un-loses a
+    /// VkDevice and the HorizonXI DXVK latches the loss. 2026-10-16 21:31, lid closed on AC: a
+    /// Metal GPU recovery failed one of the game's command buffers, MoltenVK marked the device
+    /// lost, and DXVK 1.10.3 deadlocked itself; the picture froze and neither the window's close
+    /// button nor Quit did anything. b70's DXVK keeps the game running so it can be closed, but
+    /// it never draws again. Seen in the game's output (`LoaderOutput.renderEvents`); said
+    /// `renderGrace` later, so a burst of lines settles into one: Stop with one line under it,
+    /// one Dock bounce, and Stop asks nothing. Nothing is ended here.
+    private var renderLostAt: Date?
+    /// When the loss was seen, once it is said (the line under Stop carries the time).
+    @Published private(set) var renderStuckSince: Date?
+    nonisolated static let renderGrace: Double = 2
+
+    nonisolated static func renderStuck(lostAt: Date?, now: Date, grace: Double = renderGrace) -> Bool {
+        guard let lostAt else { return false }
+        return now.timeIntervalSince(lostAt) >= grace
+    }
+
+    private func noteRender(_ events: [LoaderOutput.RenderEvent]) {
+        guard running, renderLostAt == nil, events.contains(.lost) else { return }
+        let at = Date()
+        renderLostAt = at
+        logFileOnly("i  \(session): the game's GPU device was lost at \(Self.timeOfDay(at)); it can't draw again")
+        let generation = launchGeneration
+        // The launcher is behind the frozen game, where App Nap would stretch the grace.
+        let activity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep,
+                                                             reason: "The game's graphics stopped")
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Runner.renderGrace * 1_000_000_000))
+            ProcessInfo.processInfo.endActivity(activity)
+            guard let self, self.launchGeneration == generation, self.running, self.renderStuckSince == nil,
+                  let lost = self.renderLostAt, Runner.renderStuck(lostAt: lost, now: Date()) else { return }
+            self.renderStuckSince = lost
+            _ = NSApp?.requestUserAttention(.informationalRequest)
+        }
+    }
+
+    // MARK: - Stopping (b70)
+
+    /// Stop was pressed and the client is not gone yet: the button says "Stopping…", the watch
+    /// loop looks every 0.5 s instead of every 5 s, and App Nap is held off (the launcher sits
+    /// behind the game, where macOS stretches its timers). Over when the session ends, or
+    /// `stopGiveUp` seconds on, when Stop is offered again and asks nothing (`stopOutlived`).
+    @Published private(set) var stoppingGame = false
+    /// The client outlived a Stop the player already confirmed: the next one asks nothing.
+    private(set) var stopOutlived = false
+    private var stopActivity: NSObjectProtocol?
+    nonisolated static let stopGiveUp: Double = 10
+
+    private func beginStopping() {
+        guard running, !stoppingGame else { return }
+        stoppingGame = true
+        stopActivity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep,
+                                                             reason: "Stopping the game")
+        let generation = launchGeneration
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Runner.stopGiveUp * 1_000_000_000))
+            guard let self, self.launchGeneration == generation, self.running, self.stoppingGame else { return }
+            self.logFileOnly("i  \(self.session): still running \(Int(Runner.stopGiveUp)) s after Stop")
+            self.stopOutlived = true
+            self.endStopping()
+        }
+    }
+
+    private func endStopping() {
+        stoppingGame = false
+        if let a = stopActivity { ProcessInfo.processInfo.endActivity(a); stopActivity = nil }
+    }
+
+    /// A new session, or the old one over: nothing of a Stop or of lost graphics carries on.
+    private func clearStopState() {
+        endStopping()
+        stopOutlived = false
+        renderLostAt = nil
+        renderStuckSince = nil
+    }
+
+    /// Stop's signals for `mine` (pid -> group, from `MultiWorld.signalable`), the Mac injected
+    /// for the self-test. In the game's Wine SIGTERM ends a client at once (ntdll installs no
+    /// SIGTERM handler, nor does the x87 sidecar with its sampler off); the later steps are for a
+    /// process the kernel still holds. 1: SIGTERM to each, up to `step` s for all to go. 2: if
+    /// `server` names the session's wineserver (gated, `serverToInterrupt`: it serves every world
+    /// in the prefix), SIGINT + SIGCONT to it, what `wineserver -k` sends: it ends every client of
+    /// the prefix in order, SIGKILLing what is left 0.5 s on; up to `step` s more. 3: SIGKILL to
+    /// each pid still the same wine process in the same group (`stillSignalable`). At most
+    /// 2 × `step` of waiting. `force` (Force Stop, Wine gone): SIGKILL to each, nothing else,
+    /// nothing waited. Returns the signals in the order sent ("TERM 44487").
+    nonisolated static func escalateStop(_ mine: [pid_t: pid_t], force: Bool, step: Double = 1.5,
+                                         alive: (pid_t) -> Bool = { Detach.isAlive($0) },
+                                         rescan: () -> LiveClients.Snapshot = { LiveClients.snapshot() },
+                                         server: () -> pid_t? = { nil },
+                                         send: (pid_t, Int32) -> Void = { _ = kill($0, $1) },
+                                         sleep: (Double) -> Void = { Thread.sleep(forTimeInterval: $0) }) -> [String] {
+        let names: [Int32: String] = [SIGTERM: "TERM", SIGKILL: "KILL", SIGINT: "INT", SIGCONT: "CONT"]
+        var sent: [String] = []
+        func signal(_ pid: pid_t, _ sig: Int32) {
+            send(pid, sig)
+            sent.append("\(names[sig] ?? String(sig)) \(pid)")
+        }
+        let pids = mine.keys.sorted()
+        func anyAlive() -> Bool { pids.contains(where: alive) }
+        func waitGone() {
+            var waited = 0.0
+            while waited < step, anyAlive() { sleep(0.25); waited += 0.25 }
+        }
+        for pid in pids { signal(pid, force ? SIGKILL : SIGTERM) }
+        if force { return sent }
+        waitGone()
+        guard anyAlive() else { return sent }
+        if let ws = server() {
+            signal(ws, SIGINT); signal(ws, SIGCONT)
+            waitGone()
+            guard anyAlive() else { return sent }
+        }
+        let now = rescan()
+        for pid in pids where alive(pid) {
+            if let g = mine[pid], MultiWorld.stillSignalable(pid, group: g, in: now) { signal(pid, SIGKILL) }
+        }
+        return sent
+    }
+
+    /// Stop's wineserver step (`escalateStop`'s `server`): the session's wineserver, with the
+    /// launch lock that is then held until the signals are done, so no Play starts against the
+    /// dying server; nil, with nothing held, when it may not be interrupted
+    /// (`MultiWorld.mayInterruptServer`). The lock first, then the scan, as for the wineserver
+    /// flush after a Stop: scanned first, another launcher could finish a launch and let go of
+    /// the lock in between, and its client would be neither in the scan nor under way (b70
+    /// review). The holder of `dir`'s lock must be a wineserver in that scan, and the one first
+    /// seen there (`first`) if one was. `others`: this launcher's other sessions playing, as
+    /// counted when Stop was pressed (one of them launched since holds the lock or is in the
+    /// scan). The Mac injected for the self-test.
+    nonisolated static func serverToInterrupt(dir: String?, mine: Set<pid_t>, others: Int, first: Leftovers.LockHolder?,
+                                              acquire: () -> Int32? = { LaunchLock.acquire() },
+                                              release: (Int32) -> Void = { LaunchLock.release($0) },
+                                              scan: () -> LiveClients.Snapshot = { LiveClients.snapshot() },
+                                              holder: (String) -> Leftovers.LockHolder? = { Leftovers.lockHolder($0) })
+        -> (pid: pid_t, lock: Int32)? {
+        guard let dir, let lock = acquire() else { return nil }
+        let snap = scan()
+        guard let now = holder(dir), snap.wineservers.contains(now.pid),
+              MultiWorld.mayInterruptServer(snap.clients, mine: mine, otherSessionsPlaying: others,
+                                            launchUnderWay: false, first: first, now: now) else {
+            release(lock)
+            return nil
+        }
+        return (now.pid, lock)
+    }
+
+    /// After the game exits on its own or by Stop: what a Wine session that died under it left
+    /// running. Ten seconds first, for Wine's own shutdown to end its programs the normal way,
+    /// and only when no client is left anywhere, no other session of this launcher plays, no
+    /// job runs and this session has not been started again (Play does its own). The rule is
+    /// run again under the launch lock (`Leftovers.endStale`). One line to launcher.log.
+    private func endStaleAfterExit() {
+        let generation = launchGeneration
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            guard let self, self.launchGeneration == generation, !self.running,
+                  self.othersPlaying() == 0, !Runner.workInFlight else { return }
+            let dirs = Runner.serverDirs
+            let ended = await Task.detached(priority: .utility) { () -> [pid_t] in
+                guard LiveClients.snapshot().clients.isEmpty else { return [] }
+                return Leftovers.endStale(dirs: dirs)
+            }.value
+            if !ended.isEmpty { self.logFileOnly(Leftovers.endedLine(ended)) }
+        }
     }
 
     /// Poll for the client itself. Ashita-cli.exe exits seconds after a successful injection
     /// while the game carries on in horizon-loader.exe, so the injector's exit is not the game's.
+    ///
+    /// This runs for the whole session, on a Mac where the game is CPU-bound, so it is kept
+    /// cheap: one whole-Mac `ps` every 5 s (was 2 s), run off the main actor, as are the
+    /// user.reg read and the boot-profile write. An exit is noticed within about 7 s.
     private func watchGameProcess() {
+        let install = currentInstall
+        // An adopted session was not started by this run: what Play keeps at the spawn is read
+        // here instead, off the main actor with the scale (b70).
+        let needFacts = sessionServerDir == nil && sessionPaths.isEmpty
         Task { [weak self] in
+            // Wine's Retina factor, from the prefix's user.reg on the game drive.
+            let (scale, facts) = await Task.detached(priority: .utility) {
+                () -> (Int, (serverDir: String?, paths: [String])?) in
+                let scale = install.map { WindowMemory.scale(for: $0) } ?? 1
+                return (scale, needFacts ? install.map { Runner.spawnFacts($0) } : nil)
+            }.value
+            if let facts, let me = self, me.sessionServerDir == nil, me.sessionPaths.isEmpty { me.keepSpawnFacts(facts) }
             // Give the injector's child a moment to appear before deciding it never did.
             // Sample the window on the way: the last size seen is what the next launch opens
             // at (WindowMemory). Sampled on the main actor, since it reads the window server.
-            let scale = self?.currentInstall.map(WindowMemory.scale(for:)) ?? 1
-            for _ in 0..<300 {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                let pids = Self.gamePIDs()
+            for _ in 0..<120 {
+                // Every 5 s; every 0.5 s once Stop is pressed (b70), so Play is back about a
+                // second after the client ends instead of up to 7 s later.
+                for _ in 0..<10 {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    if self?.stoppingGame ?? true { break }
+                }
+                // b70: the session's wineserver, once the loader has been up 30 s: found by its
+                // server folder's lock, then watched as a process (`readServer`).
+                let poll = self?.serverPoll
+                let (snap, read) = await Task.detached(priority: .utility) {
+                    () -> (LiveClients.Snapshot, (found: Leftovers.LockHolder?, state: Leftovers.ServerState?)?) in
+                    (LiveClients.snapshot(), poll.map { Runner.readServer($0) })
+                }.value
+                guard let self else { return }
+                let pids = self.sessionPIDs(in: snap)
                 if pids.isEmpty { break }
-                if let s = await MainActor.run(body: { WindowMemory.currentSize(pids: pids, scale: scale) }) {
-                    if self?.firstWindowSize == nil { self?.firstWindowSize = s }
-                    self?.lastWindowSize = s
+                self.sessionSeenAlive = true
+                self.watchServer(snap: snap, pids: pids, found: read?.found, state: read?.state)
+                if !self.x87Settled { self.checkX87Alive(snap: snap, pids: pids) }
+                if let s = WindowMemory.currentSize(pids: pids, scale: scale) {
+                    // The window is up: "Starting…" is over (90 s is only the fallback).
+                    if self.starting { self.starting = false }
+                    if self.firstWindowSize == nil { self.firstWindowSize = s }
+                    self.lastWindowSize = s
                 }
             }
             // Two consecutive misses, because pgrep can miss the process for a beat while wine
-            // re-execs it during start-up.
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            if Self.gameIsRunning() { self?.watchGameProcess(); return }
-            await MainActor.run {
-                guard let self else { return }
-                self.running = false
-                self.appendLine("==> game exited")
-                if let f = self.firstWindowSize, let s = self.lastWindowSize, let i = self.currentInstall,
-                   let line = WindowMemory.remember(first: f, last: s, install: i,
-                                                    profile: self.currentProfile, world: self.currentWorld) {
-                    self.appendLine(line)
-                    self.windowSizeRemembered += 1
-                }
-                self.lastWindowSize = nil
-                self.firstWindowSize = nil
+            // re-execs it during start-up. After a Stop there is none to wait out (b70).
+            try? await Task.sleep(nanoseconds: self?.stoppingGame == true ? 500_000_000 : 2_000_000_000)
+            let again = await Task.detached(priority: .utility) { LiveClients.snapshot() }.value
+            guard let self else { return }
+            if !self.sessionPIDs(in: again).isEmpty { self.watchGameProcess(); return }
+            // The size goes into the boot profile before `running` drops, so a Play pressed the
+            // moment the game is gone cannot start against a half-written profile.
+            var remembered: String?
+            if let f = self.firstWindowSize, let s = self.lastWindowSize, let i = self.currentInstall {
+                let profile = self.currentProfile, world = self.currentWorld
+                remembered = await Task.detached(priority: .utility) {
+                    WindowMemory.remember(first: f, last: s, install: i, profile: profile, world: world)
+                }.value
+            }
+            // Nothing printed, nothing ever seen running, nobody pressed Stop: wine ended before
+            // Ashita's first line. b60's first Play on 2026-10-15 did exactly this, and the button
+            // just went back to Play; the second press worked. Say so, once, and keep what is known
+            // in launcher.log (docs/BETA-61.md).
+            let silent = self.gameOutputBytes == 0 && !self.sessionSeenAlive && !self.sessionExplained
+                && self.firstWindowSize == nil && self.currentInstall?.ashitaGeneration == .v4
+            self.lastWindowSize = nil
+            self.firstWindowSize = nil
+            self.running = false
+            // No verdict once the client is gone: a later Repair's output is not the sidecar's.
+            self.x87Settled = true
+            self.tailGameGone?.raise()
+            self.appendLine("==> game exited")
+            self.endStaleAfterExit()
+            if let i = self.currentInstall { self.keepDXVKCache(i) }
+            if silent {
+                self.logFileOnly("i  the injector printed nothing and no process of this launch was ever seen: "
+                                 + "wine ended before Ashita started")
+                self.appendLine("!! The game didn't start — press Play to try again.")
+            }
+            if again.clients.isEmpty, self.othersPlaying() == 0 { Runner.stopNarrator() }
+            if let line = remembered {
+                self.appendLine(line)
+                self.windowSizeRemembered += 1
             }
         }
     }
@@ -677,31 +2279,6 @@ final class Runner: ObservableObject {
     private var lastWindowSize: WindowMemory.Size?
     /// Bumped whenever a size was written back, so the Graphics panel can reload.
     @Published var windowSizeRemembered = 0
-
-    private static func gamePIDs() -> [pid_t] {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        p.arguments = ["-f", currentGameExe]
-        let out = Pipe()
-        p.standardOutput = out
-        p.standardError = Pipe()
-        guard (try? p.run()) != nil else { return [] }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        return String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline)
-            .compactMap { pid_t($0.trimmingCharacters(in: .whitespaces)) }
-    }
-
-    private static func gameIsRunning() -> Bool {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        p.arguments = ["-f", currentGameExe]
-        p.standardOutput = Pipe()
-        p.standardError = Pipe()
-        guard (try? p.run()) != nil else { return false }
-        p.waitUntilExit()
-        return p.terminationStatus == 0
-    }
 
     /// `RendererSetup.apply` just did `wineserver -k` and waited for it to actually exit, so any
     /// `server-*` socket directory left under `/tmp/.wine-<uid>/` at this point belongs to a
@@ -727,14 +2304,213 @@ final class Runner: ObservableObject {
         }
     }
 
-    func stop(_ install: Install) {
-        if let pid = gamePID, Detach.isAlive(pid) { kill(pid, SIGTERM) }
+    /// A launch this run started VanaVoice's narrator (see `launch`).
+    private static var narratorStarted = false
+
+    /// The narrator runs only alongside a game: closed once the last client is gone, on Stop or
+    /// when the game exits by itself. Never at launcher start, when a game may still be playing.
+    static func stopNarrator() {
+        guard narratorStarted else { return }
+        narratorStarted = false
+        Narration.terminateNarrator()
+    }
+
+    /// Take on a client an earlier run of this launcher started and left running (see
+    /// `Leftovers`): from here it is this session's, exactly as if this run had launched it.
+    /// The button and the RUNNING list offer its Stop, which ends its group (loader, sidecar)
+    /// and, once nothing else is left, that prefix's wineserver; the exit watcher brings the
+    /// button back when it ends. Nothing is written and nothing is signalled here.
+    /// `watch: false` is for --selftest-leftovers, which has no real client to watch.
+    func adopt(group: pid_t, host: String, world: String, install: Install, profile: String,
+               pids: [pid_t], watch: Bool = true) {
+        guard !running, !busy, group > 1 else { return }
+        launchGeneration += 1
+        hostKey = host
+        Runner.playing[ObjectIdentifier(self)] = Playing(world: world, host: host, group: group,
+                                                         prefix: OwnWine.resolve(install.prefix.path),
+                                                         gameDir: OwnWine.resolve(install.gameDir.path),
+                                                         renderer: RendererSetup.current(install),
+                                                         groupHeldLoader: true)
+        running = true
+        // It is long past starting: no "Starting…", and no "didn't start" line when it ends.
+        starting = false
+        sessionGroup = group
+        groupHeldLoader = true
+        serverLost = false
+        serverHolder = nil
+        loaderUpSince = nil
+        // Read by the watch loop, off the main actor (the prefix may be on a sleeping drive).
+        sessionServerDir = nil
+        sessionPaths = []
+        clearStopState()
+        preexistingPIDs = []
+        currentInstall = install
+        currentProfile = profile
+        currentWorld = world
+        gamePID = nil
+        loginFailure = ""
+        x87Sidecar = nil
+        x87Settled = true
+        sessionSeenAlive = true
+        sessionExplained = true
+        logFileOnly("==> \(world) was left running by an earlier launcher (pid "
+                    + pids.map(String.init).joined(separator: ",") + ", process group \(group)): adopted, Stop ends it")
+        if watch { watchGameProcess() }
+    }
+
+    /// Stop this session's own client, in the prefix it was launched in.
+    func stop(force: Bool = false) {
+        if let i = currentInstall { stop(i, force: force) }
+    }
+
+    /// Ends this session's client only. The wineserver is shared by every world in the prefix,
+    /// so it is stopped only once no client at all is left.
+    ///
+    /// `force` (b70, Force Stop, offered once `serverLost`): SIGKILL at once to the same
+    /// processes, instead of SIGTERM and what follows it. With its wineserver gone a Wine
+    /// process can run no shutdown code; on 2026-10-16 the frozen client's threads sat in a
+    /// fault loop.
+    func stop(_ install: Install, force: Bool = false) {
+        sessionExplained = true
+        // No x87 verdict on a session being ended: Stop takes the sidecar down at once while the
+        // loader can outlive SIGTERM by seconds, which the minute check would read as a failure.
+        x87Settled = true
         proc?.terminate()
-        let k = Process()
-        k.executableURL = install.wineserver
-        k.arguments = ["-k"]
-        k.environment = ["WINEPREFIX": install.prefix.path]
-        try? k.run()
+        beginStopping()
+        let generation = launchGeneration
+        Task { [weak self] in
+            // The whole-Mac `ps` off the main actor (#25); which pids are this session's is
+            // still decided here, against this session's state as it is now.
+            let snap = await Task.detached(priority: .userInitiated) { LiveClients.snapshot() }.value
+            guard let self, self.launchGeneration == generation else { return }
+            var pids = self.running ? self.sessionPIDs(in: snap) : []
+            // The injector: it exits seconds after launch and its pid is cleared then, but until
+            // that is noticed it may already belong to somebody else. `signalable` checks.
+            if let pid = self.gamePID { pids.append(pid) }
+            // Only what is provably still this session's: a wine process in its group (or, with
+            // no group, a loader of its host in no other session's group). pid -> group.
+            let mine = MultiWorld.signalable(pids, group: self.sessionGroup, host: self.hostKey,
+                                             otherGroups: self.otherGroups, in: snap)
+            if !mine.isEmpty { self.appendLine("==> \(force ? "force stopping" : "stopping") \(self.currentWorld) (pid \(mine.keys.sorted().map(String.init).joined(separator: ",")))") }
+            self.finishStop(install, mine: mine, generation: generation, force: force)
+        }
+    }
+
+    /// Stop's signals (`escalateStop`), then stop the wineserver if no client is left.
+    private func finishStop(_ install: Install, mine: [pid_t: pid_t], generation: Int, force: Bool) {
+        let dir = sessionServerDir, first = serverHolder, others = othersPlaying(), name = session
+        Task.detached {
+            // The wineserver step only for the session's own wineserver (holding its folder's
+            // lock, a wineserver in the scan, the one first seen there if one was), only with no
+            // client but this session's anywhere, no other session of this launcher playing and
+            // no launch under way: SIGINT ends every client of the prefix. The launch lock is
+            // taken before that scan and held until the signals are done (`serverToInterrupt`).
+            var held: Int32?
+            let sent = Runner.escalateStop(mine, force: force, server: {
+                guard let s = Runner.serverToInterrupt(dir: dir, mine: Set(mine.keys), others: others, first: first)
+                else { return nil }
+                held = s.lock
+                return s.pid
+            })
+            if let held { LaunchLock.release(held) }
+            let late = force ? [] : sent.filter { !$0.hasPrefix("TERM ") }
+            if !late.isEmpty {
+                await MainActor.run { [weak self] in
+                    self?.logFileOnly("i  \(name): SIGTERM was not enough: " + late.joined(separator: ", "))
+                }
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            // Decided on the main actor, where no launch of this launcher can be half-way, and
+            // under the launch lock, so no other launcher's can either. A launch that began
+            // while this Stop waited is playing, injecting or holding the lock, and keeps its
+            // wineserver.
+            await MainActor.run { [weak self] in
+                // The lock first, then the scan: taken the other way round, another launcher
+                // could finish a launch and let go of the lock in between, and its client would
+                // be neither in the scan nor under way.
+                let lock = LaunchLock.acquire()
+                var lockHandedOff = false
+                defer { if let lock, !lockHandedOff { LaunchLock.release(lock) } }
+                let left = LiveClients.snapshot().clients
+                let relaunched = self.map { $0.launchGeneration != generation } ?? false
+                let others = self?.othersPlaying() ?? Runner.playing.count
+                if !relaunched, MultiWorld.mayStopWineserver(left, otherSessionsPlaying: others,
+                                                             launchUnderWay: lock == nil) {
+                    Runner.stopNarrator()
+                    // `wineserver -w` waits for the registry flush, seconds on the x10: wait off
+                    // the main actor (#25), holding the launch lock until it is done, so a Play
+                    // pressed meanwhile is refused rather than started against a dying server.
+                    // At most 30 s: a flush stuck on a dropped drive never ends, and the lock
+                    // held for it would refuse every Play until the launcher quit.
+                    lockHandedOff = true
+                    let owner = self
+                    Task.detached(priority: .userInitiated) {
+                        let wait = WineserverStopWait()
+                        let done = Runner.finishes(within: Runner.wineserverStopLimit) {
+                            _ = RendererSetup.stopWineserver(install)
+                            wait.finish()
+                        }
+                        if let lock { LaunchLock.release(lock) }
+                        // Still stuck: Play refuses until it returns (see launch).
+                        guard !done, wait.markStuck() else { return }
+                        await MainActor.run {
+                            owner?.logFileOnly("wineserver -k/-w still running after "
+                                               + "\(Int(Runner.wineserverStopLimit)) s; launch lock released")
+                            owner?.appendLine("!! Wine is still closing from the last game; Play waits for it.")
+                        }
+                    }
+                } else if !left.isEmpty {
+                    self?.appendLine("==> wineserver left up: still running \(Runner.describe(LiveClients.byHost(left)))")
+                } else {
+                    self?.appendLine("==> wineserver left up: another launch is under way")
+                }
+            }
+        }
+    }
+
+    /// How long Stop waits for the wineserver before letting go of the launch lock.
+    nonisolated static let wineserverStopLimit: Double = 30
+
+    /// Runs `work` on its own thread and waits at most `seconds`: false when it had not returned
+    /// by then (it is left to finish, or hang, on that thread).
+    nonisolated static func finishes(within seconds: Double, _ work: @escaping @Sendable () -> Void) -> Bool {
+        let done = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            work()
+            done.signal()
+        }
+        return done.wait(timeout: .now() + seconds) == .success
+    }
+
+    /// How long Play waits for the dead-session scan (`Leftovers.flagStale`) before starting the
+    /// client anyway; the scan stops there too. The signals are not waited for.
+    nonisolated static let staleEndLimit: Double = 2
+
+    /// How long Play waits for the DXVK cache merge before starting the client without it.
+    nonisolated static let dxvkWarmLimit: Double = 3
+
+    /// `DXVKStateCache.warm`, on its own thread, waited on for at most `dxvkWarmLimit`. If it has
+    /// not finished by then it is told not to rename its file over the prefix's afterwards, so
+    /// the file DXVK opens is never replaced under it. One line to launcher.log, nothing on screen.
+    private func warmDXVKCache(_ install: Install, exe: String) {
+        let gate = DXVKStateCache.CommitGate()
+        let done = Self.finishes(within: Self.dxvkWarmLimit) {
+            gate.result = DXVKStateCache.warm(install, exe: exe, gate: gate)
+        }
+        if !done { gate.close() }
+        let name = DXVKStateCache.fileName(exe: exe)
+        logFileOnly(gate.result ?? (gate.renamed ? "dxvk cache: prefix \(name) warmed, just past the wait"
+                                                  : "dxvk cache: \(name) not warmed within \(Int(Self.dxvkWarmLimit)) s; "
+                                                    + "the client starts with the prefix's own"))
+    }
+
+    /// After a session: what DXVK built goes into the launcher's copy, off the main actor. The
+    /// prefix is only read. One line to launcher.log.
+    private func keepDXVKCache(_ install: Install) {
+        Task { [weak self] in
+            let line = await Task.detached(priority: .utility) { DXVKStateCache.keep(install) }.value
+            self?.logFileOnly(line)
+        }
     }
 
     /// See the call site in `launch`: the game must be started the way a shell starts it.
@@ -748,57 +2524,158 @@ final class Runner: ObservableObject {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
+    /// Returns the spawned pid, or nil when the spawn failed.
+    @discardableResult
     private func spawnViaShell(_ exe: URL, args: [String], env: [String: String], cwd: URL,
-                               done: @escaping (Int32) -> Void) {
+                               done: @escaping (Int32) -> Void) -> pid_t? {
         let out = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ffxi-on-mac-game-\(getpid()).log")
+            .appendingPathComponent("ffxi-on-mac-game-\(getpid())-\(Self.fileSafe(session)).log")
         FileManager.default.createFile(atPath: out.path, contents: nil)
-        let quoted = ([exe.path] + args).map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }
-            .joined(separator: " ")
         var e = ProcessInfo.processInfo.environment
         for (k, v) in env { e[k] = v }
-        // Record exactly what was spawned. Diffing this against a hand-run that works is how
-        // the launch-death and Gaia XI exits were bisected; it costs one small file per launch.
-        let spawnLog = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("HorizonXI-on-Mac/last-spawn.txt")
+        if env["ROSETTA_X87_PATH"] == nil {
+            e.removeValue(forKey: "ROSETTA_X87_PATH")
+            e.removeValue(forKey: "ROSETTA_DISABLE_AOT")
+        }
+        // Decided by PerfSettings.environment alone (extraEnv's `WINE_DISABLE_NX_COMPAT=` must
+        // turn it off), never inherited from however the launcher itself was started.
+        if env[PerfSettings.nxCompatKey] == nil { e.removeValue(forKey: PerfSettings.nxCompatKey) }
+        // The RetroAchievements key never reaches the game (or last-spawn.txt).
+        e.removeValue(forKey: RetroAchievements.envKey)
+        // Record the launch path and relevant performance settings. Diffing these against a
+        // hand-run helped bisect launch failures without retaining the full inherited environment.
+        // last-spawn.txt is always the newest launch; each session also keeps its own.
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("HorizonXI-on-Mac", isDirectory: true)
+        // Only `spawnDiagnosticKeys` are recorded, never the whole environment.
         let dump = "exe: \(exe.path)\nargs: \(args)\ncwd: \(cwd.path)\n"
-            + e.keys.sorted().map { "\($0)=\(e[$0] ?? "")" }.joined(separator: "\n") + "\n"
-        try? dump.write(to: spawnLog, atomically: true, encoding: .utf8)
+            + Self.spawnDiagnosticKeys.sorted().compactMap { key in e[key].map { "\(key)=\($0)" } }
+                .joined(separator: "\n") + "\n"
+        for name in ["last-spawn.txt", "last-spawn-\(Self.fileSafe(session)).txt"] {
+            let file = support.appendingPathComponent(name)
+            Self.writePrivateDiagnostic(dump, to: file)
+        }
         // Detached, in its own session, so quitting the launcher does not take the game with
         // it. That means no Process object and no terminationHandler -- the child is not ours
         // any more -- so the injector's exit is noticed by polling instead. See Detach.
+        gameOutputCap = LoaderOutput.RepeatCap()
+        gameOutputBytes = 0
+        sessionSeenAlive = false
+        sessionExplained = false
         guard let pid = Detach.spawn(exe, args: args, env: e, cwd: cwd, stdoutPath: out.path) else {
+            sessionExplained = true
             appendLine("!! could not start the game (posix_spawn failed)")
             Task { @MainActor in done(-1) }
-            return
+            return nil
         }
-        appendLine("==> started detached, pid \(pid)")
+        // Read now, while the spawned shell is certainly alive: everything it starts keeps this
+        // group. Never our own group, which would make Stop signal the launcher.
+        let pg = getpgid(pid)
+        sessionGroup = pg > 1 && pg != getpgrp() ? pg : nil
+        appendLine("==> started detached, pid \(pid)"
+                   + (sessionGroup.map { ", process group \($0)" } ?? "; process group unknown, tracking by host"))
         Task.detached {
             while Detach.isAlive(pid) { try? await Task.sleep(nanoseconds: 500_000_000) }
-            await MainActor.run { done(0) }
+            // The injector is gone and its pid is free for the system to hand to anything, so
+            // Stop must not signal it any more.
+            await MainActor.run { [weak self] in
+                if self?.gamePID == pid { self?.gamePID = nil }
+                done(0)
+            }
         }
         // Tail the file: poll is plenty (the pane is human-read), and unlike a pipe it cannot
-        // block the writer.
+        // block the writer. Stopped once the game has exited and the file has stopped growing,
+        // rather than ticking until the next launch.
         let handle = try? FileHandle(forReadingFrom: out)
+        let gameGone = TailStop()
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
         timer.schedule(deadline: .now() + 0.3, repeating: 0.3)
         timer.setEventHandler { [weak self] in
-            guard let d = try? handle?.read(upToCount: 1 << 16), !d.isEmpty,
-                  let s = String(data: d, encoding: .utf8) else { return }
-            Task { @MainActor in self?.appendChunk(s) }
+            guard let d = try? handle?.read(upToCount: 1 << 16), !d.isEmpty else {
+                if gameGone.claimEnd() { Task { @MainActor in self?.endTail(gameGone) } }
+                return
+            }
+            let n = d.count
+            guard let s = String(data: d, encoding: .utf8) else {
+                Task { @MainActor in self?.gameOutputBytes += n }
+                return
+            }
+            Task { @MainActor in
+                self?.gameOutputBytes += n
+                self?.appendChunk(s, capped: true)
+            }
         }
         timer.resume()
         tailTimer?.cancel()
         tailTimer = timer
+        tailGameGone = gameGone
         // The game was already started above, detached. Nothing to run here any more; the
         // detached pid is remembered so `stop` can still end the session on request.
         gamePID = pid
+        return pid
     }
 
-    /// The detached game's pid, for `stop`. Not a Process: it is not our child any more.
+    /// What last-spawn.txt records of the game's environment: only launch settings useful for a
+    /// renderer comparison. Inheriting the whole environment wrote unrelated session identifiers
+    /// and could write user-supplied secrets from extraEnv into a diagnostics file.
+    static let spawnDiagnosticKeys: Set<String> = [
+        "CX_ROOT", "D3D9_RT_READBACK_FENCE", "D3DMETAL_FRAMEWORK_PATH",
+        "DXVK_CONFIG_FILE", "DXVK_STATE_CACHE_PATH", "DYLD_FALLBACK_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
+        "FFXI_FPS_DIVISOR", "FFXI_GAMEWINDOW_HANG", "HXI_GAME_ASPECT", "HXI_WINDOW_TITLE", "LSAppNapIsDisabled",
+        "MVK_CONFIG_FAST_MATH_ENABLED", "MVK_CONFIG_RESUME_LOST_DEVICE", "MVK_CONFIG_USE_COMMAND_POOLING",
+        "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "ROSETTA_X87_PATH", "WINEDEBUG", "WINEESYNC", "WINEMSYNC", "WINEPREFIX",
+        "WINE_DISABLE_NX_COMPAT", "WINE_LARGE_ADDRESS_AWARE"
+    ]
+
+    /// Keep launch diagnostics private from their first byte, including on the first launch.
+    /// Foundation's atomic String.write creates a replacement file with default permissions
+    /// before the following chmod, briefly exposing paths and user-supplied settings.
+    private static func writePrivateDiagnostic(_ text: String, to file: URL) {
+        let temp = file.deletingLastPathComponent()
+            .appendingPathComponent(".last-spawn-\(UUID().uuidString).tmp")
+        let fd = open(temp.path, O_WRONLY | O_CREAT | O_EXCL, mode_t(0o600))
+        guard fd >= 0 else { return }
+        defer { unlink(temp.path) }
+        guard fchmod(fd, mode_t(0o600)) == 0 else { close(fd); return }
+        let data = Data(text.utf8)
+        let written = data.withUnsafeBytes { bytes -> Bool in
+            guard let base = bytes.baseAddress else { return true }
+            var offset = 0
+            while offset < bytes.count {
+                let n = write(fd, base.advanced(by: offset), bytes.count - offset)
+                if n < 0 && errno == EINTR { continue }
+                if n <= 0 { return false }
+                offset += n
+            }
+            return true
+        }
+        guard close(fd) == 0, written else { return }
+        _ = rename(temp.path, file.path)
+    }
+
+    /// Two sessions tailing one stdout file would each show the other's output.
+    private static func fileSafe(_ s: String) -> String {
+        String(s.map { $0.isLetter || $0.isNumber ? $0 : "-" })
+    }
+
+    /// The detached injector's pid, for `stop`, until it exits (seconds after launch; the
+    /// client carries on in the loader). Not a Process: it is not our child any more. Cleared
+    /// when it exits, and `stop` signals it only while it is still a wine process in this
+    /// session's group (`MultiWorld.signalable`).
     private var gamePID: pid_t?
 
     private var tailTimer: DispatchSourceTimer?
+    /// Raised by the watch loop when the game has exited; see spawnViaShell's tail.
+    private var tailGameGone: TailStop?
+
+    private func endTail(_ which: TailStop) {
+        guard tailGameGone === which else { return }
+        let rest = gameOutputCap.flush()
+        if !rest.isEmpty { tee(rest + "\n") }
+        tailTimer?.cancel()
+        tailTimer = nil
+        tailGameGone = nil
+    }
 
     private func spawn(_ exe: URL, args: [String], env: [String: String], cwd: URL,
                        done: @escaping (Int32) -> Void) {
@@ -808,6 +2685,8 @@ final class Runner: ObservableObject {
         p.currentDirectoryURL = cwd
         var e = ProcessInfo.processInfo.environment
         for (k, v) in env { e[k] = v }
+        // The RetroAchievements key never reaches the game (or last-spawn.txt).
+        e.removeValue(forKey: RetroAchievements.envKey)
         p.environment = e
         let pipe = Pipe()
         p.standardOutput = pipe
@@ -825,15 +2704,72 @@ final class Runner: ObservableObject {
             guard let s = String(data: d, encoding: .utf8) else { return }
             Task { @MainActor [weak self] in self?.appendChunk(s) }
         }
+        let wine = jobWine
         p.terminationHandler = { pr in
+            JobKill.untrack(pr.processIdentifier)
             Task { @MainActor in done(pr.terminationStatus) }
         }
         do {
             try p.run()
             proc = p
+            // Stop and Quit end it, what it started, and its Wine session (JobKill). One that
+            // already ended (its untrack ran first) is not left tracked: Quit would signal
+            // whatever reused its pid.
+            JobKill.track(p.processIdentifier, wine: wine)
+            if !p.isRunning { JobKill.untrack(p.processIdentifier) }
         } catch {
             appendLine("!! failed to start \(exe.path): \(error.localizedDescription)")
             done(-1)
         }
+    }
+}
+
+/// Shared between the main actor (which knows when the game has exited) and the log tail's
+/// timer queue (which knows when the output file has stopped growing).
+final class TailStop: @unchecked Sendable {
+    private let lock = NSLock()
+    private var gone = false
+    private var ended = false
+
+    func raise() { lock.lock(); gone = true; lock.unlock() }
+
+    /// True exactly once, the first time it is asked after `raise`.
+    func claimEnd() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard gone, !ended else { return false }
+        ended = true
+        return true
+    }
+}
+
+/// One Stop's wineserver wait. Once it outlives `Runner.wineserverStopLimit` it counts as stuck
+/// until it returns, however late. While any is stuck, `launch` refuses rather than stop the same
+/// wineserver again on the main thread, where it would hang the window.
+final class WineserverStopWait: @unchecked Sendable {
+    private static let lock = NSLock()
+    private static var stuckCount = 0
+    private var finished = false
+    private var counted = false
+
+    static var anyStuck: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return stuckCount > 0
+    }
+
+    /// The wait returned: no longer stuck.
+    func finish() {
+        Self.lock.lock(); defer { Self.lock.unlock() }
+        finished = true
+        if counted { counted = false; Self.stuckCount -= 1 }
+    }
+
+    /// The limit passed. True when it is now counted as stuck (it had not returned meanwhile).
+    @discardableResult
+    func markStuck() -> Bool {
+        Self.lock.lock(); defer { Self.lock.unlock() }
+        guard !finished, !counted else { return false }
+        counted = true
+        Self.stuckCount += 1
+        return true
     }
 }

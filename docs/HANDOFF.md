@@ -1,152 +1,167 @@
 # Handoff — read this first
 
-Updated 2026-08-14. **The 30 fps target is not met. In-world at 4K max is ~24 fps.** What *was*
-found is where the time goes: FFXI blocks on a 16x16 render-target read-back four times a frame,
-26 ms of a 40 ms frame, and that read-back decides whether entities render at all. Skipping it
-doubles the frame rate and makes NPCs blink in and out; serving a cached copy instead makes them
-vanish entirely. **Read `docs/MAX4K.md` first** -- it has the numbers, the two probes that found
-it, the retraction, and the six dead ends.
+**2026-11-24: public release is 3.11.2 build 128 (tag `v3.11.2` = `7c7824e`, also installed in
+Applications). It fixes issue #92** (a world installed from its own Windows
+installer, e.g. Eden added by hand, never found its client: Eden's installer always writes
+`C:\Eden`). Root cause, the fix, its review and the live runs: [ISSUE-92.md](ISSUE-92.md). New
+self-test `--selftest-installer`; `--selftest-installer-live <exe|zip> <world> <folder> <wrapper>
+[--stop-after s]` runs the real job on a spare wrapper. Eden's catalogue entry now points at
+Eden535 (what edenxi.com/install links). Eden is still not listed (DarkStar lineage).
 
-The rest of this file is the 2026-08-11 rewrite, which replaced a wrong renderer-bound model
-with a measured one. Its diagnosis still holds -- the renderer was never the limit -- and its
-working practices are still current. Its fps figures are superseded by MAX4K.md.
+**2026-11-20: public release is 3.11.1 build 127 (also installed in Applications).** It fixes
+issue #89: athei deleted the `cx-26.3.0-1` Wine release, so Setup now downloads a repack from this
+repo's `wine-cx-26.3.0-1` release (never mark that release latest; the updater reads
+`/releases/latest`). How it was packed and how to re-pin: [WINE-BUILD.md](WINE-BUILD.md). Open:
 
----
-
-## Daniel's goals and their honest status
-
-> "Get to 30fps by any means necessary… When we find a solution, that is when we need to move to
-> phase 2, open beta. We also need to bundle all the dependencies into a package for a less
-> computer-literate user to download and try on their own. The launcher needs to have the
-> standard login name and password section."
-
-| goal | status |
+| Item | State |
 | --- | --- |
-| **30 fps in gameplay** | **NOT MET** — ~24 fps at 4K max. Cause located precisely, not yet fixed. `docs/MAX4K.md` |
-| Understand *why* it is not 30 fps | **DONE, and it is not what we thought.** `docs/PERFORMANCE.md` |
-| Fog / correct rendering | DONE (previous session), still correct |
-| Launcher with login + password | DONE — Keychain-backed, `app/Sources/HorizonXILauncher/Credentials.swift` |
-| Notarised installer | DONE (previous session) — `HorizonXI-on-Mac-2.2.dmg` |
-| Bundle all dependencies | **UNBLOCKED this session** — the licence blocker was a misreading. `docs/BUNDLING.md` |
+| Full first-time Setup in the launcher window on a clean Mac | not tried (script-level install from the live mirror passed) |
+| In-app update 3.11 → 3.11.1 | 3.11's `--selftest-updater` accepts the image; not clicked through in the window |
+| LGPL source for the mirror | points at CodeWeavers' source and athei/mach9 tag `cx-26.3.0-1`; host a copy if either disappears |
+| athei's successor (Mach9, arm64 wine `v0.4.0`) | not evaluated as a replacement for the x86_64 build |
+| Google Drive checkout of this repo | stale at 3.10; work happens in `~/Downloads/ffxi-release-3.11/launcher` (no remote; push by URL) |
 
-Standing constraints from Daniel: no changes that can cause visual glitches; launcher must start
-the game in under 30 s; don't touch private-server code; use `/shutdown` in chat to log out,
-never `kill -9` while a character is in the world.
+**2026-10-29: launcher and VanaGuide Server-Safe beta 103 are installed in Applications;
+VanaVoice is 1.5.5. Read [CURRENT-2026-10-29.md](CURRENT-2026-10-29.md),
+[BETA-103.md](BETA-103.md) and the October 29 continuation in
+[DEPENDENCIES-2026-10-27.md](DEPENDENCIES-2026-10-27.md) first.** The installed launcher bundles
+the corrected generated route graph from VanaGuide `56c4701`. Public binary release remains
+3.10 build 68. The older state and next-step lists below are historical and must not be used
+to downgrade the local beta or repeat already-landed work.
 
----
+Updated 2026-10-24, beta 3.10 build 71 (state table); the rest as of 2026-10-14, beta 3.9 build 59. Short on purpose: what is true now, what gates a release,
+what is open. Every b59 change and the live tests it needs: [`BETA-59.md`](BETA-59.md). Ranked
+next steps: [`NEXT.md`](NEXT.md). The August handoffs (read-back diagnosis, probes, early dead
+ends) are in `archive/docs-2026-08/`.
 
-## 1. The one paragraph that matters
+## Daniel's rules (non-negotiable)
 
-FFXI on this stack is **not renderer-bound**. Draw calls cost 1.9 µs each and about 3% of a
-frame; `Present` costs 0.05 ms; everything inside DXVK adds up to a fifth of the frame at
-character select and almost nothing in the world. **Discarding every single draw call
-(`DXVK_SKIP_DRAWS=1`) makes the frame rate go down, not up.** Optimising DXVK, MoltenVK, render
-passes or draw batching cannot get to 30 fps, because they are not what the time is being spent
-on.
+- `/Applications/FFXI-on-Mac.app` is the copy Daniel plays on and must stay playable. Build
+  elsewhere (`./app/bundle.sh ~/Downloads/FFXI-build`); install with `./app/bundle.sh /Applications`
+  only when nothing runs (it refuses otherwise and archives the old bundle).
+- A logged-in character leaves only by `/shutdown` in game chat. Never kill a client, never close
+  a game Daniel is playing.
+- Addons are tested on the local LandSandBoat world only, never on a hosted server.
+- Max graphics settings only. Never trade effects or resolution for fps.
+- GitHub release at most weekly and only when stable ([`RELEASE-WHEN-STABLE.md`](../RELEASE-WHEN-STABLE.md)).
+  The launcher prompts to update only when there is an update.
+- Window text only when it is an error or an action, one short line.
+- 8 GB RAM, swap usually high: one `swift build` at a time; keep ≥8 GB disk free. Use
+  `/usr/bin/git` (Homebrew git hangs on HTTPS).
 
-In the world the client spends **~120 ms per frame doing nothing at all** — one stall per frame,
-at 13% CPU. `docs/INWORLD-STALL.md` wrote it up as a bug report with eleven hypotheses
-eliminated and put the strongest lead on FFXI's texture path through d3d8to9.
+## State
 
-**It was found on 2026-08-14, and it was none of the eleven.** The client blocks inside `Map`,
-waiting on the GPU to finish with a 16×16 render target it reads back four times a frame — a
-lens-flare visibility test. It looked like a stall "outside every D3D entry point" because the
-probes measured the *renderer* side; the waiting is on the D3D9 frontend, in
-`WaitForResource`. `DXVK_STALL_LOG` measures it directly. See `docs/MAX4K.md`.
-
----
-
-## 2. What this session actually produced
-
-**Instrumentation, which is the durable part.** Frame rate no longer has to be read off an
-overlay. Our `d3d9.dll` has six probes, all off unless their environment variable is set:
-
-| variable | what it gives you |
+| what | now |
 | --- | --- |
-| `DXVK_FPS_LOG` | CSV per second: fps, draws, render passes, barriers, submits per frame |
-| `DXVK_PRESENT_PROBE` | ms inside `Present` vs ms outside it |
-| `DXVK_DRAW_PROBE` | ms inside draws, ms inside state setters, every D3D9 call counted by kind, and a histogram of the gaps *between* our entry points attributed to the call that follows |
-| `DXVK_PASS_PROBE` | which DxvkContext operation forced each render-pass break |
-| `DXVK_FB_PROBE` | what changed about the framebuffer each time it was rebuilt |
-| `DXVK_SKIP_DRAWS` | accept draws and discard them, to price the renderer out |
-| `DXVK_STALL_LOG` | **ms per frame the client spends blocked** in `WaitForResource` / `SynchronizeCsThread`. The one that found the answer; cheap enough not to crash the client at 4K, unlike `DXVK_DRAW_PROBE` |
-| `D3D9_LOCKIMAGE_PROBE` | every texture lock that stalls, aggregated by pool/usage/format/size |
+| Public release | **3.10 build 68** (tag `v3.10` at 5f3759d, published 2026-10-16), Developer ID signed, **notarized and stapled**; `/releases/latest` serves `FFXI-on-Mac-3.10-b68.dmg` (sha256 a7c9429a…067d) under both repo names. Master = 5f3759d; PRs #36–#45 merged. Release notes: `docs/RELEASE-3.10.md` |
+| Installed `/Applications` | **3.10 b71** (local beta, installed 2026-10-24; b70 archived in `~/Downloads/FFXI-on-Mac-build/archive-apps`). Before that b70 (2026-10-17), b69, and the notarized 3.10 b68 release app (installed by hand 2026-10-16, so the b59+ in-app swap has still never run for real) |
+| Local beta b71 | 3.10 b71, branch `beta-b71` (from `beta-b70` c721e2a): **AscensionXI** as a world, its client, DATs, addons and loader from their own update channel, natively ([`ASCENSION.md`](ASCENSION.md)); a new world no longer inherits HorizonXI's saved login; `Server.loaderOptions`; LuaJIT guard vs. the sync; the Addons… sheet on their script block ([`BETA-71.md`](BETA-71.md)). 27 suites pass; one Play reached their login server with a throwaway account. Survey of every other LSB world: [`LSB-SERVERS.md`](LSB-SERVERS.md) |
+| Local beta | 3.10 b69, branch `beta-b69` (from 48719f6, `release-3.10` e441246 merged in, so the Play-time fit is 3.10's `WindowMemory.playSettings`): the game window keeps its shape when resized (`gamewindow.dylib`, `HXI_GAME_ASPECT` from the profile after the fit), and inserted dylibs are carried through the hardened x87 sidecar; the game window's title is always "FFXI on Mac" (same dylib, `HXI_WINDOW_TITLE`); Addons… opens at once with a spinner while it scans off the main actor ([`BETA-69.md`](BETA-69.md)). Not installed, not pushed, not played. Local betas are SHORT=3.10 with BUILD ≥ 69 from now on |
+| Local beta b70 | 3.10 b70, branch `beta-b70` (from `beta-b69` 5716690), after the 2026-10-16 freeze (the X10 dropped off USB at 14:15:40, the wineserver died, the game froze at character select and could not be closed): programs of a Wine session that already died are ended (Play, game exit, refresh), Wine dying under a running game is shown with one line and Force Stop, Stop is in the Dock menu and a Game menu, sleep and wake lines in launcher.log; after the 21:31 GPU reset froze the game, `MVK_CONFIG_RESUME_LOST_DEVICE=1` and a rebuilt DXVK DLL (cursor fix + device-lost fix, sha256 70ba5664…); Stop says "Stopping…" and escalates SIGTERM → the session's wineserver (gated) → SIGKILL; a lost GPU device turns the button into Stop with one line under it; `gamewindow.dylib` asks "The game isn't responding." when a frozen game ignores its close button or Quit ([`BETA-70.md`](BETA-70.md), §9 = the review). Built and self-tested 2026-10-17 (26 suites, 1016 checks; window harness 342 PASS); not run in a game, not installed, not pushed |
+| Version source | `app/VERSION` (`SHORT`, `BUILD`) |
+| GitHub | `danielalanbates/FFXI-on-Mac`. v3.9 clients still ask for `HorizonXI-on-Mac` and arrive by GitHub's rename redirect: never create a repo with the old name. The local `origin` URL still uses the old name. |
+| Working copy | `~/Downloads/hxi-work/HorizonXI-on-Mac`; siblings `vanaguide` (e2c1609) and `vanavoice` (29a8ec9) are bundled as they sit on disk (revisions recorded in Info.plist `HXIAddonRevisions`) |
+| Test Mac | M1 MacBook Pro 8 GB, macOS 27.0.1 |
+| Play stack | athei `wine-cx-26.3.0-1` (`wine-coop`, fetched by Setup via `scripts/game-wine.sh` (pinned) or found on the Mac, not shipped) + WINEMSYNC; d3d8to9 → patched DXVK 1.10.3 → MoltenVK 1.4.2; `x87sidecar-coop` on by default (b59); Ashita v4 |
 
-Plus a harness that runs a whole configuration end-to-end from one command:
-`scripts/harness/bench.py` (menus / character select) and `inworld.py` (logs a character in,
-measures, logs out with `/shutdown`).
+## Release gates (3.10 shipped 2026-10-16 with these still open; they apply to the next release)
 
-**Two real fixes.** `FFXI_FPS_DIVISOR=<n>` patches the client's frame-rate cap the way Ashita's
-`fps` addon does — with it, a frame above 30 was recorded for the first time in this project
-(33.6 fps). And `GetRasterStatus` no longer divides by a zero refresh rate.
+- The stability list in `RELEASE-WHEN-STABLE.md`, verified fresh, plus several real sessions on
+  the current beta with no manual intervention.
+- macOS 27.0.1 in-world fps, x87 on vs off (nobody has measured it since 09-27).
+- **Fresh users:** Play needs athei's wine-cx; *Install wine…* gives Sikarugir 10.0, whose wine
+  drops the client a second after login (`docs/WINE-BUILD.md`). Decide #20 (rebased) or say so
+  in the release notes.
+- Ship with `scripts/package.sh` (Developer ID + notary profile, clean siblings) and
+  `scripts/publish-release.sh` (checks only; `--yes` publishes, Daniel's call). Tag `v3.10`,
+  asset `FFXI-on-Mac-3.10-b<n>.dmg`, notarized and stapled.
+- The updater's Restart swap of `/Applications` has never run for real (needs a release newer
+  than the installed build); first line of the 3.10 notes: "Quit the game before pressing
+  Restart" (v3.9's Restart does not check).
 
-**Five things closed with evidence** so nobody re-litigates them: draw batching, render-pass
-churn, the Ashita overlay addons, FFXI's graphics settings, and the CrossOver licence blocker.
+## Open pull requests (triage 2026-10-14, nothing posted to GitHub)
 
----
+Outside PRs need the contributor licence (`CONTRIBUTING.md`, added in b59) agreed on the PR
+before merging; asking needs Daniel's OK.
 
-## 3. Corrections to what this project previously believed
+| PR | state | action |
+| --- | --- | --- |
+| #36 quiet-wine-update | installed as b58; merges cleanly into master | merge once Daniel confirms b58/b59 plays |
+| #30 multi-world, #31 RetroAchievements | already in master through #33 (90d77ba) | close as merged; the two-client live test (`docs/MULTI_WORLD_LIVE_TEST.md`) never ran |
+| #32 quiet-updater-and-vanaguide | superseded by #36; conflicts in 7 files; turns PLAY into UPDATE | close; narrator-on-exit and the asset-host check are already in b59 |
+| #35 password-json | passes `--json` where the loader's flag is `--json-file`; wrong Windows path for override folders; temp file only removed by a 180 s task | fix those, call `scrubLoginFiles`, test a login on local LSB first |
+| #17 (rdbell) `/play` → `/play-now` | applies cleanly; both URLs answer 200 | merge only after confirming which page is canonical |
+| #18, #19 (rdbell) | #18 applies with reduced context; #19 conflicts | rebase |
+| #20 (rdbell) patched-wine installer | replaces Daniel's wine candidates and hard-blocks Play without a 1 GB+ runtime | rebase: keep existing candidates first, offer the install only when none is found, free-space check, no hard block |
+| #21 (rdbell) DXVK enforce-nx | biggest measured scene-load win (time below 10 fps 24 s → 1 s, M2 Max, macOS 26.5) but replaces `x87sidecar-coop` with upstream 4e9c738 and would undo the macOS 27 change (3c7c2f6) | do not merge as is. b66 sets `WINE_DISABLE_NX_COMPAT=1` on Play (written independently; the same stall, BETA-66.md); only if the patch still wins on top of that, take only the patch and a rebuilt dll |
+| #22 (rdbell) | ~29k lines, stacked on #20/#21 | after those |
+| #23, #28 (rdbell) docs | apply cleanly | merge after the licence agreement |
+| #24 (rdbell) era label | the same change landed in b59 (2e80269) | close with credit |
+| #26 (rdbell) cmdpipe | runs commands from world-writable `/tmp`, no hosted gate | dev tool only: per-user `$TMPDIR`, never bundled, local LSB only |
+| #9 release-check | stale paragraph; superseded by `publish-release.sh` | rebase or close |
+| Daniel's #4, #7, #8, #10, #11, #15, #16 (August) | open | triage separately |
 
-- **"Batching draws gets us to 30 fps" (`BATCHING.md`)** — no. The 9.9× instancing ratio was
-  real but it was solving the wrong problem. Draws are 3% of the frame.
-- **"Disabling Ashita's 22 overlay addons is the most promising thing left"** — they never load.
-  Ashita.dll is plugin interface **4.16**, every bundled plugin is **4.15**, so `PluginManager`
-  rejects all of them including the `Addons` Lua host. Every measurement this project has ever
-  taken was already addon-free. (Worth fixing for Daniel's actual gameplay: none of his addons
-  work.)
-- **"~11–29k draw calls/sec is a fixed ceiling"** — it is not a ceiling, it is a by-product.
-  Frame time is a large fixed cost plus a small per-draw one.
-- **"Bundling is blocked because the wrapper is CrossOver-derived"** — the wrapper's *engine* is
-  `wine-10.0 (Sikarugir)`, LGPL, and the MoltenVK it loads is the stock Khronos build. The
-  CrossOver leftovers (`moltenvkcx`, `wine.cx32bak`, `prefixcx24`, ~845 MB) are unused. See
-  `docs/BUNDLING.md`.
-- **"CPU 0% idle, so we are CPU-bound"** — in the world the process is at **13% of one core**.
+## Performance
 
----
+A/B list (local LSB only, max settings, same scene, `/shutdown` between runs, ≥3 runs each,
+medians and ranges; check swap and Low Power Mode first; `FFXI_ON_MAC_FPSLOG=1`, rows with >800
+draws). Recipes: `BETA-59.md` › Performance.
 
-## 4. Where to pick this up
+1. x87 sidecar on (default) vs `FFXI_ON_MAC_X87=0`, macOS 27.0.1.
+2. ~~`WINE_DISABLE_NX_COMPAT=1`~~ settled, and the default since b66 (`BETA-66.md`). The
+   "FFXI's exes are already NX_COMPAT" doubt written here was wrong: the exes are, but
+   FFXiMain.dll, FFXi.dll, polhook.dll, app.dll and polcore.dll are not, and this Wine turns
+   no-execute off for the whole process when any module lacks the flag. Measured live
+   2026-10-15: ~85-94k page faults/s without it, ~3k with it. Reported upstream as
+   athei/wine-build#3 (rdbell, same ratios); the cx-26.3.0-6 release notes carry the fix.
+3. #21's enforce-nx DXVK patch alone, in a rebuilt dll, keeping our `x87sidecar-coop`. Now only
+   worth measuring against b66 (variable on): #21 addressed the same stall from inside DXVK.
+4. `d3d9.maxFrameLatency = 1` in `vendor/dxvk.conf` (every harness 4K number used it; Play never did).
+5. `MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION=1` (pipeline-compile stalls).
+6. Cold Play-to-window time and beach-balls vs b58 (#25).
 
-1. **Make the read-back wait cheap instead of skipping it.** The 26 ms is spent waiting for a
-   whole frame of queued GPU work to drain before the copy lands. Issue the copy at the top of
-   the frame, or on a dedicated queue, so it has completed by the time the game locks it. That is
-   exact rather than approximate, and it is the whole remaining gap to 45+ fps.
-2. **Phase 2 packaging** on the `docs/BUNDLING.md` plan: first-run download of a pinned
-   Sikarugir engine, our DLLs inside the app, game data from HorizonXI's own installer.
-3. **The launcher's first-run Downloads prompt.** It still asks for access to the Downloads
-   folder before the user has pressed anything, and three attempts did not find what is asking.
-   For a package aimed at non-technical users this matters more than it sounds. See the comment
-   on `Install.tccGatedNames`.
-4. **Upstream the DXVK fixes** (`docs/UPSTREAM.md`). They are correct, small, and affect every
-   D3D9 game on Metal. The read-back one is a semantic change and belongs upstream as an option,
-   not as a default.
+The worst collapses on record (0.4–5 fps) were swap (local LSB alongside on 8 GB) and background
+indexing / Apple Intelligence asset installs (`docs/CHECKPOINT-2026-09-26.md`), not the renderer.
+Whether Low Power Mode was on then is unknown (logs rotated); b59 warns about it at Play.
 
-Do not promise 30 fps in beta notes. The honest line is: rendering is correct, the world runs at
-~24 fps at 4K with every setting at maximum on an M1 with 8 GB, and the single thing standing
-between that and roughly double is a read-back the game blocks on four times a frame.
+**Measured dead ends, do not re-propose:** read-back NOWAIT / shadow / EARLY / EARLY_FENCE /
+PERIODIC_FLUSH / UNBIND_FLUSH / dedup; a second queue (MoltenVK has one); fence spin; MVK prefill;
+`MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS=0`; `DXVK_EARLY_BUFFER_COPY`; `DXVK_KEEP_DEPTH`; removing
+render-pass spills; vsync off / presentInterval 0; 3 back buffers; timer resolution; batching /
+instancing; lower quality or resolution; msync off; `X87_FAST_ROUND=2`; the x87 control word;
+attach-by-pid on 26.5.2+; wrapping wine in the sidecar or hand-set `ROSETTA_DISABLE_AOT`;
+wine32on64; WineHQ 11; Whisky; Sikarugir wine for Play; DXVK 2.x/3.x (no geometry shaders on
+Metal); D3DMetal; dgVoodoo2; wined3d Vulkan/OpenGL; removing Ashita; d3d8to9 state filtering;
+the upstream sidecar (not faster offline); the
+old CrossOver MoltenVK on macOS 27. Numbers: `MAX4K.md`, `PERFORMANCE.md`, `X87-SIDECAR.md`,
+`MACOS-27-PERFORMANCE.md`.
 
----
+## Pathways (open, not started)
 
-## 5. Working practices that cost time to learn
+- Fresh-user wine: #20 rebased as above, or a pinned athei wine-cx download with an external-drive
+  option.
+- Passwords: off the loader command line (#35, once fixed) and into the Keychain (`RAKeychain`
+  pattern); today they sit in `accounts.json` (0600) and the boot `.ini`.
+- `x87sidecar-coop`'s macOS 27 change has no source or patch in the repo: recover it before the
+  next Rosetta update breaks it.
+- `launch()` off the main actor (#25): order and plan in `BETA-59.md` › Deferred.
+- Personal data still in the tree or history: character name "Murn" and `docs/img/murn-*.png`,
+  `/Users/daniel` paths (harness profiles, results JSON, scripts), volume names in
+  `X87Sidecar.swift`/`Install.swift`, the login name inside the archived 2.7 app binary, and the
+  removed CatsEye scripts in history. Keeping or rewriting history (`git filter-repo` + force
+  push, irreversible) is Daniel's call.
+- `archive/` holds ~50 MB of old apps, DMGs and DLLs: move to a release asset or external archive.
 
-- **Install `d3d9.dll` to all five paths** or you silently test the old build. Use
-  `scripts/harness/install-d3d9.sh`.
-- **`patches/dxvk-1.10.3-horizonxi.patch` is the whole thing** — apply it alone to a clean
-  `v1.10.3` checkout. The three older patches are in `archive/2026-08-11/patches/` and will
-  conflict.
-- **Driving the game:** `CGEventPostToPid` does not work; the window needs real focus. Keystrokes
-  do land even when `NSWorkspace.frontmostApplication` reports another app, so don't trust that
-  as a gate — drive the scene by the measured draw count instead (`bench.py --heavy-draws`).
-- **Never send blind Return presses in-world.** A previous session opened the auction house that
-  way and reached a transaction-fee confirmation.
-- **`/shutdown` sometimes needs a second attempt.** `inworld.py` retries; check `logged_out` in
-  its result and log out by hand if it is false. A character left online is the one real risk in
-  this harness.
-- **Never rewrite `user.reg`/`system.reg` by parsing and re-emitting them.** It cost an hour
-  here: the `DllOverrides` section stopped being readable, wine silently substituted its builtin
-  d3d8, DXVK stopped loading, and the game still launched and rendered — so the only symptom was
-  that every measurement came back empty. Check with `WINEDEBUG=+module`: a healthy prefix logs
-  `get_load_order_value got standard key n for L"*d3d8"`, a broken one logs
-  `get_load_order got hardcoded default`. Snapshot both hives first.
-- **The character-select background is a valid oracle** — full textured landscape on a working
-  build, black silhouette under a correct sky on a broken one. No login needed.
-- Launch time is 30–31 s to window: ~14 s wine/Ashita, ~16 s FFXI+DXVK init.
+## Working practices that cost time to learn
+
+- **Never rewrite `user.reg`/`system.reg` by parsing and re-emitting them.** `DllOverrides`
+  stopped being readable, wine fell back to its builtin d3d8, DXVK never loaded, and the game
+  still rendered, so every measurement came back empty. The launcher only reads hives and changes
+  them through `wine reg`. Check with `WINEDEBUG=+module`; snapshot both hives first.
+- `--play` must be started through `open`, not by running the binary (`docs/WINE-BUILD.md`).
+- Run-to-run spread is ~7 fps: single runs prove nothing. Confirm the code path actually ran
+  before believing a null result.
+- `/shutdown` sometimes needs a second try; check the character really left.
+- Never send blind Return presses in-world (it once reached an auction-house fee confirmation).
+  Driving the game needs real window focus; `CGEventPostToPid` does not work.
+- A crashed client can leave `winedbg --auto` behind and the next launch never renders.

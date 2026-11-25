@@ -28,9 +28,16 @@ The app is Swift (SwiftUI, built with Swift Package Manager) plus shell and Pyth
 Xcode needed — Apple's Command Line Tools are enough.
 
 ```sh
-./app/bundle.sh          # build the .app into app/build/
-./scripts/package.sh     # build the .dmg into dist/
+./app/bundle.sh ~/Downloads/FFXI-build    # build the .app there (an output folder is required)
+HXI_SIGN_ID=<Developer ID SHA-1> HXI_UNNOTARIZED=1 ./scripts/package.sh   # signed .dmg into dist/
 ```
+
+`app/VERSION` holds the version and build. `bundle.sh` refuses `/Applications` while the launcher,
+a game client or wine runs, and archives the bundle it replaces instead of deleting it.
+`package.sh` needs a Developer ID and clean `vanaguide`/`vanavoice` checkouts beside this repo.
+Releases are not notarised since 3.11 (`HXI_UNNOTARIZED=1`). Without it, `package.sh` notarises,
+which needs an active Apple Developer membership and a `notarytool` keychain profile
+(`HXI_NOTARY_PROFILE`, default `batesai-notary`).
 
 The measurement harness in [`scripts/harness/`](scripts/harness) launches the game, walks it to a
 known spot, samples the frame rate and shuts it down, so performance claims can be reproduced
@@ -45,7 +52,28 @@ A few house rules, learned the hard way:
   the dead ends on purpose so nobody walks them twice.
 - **Never commit a game file.** No client DATs, no `FFXiMain.dll`, no wrapper. They belong to
   Square Enix or to CrossOver and cannot be redistributed.
-- **Never commit an account name or password.** Credentials live in the macOS Keychain.
+- **Never commit an account name or password.** Game passwords are stored in plain text in
+  `~/Library/Application Support/HorizonXI-on-Mac/accounts.json` (mode 0600), and Play writes them
+  into the game's `config/boot/<profile>.ini` because Ashita's loader takes `--pass` on its command
+  line (visible in `ps` while it runs). Only the RetroAchievements key is in the Keychain. Moving
+  game passwords to the Keychain (the `RAKeychain` pattern in `RetroAchievements.swift`) is an
+  open pathway now that builds carry a stable Developer ID; PR #35 targets the command line.
+
+## Licence of contributions
+
+This project is PolyForm Noncommercial 1.0.0 with a commercial rider ([`LICENSE`](LICENSE)), and
+Bates LLC sells commercial licences to it. So a contribution has to come in on terms that let it
+ship under both. By opening a pull request or otherwise submitting a contribution, you:
+
+- grant Bates LLC a perpetual, worldwide, irrevocable, royalty-free, non-exclusive licence to use,
+  copy, modify, distribute and sublicense your contribution under any terms, including commercial
+  licences, plus a matching patent licence for any of your patent claims it necessarily infringes;
+- confirm it is your own work, or that you have the right to submit it on these terms, and that
+  it contains no code you copied under a licence that does not allow this;
+- keep your copyright, and may still use your own contribution however you like.
+
+Third-party code keeps its own licence: say so in the pull request and keep its licence file
+beside it (see [`LICENSING.md`](LICENSING.md)). Questions: help@batesai.org.
 
 ## Server rules
 

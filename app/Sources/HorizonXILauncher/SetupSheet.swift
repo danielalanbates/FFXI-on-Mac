@@ -1,14 +1,21 @@
 import SwiftUI
 import AppKit
-import UniformTypeIdentifiers
 
 /// First-run setup, as one button and a running log.
 ///
 /// This is the whole reason the project can be handed to someone who does not know what a wine
 /// prefix is. Everything it does is in `Bootstrap`; this is just the face of it.
+///
+/// Since b60 it is step 2 of the main button's Setup (ContentView.runSetup), after the user chose
+/// the folder (`LocationPanel`): it says where Wine and its Windows drive will go and builds
+/// nothing until "Set it up" is pressed. On success it closes itself and the main button carries
+/// on with the game's Wine and the game, into the same folder.
 struct SetupSheet: View {
-    /// Called when wine is in place, so the launcher can rescan and pick the new install up.
-    var onFinished: () -> Void
+    /// Called once: true when wine is in place (the launcher rescans and Setup carries on),
+    /// false when the sheet was cancelled.
+    var onFinished: (Bool) -> Void
+    /// Each step as it starts, for the main button's "Downloading Wine… 4%" behind the sheet.
+    var onStep: (Bootstrap.Step) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
 
     @State private var running = false
@@ -16,7 +23,11 @@ struct SetupSheet: View {
     @State private var current: Bootstrap.Step? = nil
     @State private var lines: [String] = []
     @State private var failure: String? = nil
-    @State private var gameFound = Bootstrap.install.hasGame
+    @State private var gameFound = Bootstrap.install?.hasGame ?? false
+    /// Where Wine and its Windows drive go (`Bootstrap.target`), and whether that is an existing
+    /// wrapper whose Wine is only being replaced.
+    private let location = Bootstrap.target
+    private let repairing = Bootstrap.repairsInPlace
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -27,6 +38,13 @@ struct SetupSheet: View {
                      + "five minutes. You can leave it running.")
                     .font(.callout).foregroundStyle(Vana.muted)
                     .fixedSize(horizontal: false, vertical: true)
+                Text(location == nil ? "Press Setup on the main window to choose where it goes."
+                     : repairing && Bootstrap.isBuilt(location!) ? "Wine is already in \(location!.path); only its Windows drive is made."
+                     : repairing ? "Wine is replaced in \(location!.path); its Windows drive and game stay as they are."
+                     : "Everything goes in \(location!.deletingLastPathComponent().path): Wine and its Windows drive now, the game's Wine and the game next.")
+                    .font(.system(size: 12)).foregroundStyle(Vana.text)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             VStack(alignment: .leading, spacing: 10) {
@@ -36,7 +54,7 @@ struct SetupSheet: View {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(s.title).font(.callout.weight(.medium))
                                 .foregroundStyle(current == s ? Vana.gold : Vana.text)
-                            Text(s.detail).font(.caption).foregroundStyle(Vana.muted)
+                            Text(s.detail).font(.system(size: 12)).foregroundStyle(Vana.muted)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         Spacer()
@@ -51,7 +69,7 @@ struct SetupSheet: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 2) {
                             ForEach(Array(lines.enumerated()), id: \.offset) { _, l in
-                                Text(l).font(.system(size: 11, design: .monospaced))
+                                Text(l).font(.system(size: 13, design: .monospaced))
                                     .foregroundStyle(Vana.muted)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
@@ -65,7 +83,7 @@ struct SetupSheet: View {
             }
 
             if let failure {
-                Text(failure).font(.caption).foregroundStyle(Vana.ember)
+                Text(failure).font(.system(size: 12)).foregroundStyle(Vana.ember)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -75,28 +93,23 @@ struct SetupSheet: View {
                         .foregroundStyle(Vana.text)
                     Text(gameFound
                          ? "Found FFXI in the wrapper. You are ready to play."
-                         : "FFXI is Square Enix's, so it comes from your server rather than from "
-                           + "here. Download HorizonXI's Windows installer, then hand it over "
-                           + "below — it runs inside the drive that was just created.")
-                        .font(.caption).foregroundStyle(Vana.muted)
+                         : "Close this, then press the main button to download the game.")
+                        .font(.system(size: 12)).foregroundStyle(Vana.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
             HStack {
-                if done && !gameFound {
-                    Button("Open HorizonXI's download page") {
-                        NSWorkspace.shared.open(URL(string: "https://horizonxi.com/play-now")!)
-                    }
-                    Button("Install the game…") { chooseInstaller() }
-                        .buttonStyle(.borderedProminent)
-                }
+                // b60: the HorizonXI download is the main window's button (the old installer
+                // route here needed renderer pieces a fresh wrapper does not have).
                 Spacer()
-                Button(done ? "Done" : "Cancel") { onFinished(); dismiss() }
+                // Cancel while it runs stops Setup's chain here; the build itself finishes in the
+                // background and the launcher picks it up.
+                Button(done ? "Done" : "Cancel") { onFinished(done); dismiss() }
                 if !done {
                     Button(running ? "Working…" : "Set it up") { start() }
                         .buttonStyle(.borderedProminent)
-                        .disabled(running)
+                        .disabled(running || location == nil)
                 }
             }
         }
@@ -118,6 +131,8 @@ struct SetupSheet: View {
     }
 
     private func start() {
+        // Remembered from the first write on: a build left to finish after Cancel is still found.
+        if !repairing, let w = location { InstallLocation.remember(w.deletingLastPathComponent()) }
         running = true
         failure = nil
         lines = []
@@ -125,13 +140,15 @@ struct SetupSheet: View {
             do {
                 try await Bootstrap.run(
                     log: { line in Task { @MainActor in lines.append(line) } },
-                    step: { s in Task { @MainActor in current = s } })
+                    step: { s in Task { @MainActor in current = s; onStep(s) } })
                 await MainActor.run {
                     running = false
                     done = true
                     current = nil
-                    gameFound = Bootstrap.install.hasGame
-                    onFinished()
+                    gameFound = Bootstrap.install?.hasGame ?? false
+                    // The main button carries on from here (the game, then PLAY).
+                    onFinished(true)
+                    dismiss()
                 }
             } catch {
                 await MainActor.run {
@@ -140,19 +157,6 @@ struct SetupSheet: View {
                     failure = error.localizedDescription
                 }
             }
-        }
-    }
-
-    private func chooseInstaller() {
-        let panel = NSOpenPanel()
-        panel.title = "Choose your server's Windows installer"
-        panel.allowedContentTypes = [UTType(filenameExtension: "exe") ?? .data]
-        panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let exe = panel.url else { return }
-        do {
-            try Bootstrap.runInstaller(exe, log: { l in Task { @MainActor in lines.append(l) } })
-        } catch {
-            failure = error.localizedDescription
         }
     }
 }

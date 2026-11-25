@@ -34,7 +34,7 @@ enum Sandbox {
     /// Is the Sandbox POL plugin switched on for this boot profile?
     static func isEnabled(in install: Install, profile: String) -> Bool {
         let url = install.gameDir.appendingPathComponent("config/boot/\(profile)")
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return false }
+        guard let text = Credentials.readFile(at: url) else { return false }
         var inSection = false
         for raw in TextFile.lines(of: text) {
             let t = raw.trimmingCharacters(in: .whitespaces)
@@ -49,6 +49,22 @@ enum Sandbox {
         return false
     }
 
+    /// Does this world's client take its PlayOnline paths, registry and COM from Sandbox instead of
+    /// from the prefix's registry? Sandbox's README: it "can virtualize the registry and COM
+    /// information required to load and play PlayOnline, Final Fantasy XI ... Play on as many private
+    /// servers ... with unique 'installs' as you want!" Its imports (sandbox.dll, read 2026-10-25)
+    /// are ntdll's own registry calls (NtCreateKey, NtOpenKeyEx, NtQueryKey, NtQueryValueKey,
+    /// NtSetValueKey) plus CoCreateInstance and DllGetClassObject. Under wine every registry and COM
+    /// lookup goes through those, so such a client never reads what `GameRegistry.point` wrote, and
+    /// the registry may name another world's folder while it plays. Needs Sandbox loaded and its
+    /// `[sandbox.paths]` naming both folders.
+    static func suppliesRegistry(_ install: Install, profile: String) -> Bool {
+        guard isEnabled(in: install, profile: profile),
+              let text = Credentials.readFile(at: install.gameDir.appendingPathComponent("config/boot/\(profile)"))
+        else { return false }
+        return ["pol", "ffxi"].allSatisfy { !(BootProfile.value($0, section: "sandbox.paths", in: text) ?? "").isEmpty }
+    }
+
     static func iniURL(_ install: Install) -> URL {
         install.gameDir.appendingPathComponent("config/sandbox/sandbox.ini")
     }
@@ -56,7 +72,7 @@ enum Sandbox {
     /// The current value of `use_interface_bypass`, or nil if the file or key is absent.
     /// Absent means Ashita's own default (1) applies, which is fine.
     static func interfaceBypass(_ install: Install) -> Bool? {
-        guard let text = try? String(contentsOf: iniURL(install), encoding: .utf8) else { return nil }
+        guard let text = Credentials.readFile(at: iniURL(install)) else { return nil }
         for raw in TextFile.lines(of: text) {
             let t = raw.trimmingCharacters(in: .whitespaces)
             guard !t.hasPrefix(";"), t.lowercased().hasPrefix("use_interface_bypass"),
@@ -76,7 +92,7 @@ enum Sandbox {
     @discardableResult
     static func repair(_ install: Install, log: (String) -> Void = { _ in }) -> Bool {
         let url = iniURL(install)
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return false }
+        guard let text = Credentials.readFile(at: url) else { return false }
         guard interfaceBypass(install) == false else { return false }
 
         let eol = TextFile.terminator(of: text)
@@ -91,9 +107,9 @@ enum Sandbox {
 
         let backup = url.deletingLastPathComponent().appendingPathComponent("sandbox.ini.bak")
         if !FileManager.default.fileExists(atPath: backup.path) {
-            try? text.write(to: backup, atomically: true, encoding: .utf8)
+            Credentials.writeFile(text, to: backup)
         }
-        guard (try? TextFile.join(lines, terminator: eol).write(to: url, atomically: true, encoding: .utf8)) != nil
+        guard Credentials.writeFile(TextFile.join(lines, terminator: eol), to: url)
         else { return false }
         log("sandbox: use_interface_bypass turned back on (the game exits ~2s after login without it)")
         return true

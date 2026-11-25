@@ -1,0 +1,958 @@
+{
+ "read": "2026-10-25",
+ "method": "one research agent per group, then a skeptic agent told to refute any permissive verdict; 'verified' is final",
+ "groups": [
+  {
+   "group": "A",
+   "research": {
+    "worlds": [
+     {
+      "world": "HorizonXI",
+      "verdict": "forbidden",
+      "cap": null,
+      "evidence": [
+       {
+        "url": "https://horizonxi.com/faq",
+        "quote": "Can we dual box? No, Horizon is a single box server where each IP address can only have one account tied to it.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://horizonxi.com/rules",
+        "quote": "HorizonXI is a “single box” server. Each Adventurer may only ever have one account, and each account is tied to the IP addresses that access it. An account is restricted to three (3) characters per account. Using multiple accounts on the same IP address is expressly forbidden without an IP exception. This includes account sharing on the same IP address by Adventurers who live in the same household and “functional dual boxing”.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://horizonxi.com/server-info",
+        "quote": "Accounts/characters: 1 account (no dual-box) and 3 characters per IP",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://horizonxi.com/rules",
+        "quote": "As mentioned in II, each adventurer may only ever have one account.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/SERVERS.md",
+        "quote": "| [HorizonXI](https://horizonxi.com/) | ... | :x: | :x: |  (Dual-Boxing? column = :x:)",
+        "source_kind": "third-party listing"
+       }
+      ],
+      "sources_checked": [
+       "https://horizonxi.com/",
+       "https://horizonxi.com/rules",
+       "https://horizonxi.com/faq",
+       "https://horizonxi.com/server-info",
+       "https://horizonxi.com/assets/index-DnbLEafN.js",
+       "https://wiki.horizonxi.com/",
+       "https://github.com/XiPrivateServers/Servers",
+       "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/SERVERS.md",
+       "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/servers/75_custom/horizonxi.md"
+      ],
+      "unreadable": [
+       "https://wiki.horizonxi.com/ (curl returned no connection / 000)",
+       "HorizonXI Discord rules (Discord-only, not joined)"
+      ],
+      "confidence": "high",
+      "notes": "horizonxi.com is a JS single-page app; the rule, FAQ and server-info text was read verbatim from the site's own JS bundle (/assets/index-DnbLEafN.js), which feeds /rules, /faq and /server-info. Rules say both 'one account per adventurer' and 'no dual box', so I classed it forbidden (the stricter reading). Either way the limit is 1 client per person. Other people in the same household can each play on their own account only after staff approve an IP exception filed in Discord (FAQ id same-house). That is not boxing, so the launcher should cap HorizonXI at 1 client."
+     },
+     {
+      "world": "Gaia XI",
+      "verdict": "capped",
+      "cap": 2,
+      "evidence": [
+       {
+        "url": "https://gaiaxi.com/res/info/terms.xi",
+        "quote": "Maximum 2 Accounts Per Player Players may have maximum of 2 accounts. Each account is allowed 1 character. Accounts are linked and connected by IP address, MAC address and device names. Multiple accounts created purely for sharing beginning perks with main accounts is forbidden.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://gaiaxi.com/res/info/terms.xi",
+        "quote": "Dual-Boxing Allowed Players who wish to play separate characters on separate accounts at the same time are permitted to do so. Keep in mind that Gaia XI has many features incorporated to help players diverge from using multiple characters at the same time. Please remember that tools used to automate a character are not allowed and user input is required.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://gaiaxi.com/res/info/server.xi",
+        "quote": "Multiboxing 2 Accounts",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/SERVERS.md",
+        "quote": ":heavy_check_mark:<br>_(2 active, with rules)_",
+        "source_kind": "third-party listing"
+       }
+      ],
+      "sources_checked": [
+       "https://gaiaxi.com/",
+       "https://gaiaxi.com/res/info/server.xi",
+       "https://gaiaxi.com/res/info/terms.xi",
+       "https://gaiaxi.com/res/info/guides.xi",
+       "https://gaiaxi.com/res/info/guides.xi?do=setup",
+       "https://gaiaxi.com/res/info/customcontent.xi",
+       "https://gaiaxi.com/res/info/about.xi",
+       "https://www.gaiaxi.com/rules",
+       "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/servers/75_custom/gaia.md",
+       "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/SERVERS.md"
+      ],
+      "unreadable": [
+       "https://www.gaiaxi.com/rules (404; the rules live at /res/info/terms.xi instead)",
+       "Gaia XI Discord (not joined)"
+      ],
+      "confidence": "high",
+      "notes": "Both terms entries are dated Nov 27, 2025. The limit is 2 accounts per player with 1 character each, so at most 2 clients at once. Gaia links accounts by IP, MAC address and device name. Automation tools are banned and user input is required."
+     },
+     {
+      "world": "Supernova",
+      "verdict": "capped",
+      "cap": 6,
+      "evidence": [
+       {
+        "url": "https://supernovaffxi.wordpress.com/get-started-on-supernova/server-rules/alts-multiboxing/",
+        "quote": "While multiboxing, the following activities are prohibited:",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://supernovaffxi.wordpress.com/get-started-on-supernova/server-rules/alts-multiboxing/",
+        "quote": "Playing more than 6 characters at once.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://supernovaffxi.wordpress.com/get-started-on-supernova/server-rules/alts-multiboxing/",
+        "quote": "We realize that playing a full party of 6 characters can be a fun side project, but this is all we will allow it to be.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://supernovaffxi.wordpress.com/get-started-on-supernova/",
+        "quote": "Dual/Multi-boxing is permitted, but with strict rules to follow .",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://supernovaffxi.wordpress.com/get-started-on-supernova/server-rules/",
+        "quote": "Dual/Multi-boxers operating more than one character at a time count as a single player and may be asked to relinquish a camp for a party of more than one player.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/SERVERS.md",
+        "quote": ":heavy_check_mark:<br>_(6 active, with rules)_",
+        "source_kind": "third-party listing"
+       }
+      ],
+      "sources_checked": [
+       "https://supernovaffxi.wordpress.com/",
+       "https://supernovaffxi.wordpress.com/get-started-on-supernova/",
+       "https://supernovaffxi.wordpress.com/get-started-on-supernova/server-rules/",
+       "https://supernovaffxi.wordpress.com/get-started-on-supernova/server-rules/alts-multiboxing/",
+       "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/servers/75_custom/supernova.md",
+       "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/SERVERS.md"
+      ],
+      "unreadable": [
+       "Supernova Discord discord.gg/QBBdfQh (not joined)"
+      ],
+      "confidence": "high",
+      "notes": "The cap is 6 characters at once. Activity rules also apply while boxing: no playing more than one character with other players, no HNMs/ZNMs or mobs with respawns over an hour, no Abyssea/Dynamis/Limbus/Sky/Sea, give up XP camps to non-boxers, and tell a GM your alts' names. No account limit is published, but on LSB each live client needs its own account. The launcher could show a short note that boxing rules apply. The main rules page has a crude acrostic in its heading column; it is not quoted here."
+     },
+     {
+      "world": "OmicronXI",
+      "verdict": "capped",
+      "cap": 2,
+      "evidence": [
+       {
+        "url": "https://omicronxi.fandom.com/wiki/Alt",
+        "quote": "-Currently we allow 2 active characters on at a time.",
+        "source_kind": "own wiki"
+       },
+       {
+        "url": "https://omicronxi.fandom.com/wiki/Blog:Login_changes_at_Omicron",
+        "quote": "Going forward players will be limited to 2 accounts per person (1 person per household) and a maximum of 2 connections per IP.",
+        "source_kind": "own wiki"
+       },
+       {
+        "url": "https://omicronxi.fandom.com/wiki/Blog:Login_changes_at_Omicron",
+        "quote": "Can I still multibox? Multiboxing will be limited to 2 connections per IP (dualboxing).",
+        "source_kind": "own wiki"
+       },
+       {
+        "url": "https://omicronxi.fandom.com/wiki/Blog:Login_changes_at_Omicron",
+        "quote": "Connecting with a new IP over mobile hotspot or another VPN connection is allowed and a viable way to add additional connections.",
+        "source_kind": "own wiki"
+       }
+      ],
+      "sources_checked": [
+       "https://omicronffxi.com/",
+       "https://www.omicronffxi.com/",
+       "http://omicronffxi.com/",
+       "https://web.archive.org/web/20250714052959/http://omicronffxi.com/",
+       "https://web.archive.org/web/20250714073908/http://omicronffxi.com/news.php",
+       "https://web.archive.org/web/20250714061220/http://omicronffxi.com/news.php?newsID=1",
+       "https://web.archive.org/web/20250714061213/http://omicronffxi.com/news.php?newsID=2",
+       "https://web.archive.org/web/20250714060452/http://omicronffxi.com/news.php?newsID=3",
+       "https://omicronxi.fandom.com/wiki/Connecting_to_OmicronXI",
+       "https://omicronxi.fandom.com/api.php?action=query&list=allpages (all 24 main-namespace pages listed)",
+       "https://omicronxi.fandom.com/wiki/Alt",
+       "https://omicronxi.fandom.com/wiki/Frequently_Asked_Questions",
+       "https://omicronxi.fandom.com/wiki/Starting_Out",
+       "https://omicronxi.fandom.com/wiki/Omicron_Wiki",
+       "https://omicronxi.fandom.com/wiki/Custom_Commands",
+       "https://omicronxi.fandom.com/wiki/Staff",
+       "https://omicronxi.fandom.com/wiki/Blog:Login_changes_at_Omicron",
+       "WebSearch: OmicronXI FFXI private server multiboxing rules",
+       "WebSearch: Omicron FFXI private server 99 dual box / multibox / 2 active"
+      ],
+      "unreadable": [
+       "https://omicronffxi.com/ (live site timed out over both https and http; the wiki itself says the site is 'Currently down, being worked on')",
+       "https://omicronxi.fandom.com/wiki/Connecting_to_OmicronXI via WebFetch/HTML (402/403 from Fandom; content read through the MediaWiki API instead)",
+       "Omicron Discord (not joined)",
+       "OmicronXI is not in github.com/XiPrivateServers/Servers, so there is no third-party listing to cross-check"
+      ],
+      "confidence": "medium",
+      "notes": "Two of Omicron's own wiki pages agree on 2. The 'Alt' rules page (2023-09-12, user Nidhogg007, not on the Staff page, not linked from the main page) says 2 active characters at a time. The 2021-03-29/30 'Login changes' blog by Kiuna99 sets 2 accounts per person, 1 per household and 2 connections per IP. That blog conflicts with itself: it also says extra connections over a hotspot or VPN are 'allowed', which would break the per-person account cap. I used the stricter reading. Both sources are old and the live omicronffxi.com could not be read, so the rule may have changed; confirm it in their Discord if possible. The Connecting page also lists a second Omicron server, XiOmiWeb (99/49 cap, --server xiweb.ddnsfree.com), which has no rules of its own."
+     }
+    ]
+   },
+   "verified": {
+    "worlds": [
+     {
+      "world": "HorizonXI",
+      "verdict": "forbidden",
+      "cap": null,
+      "evidence": [
+       {
+        "url": "https://horizonxi.com/faq",
+        "quote": "Can we dual box? No, Horizon is a single box server where each IP address can only have one account tied to it.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://horizonxi.com/rules",
+        "quote": "HorizonXI is a “single box” server. Each Adventurer may only ever have one account, and each account is tied to the IP addresses that access it. An account is restricted to three (3) characters per account. Using multiple accounts on the same IP address is expressly forbidden without an IP exception. This includes account sharing on the same IP address by Adventurers who live in the same household and “functional dual boxing”.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://horizonxi.com/server-info",
+        "quote": "1 account (no dual-box) and 3 characters per IP",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://horizonxi.com/rules",
+        "quote": "As mentioned in II, each adventurer may only ever have one account.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/SERVERS.md",
+        "quote": "| [HorizonXI](https://horizonxi.com/) | [Join](https://discord.gg/horizonxi) | CoP | Retail | 40 (Old Retail) | :question: _(TBD)_ | :x: | :x: |",
+        "source_kind": "third-party listing"
+       }
+      ],
+      "sources_checked": [
+       "https://horizonxi.com/rules",
+       "https://horizonxi.com/assets/index-DnbLEafN.js (SPA bundle that holds the /rules, /faq and /server-info text)",
+       "https://wiki.horizonxi.com/",
+       "https://horizonffxi.wiki/",
+       "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/SERVERS.md",
+       "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/servers/75_custom/horizonxi.md"
+      ],
+      "unreadable": [
+       "https://wiki.horizonxi.com/ (no connection, curl 000)",
+       "https://horizonffxi.wiki/ (301 redirect, not followed; community wiki, not needed)",
+       "HorizonXI Discord rules (Discord-only, not joined)"
+      ],
+      "confidence": "high",
+      "notes": "Re-verified verbatim from the live site's JS bundle (English, plus the French, Spanish and Portuguese translations of the same rule). The FAQ answers 'No' to dual boxing, and the rules also allow only one account per adventurer, so the verdict is forbidden. Even 'functional dual boxing' by a second household member is banned. VPN-based account sharing can get every account involved banned. Members of one household may each play their own account only with a staff-approved IP exception; that is not boxing. Launcher cap: 1 client."
+     },
+     {
+      "world": "Gaia XI",
+      "verdict": "capped",
+      "cap": 2,
+      "evidence": [
+       {
+        "url": "https://gaiaxi.com/res/info/terms.xi",
+        "quote": "Maximum 2 Accounts Per Player Players may have maximum of 2 accounts. Each account is allowed 1 character. Accounts are linked and connected by IP address, MAC address and device names. Multiple accounts created purely for sharing beginning perks with main accounts is forbidden.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://gaiaxi.com/res/info/terms.xi",
+        "quote": "Dual-Boxing Allowed Players who wish to play separate characters on separate accounts at the same time are permitted to do so. Keep in mind that Gaia XI has many features incorporated to help players diverge from using multiple characters at the same time. Please remember that tools used to automate a character are not allowed and user input is required.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://gaiaxi.com/res/info/server.xi",
+        "quote": "Multiboxing 2 Accounts",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://gaiaxi.com/res/info/terms.xi",
+        "quote": "Bots (software/apps outside the original software) that perform actions on your behalf are not allowed.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/SERVERS.md",
+        "quote": ":heavy_check_mark:<br>_(2 active, with rules)_",
+        "source_kind": "third-party listing"
+       }
+      ],
+      "sources_checked": [
+       "https://gaiaxi.com/",
+       "https://gaiaxi.com/res/info/terms.xi",
+       "https://gaiaxi.com/res/info/server.xi",
+       "https://gaiaxi.com/res/info/about.xi",
+       "https://gaiaxi.com/res/info/guides.xi",
+       "https://gaiaxi.com/res/info/customcontent.xi",
+       "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/SERVERS.md",
+       "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/servers/75_custom/gaia.md",
+       "WebSearch: \"Gaia XI\" FFXI dual box 2 accounts rules (no relevant hits)"
+      ],
+      "unreadable": [
+       "Gaia XI Discord (not joined)"
+      ],
+      "confidence": "high",
+      "notes": "Re-verified on the live terms page, which says 'These terms last updated Jan 21, 2026'; the account and dual-box entries are dated Nov 27, 2025. No lower cap or ban found anywhere. The limit is 2 accounts per player with 1 character each, so at most 2 clients at once. Accounts are linked by IP, MAC address and device name. Automation and bots are banned (user input required), and the add-on blocklist includes multibox helpers such as 'fastfollow' and 'cureplease', so each client must be driven by hand."
+     },
+     {
+      "world": "Supernova",
+      "verdict": "capped",
+      "cap": 6,
+      "evidence": [
+       {
+        "url": "https://supernovaffxi.wordpress.com/get-started-on-supernova/server-rules/alts-multiboxing/",
+        "quote": "While multiboxing, the following activities are prohibited:",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://supernovaffxi.wordpress.com/get-started-on-supernova/server-rules/alts-multiboxing/",
+        "quote": "Playing more than 6 characters at once.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://supernovaffxi.wordpress.com/get-started-on-supernova/server-rules/alts-multiboxing/",
+        "quote": "We realize that playing a full party of 6 characters can be a fun side project, but this is all we will allow it to be.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://supernovaffxi.wordpress.com/get-started-on-supernova/",
+        "quote": "Dual/Multi-boxing is permitted, but with strict  rules to follow .",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://supernovaffxi.wordpress.com/get-started-on-supernova/server-rules/",
+        "quote": "Dual/Multi-boxers operating more than one character at a time count as a single player and may be asked to relinquish a camp for a party of more than one player.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://supernovaffxi.wordpress.com/get-started-on-supernova/account-link/",
+        "quote": "A player may link as many Supernova server accounts to a Discord account as they wish, but each server account can only be linked to one Discord account.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://supernovaffxi.wordpress.com/about-us/dynamis/",
+        "quote": "Player Characters may not multibox in Dynamis.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/SERVERS.md",
+        "quote": ":heavy_check_mark:<br>_(6 active, with rules)_",
+        "source_kind": "third-party listing"
+       }
+      ],
+      "sources_checked": [
+       "https://supernovaffxi.wordpress.com/",
+       "https://supernovaffxi.wordpress.com/get-started-on-supernova/",
+       "https://supernovaffxi.wordpress.com/get-started-on-supernova/server-rules/",
+       "https://supernovaffxi.wordpress.com/get-started-on-supernova/server-rules/alts-multiboxing/",
+       "https://supernovaffxi.wordpress.com/get-started-on-supernova/account-link/",
+       "https://supernovaffxi.wordpress.com/about-us/dynamis/",
+       "https://supernovaffxi.wordpress.com/2022/12/30/update-notes-december-30-2022/",
+       "https://supernovaffxi.wordpress.com/2022/02/18/update-notes-february-18-2022/",
+       "https://public-api.wordpress.com/rest/v1.1/sites/supernovaffxi.wordpress.com/posts/?type=page (all 30 pages listed)",
+       "https://public-api.wordpress.com/rest/v1.1/sites/supernovaffxi.wordpress.com/posts/?search=multibox|multiboxing|dualbox|dual box|alts|per IP|accounts (site-wide search of all 54 posts and pages)",
+       "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/SERVERS.md",
+       "WebSearch: Supernova FFXI multiboxing rules 6 characters alts (no relevant hits)"
+      ],
+      "unreadable": [
+       "Supernova Discord discord.gg/QBBdfQh (not joined)"
+      ],
+      "confidence": "high",
+      "notes": "Re-verified live. The multiboxing rules page was last modified 2019-01-15 and is still the newest rule. A site-wide search found no lower cap and no account or IP limit. The account-link page says one player may hold many accounts, which fits a 6-client cap (on LSB each live client needs its own account). Boxing is also restricted by activity: no boxing with other players, no mobs with respawns over an hour, no HNMs or ZNMs, no Abyssea, Dynamis, Limbus, Sky or Sea, give up XP camps to non-boxers, and tell a GM your alts. Breaking these rules risks an IP ban. The Discord rules could not be checked; they might be stricter."
+     },
+     {
+      "world": "OmicronXI",
+      "verdict": "capped",
+      "cap": 2,
+      "evidence": [
+       {
+        "url": "https://omicronxi.fandom.com/wiki/Alt",
+        "quote": "-Currently we allow 2 active characters on at a time.",
+        "source_kind": "own wiki"
+       },
+       {
+        "url": "https://omicronxi.fandom.com/wiki/Blog:Login_changes_at_Omicron",
+        "quote": "Going forward players will be limited to 2 accounts per person (1 person per household) and a maximum of 2 connections per IP.",
+        "source_kind": "own wiki"
+       },
+       {
+        "url": "https://omicronxi.fandom.com/wiki/Blog:Login_changes_at_Omicron",
+        "quote": "Can I still multibox? Multiboxing will be limited to 2 connections per IP (dualboxing).",
+        "source_kind": "own wiki"
+       },
+       {
+        "url": "https://omicronxi.fandom.com/wiki/Blog:Login_changes_at_Omicron",
+        "quote": "Connecting with a new IP over mobile hotspot or another VPN connection is allowed and a viable way to add additional connections.",
+        "source_kind": "own wiki"
+       }
+      ],
+      "sources_checked": [
+       "https://omicronffxi.com/",
+       "http://omicronffxi.com/",
+       "https://www.omicronffxi.com/",
+       "https://web.archive.org/cdx/search/cdx?url=omicronffxi.com* (all 26 captures, all from July 2025)",
+       "https://web.archive.org/web/20250714052959/http://omicronffxi.com/",
+       "https://web.archive.org/web/20250714072027/http://omicronffxi.com/index.php",
+       "https://web.archive.org/web/20250714073908/http://omicronffxi.com/news.php",
+       "https://web.archive.org/web/20250714061220/http://omicronffxi.com/news.php?newsID=1",
+       "https://web.archive.org/web/20250714061213/http://omicronffxi.com/news.php?newsID=2",
+       "https://web.archive.org/web/20250714060452/http://omicronffxi.com/news.php?newsID=3",
+       "https://omicronxi.fandom.com/api.php?action=query&list=allpages (24 main-namespace pages)",
+       "https://omicronxi.fandom.com/api.php?action=query&list=recentchanges",
+       "https://omicronxi.fandom.com/wiki/Alt",
+       "https://omicronxi.fandom.com/wiki/Blog:Login_changes_at_Omicron",
+       "https://omicronxi.fandom.com/wiki/Login_changes_are_in_the_air_at_Omicron (redirect to the blog)",
+       "https://omicronxi.fandom.com/wiki/Frequently_Asked_Questions",
+       "https://omicronxi.fandom.com/wiki/Omicron_FAQ:_Frequently_Asked_Questions (redirect to the FAQ)",
+       "https://omicronxi.fandom.com/wiki/Connecting_to_OmicronXI",
+       "https://omicronxi.fandom.com/wiki/Talk:Connecting_to_OmicronXI",
+       "https://omicronxi.fandom.com/wiki/Starting_Out",
+       "https://omicronxi.fandom.com/wiki/Omicron_Wiki",
+       "https://omicronxi.fandom.com/wiki/Main_Page (redirect)",
+       "https://omicronxi.fandom.com/wiki/Staff",
+       "https://omicronxi.fandom.com/wiki/Custom_Commands",
+       "https://api.github.com/repos/XiPrivateServers/Servers/git/trees/main?recursive=1 (no Omicron entry)",
+       "WebSearch: Omicron FFXI private server multibox dual box accounts per IP",
+       "WebSearch: \"OmicronXI\" OR \"Omicron XI\" FFXI 99 private server",
+       "WebSearch: reddit FFXIPrivateServers Omicron server dualbox"
+      ],
+      "unreadable": [
+       "omicronffxi.com live site (no connection on https, http or www; the wiki's main page says 'Currently down, being worked on'). Wayback snapshots from 2025-07-14 hold only placeholder news, with no rules text.",
+       "Omicron Discord (not joined)",
+       "No third-party listing found: not in XiPrivateServers, and web searches returned nothing about Omicron"
+      ],
+      "confidence": "medium",
+      "notes": "Wiki text and revision data were re-verified through the MediaWiki API. The Alt page was last edited 2023-09-12 by Nidhogg007, the Login changes blog 2021-03-30 by Kiuna99. Both own-wiki sources give 2, and no lower cap or ban was found. The blog conflicts with itself: its hotspot/VPN line seems to allow more connections from other IPs, but the same blog's 2-accounts-per-person rule and the later 2-active-characters rule both cap a person at 2. I kept the stricter reading, capped at 2. Under the blog, a household on one IP gets only 1 account per person. All evidence is 2 to 4 years old and the live site is down, so the rule could have changed in Discord. The wiki also lists a second Omicron server, XiOmiWeb (99/49 cap, --server xiweb.ddnsfree.com), with no rules of its own; apply the same cap of 2."
+     }
+    ]
+   }
+  },
+  {
+   "group": "B",
+   "research": {
+    "worlds": [
+     {
+      "world": "PegasusXI",
+      "verdict": "forbidden",
+      "cap": null,
+      "evidence": [
+       {
+        "url": "https://github.com/aremais/PegasusXI/blob/base/public/rules.html",
+        "quote": "PegasusXI is a “single box” server. Each Adventurer may only ever have one account, and each account is tied to the IP addresses that access it. An account is restricted to three (3) characters per account. Using multiple accounts on the same IP address is expressly forbidden without an IP exception. This includes account sharing on the same IP address by Adventurers who live in the same household and “functional dual boxing”.",
+        "source_kind": "own public GitHub (operator's LSB fork + website source, public/rules.html, committed 2026-03-22)"
+       },
+       {
+        "url": "https://github.com/aremais/PegasusXI/blob/base/public/rules.html",
+        "quote": "As mentioned in II, each adventurer may only ever have one account. If this account is banned, players are not allowed to start fresh with a new account or character on PegasusXI.",
+        "source_kind": "own public GitHub"
+       },
+       {
+        "url": "https://pegasusxi.com/server-info.html",
+        "quote": "Accounts / characters One website account; create characters in-game",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://raw.githubusercontent.com/aremais/PegasusXI/base/settings/default/login.lua",
+        "quote": "-- Comma-separated IPv4 addresses exempt from LOGIN_LIMIT (unlimited concurrent sessions from those IPs)\n    LOGIN_LIMIT_EXEMPT_IPS = '',",
+        "source_kind": "own public GitHub (server code)"
+       },
+       {
+        "url": "https://pegasusxi.com/",
+        "quote": "No botting or automation. Unattended gameplay through bots or macros that play the game for you are not allowed. You must be present at your keyboard.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://pegasusxi.com/addons.js",
+        "quote": "{ name: 'Multisend' }, ... { name: 'Fastfollow' }, ... { name: 'SendTarget' }, ... { name: 'CurePlease' }",
+        "source_kind": "own site (ASHITA_PROHIBITED list)"
+       }
+      ],
+      "sources_checked": [
+       "https://pegasusxi.com/",
+       "https://pegasusxi.com/server-info.html",
+       "https://pegasusxi.com/faq.html",
+       "https://pegasusxi.com/addons.html",
+       "https://pegasusxi.com/addons.js",
+       "https://pegasusxi.com/config.js",
+       "https://pegasusxi.com/register.html (-> /new_accounts/index.html)",
+       "https://pegasusxi.com/files/",
+       "https://pegasusxi.com/wiki/Main_Page",
+       "https://pegasusxi.com/w/api.php (search: multibox, dual box, boxing, mule, multiple accounts, one account, accounts per, second account, alt account, rules; allpages prefix Pegasus)",
+       "https://pegasusxi.com/rules (404)",
+       "https://pegasusxi.com/rules.html (404)",
+       "https://web.archive.org/web/20260928235525/https://pegasusxi.com/index.html",
+       "https://api.github.com/search/repositories?q=pegasusxi",
+       "https://github.com/aremais/PegasusXI (README.md)",
+       "https://raw.githubusercontent.com/aremais/PegasusXI/base/public/rules.html",
+       "https://raw.githubusercontent.com/aremais/PegasusXI/base/public/server-info.html",
+       "https://raw.githubusercontent.com/aremais/PegasusXI/base/public/index.html",
+       "https://raw.githubusercontent.com/aremais/PegasusXI/base/settings/default/login.lua",
+       "https://raw.githubusercontent.com/LandSandBoat/server/base/settings/default/login.lua",
+       "https://api.github.com/repos/aremais/PegasusXI/commits?path=settings/default/login.lua",
+       "https://github.com/XiPrivateServers/Servers (not listed)",
+       "https://ffxiprivateservers.com/servers (not listed)",
+       "WebSearch: PegasusXI dual box/multibox/accounts (nothing)"
+      ],
+      "unreadable": [
+       "PegasusXI Discord #rules channel (rules.html says Discord Rules also apply; not joined per read-only rule)",
+       "Live LOGIN_LIMIT value (settings/ override not public; only settings/default is in repo)"
+      ],
+      "confidence": "medium",
+      "notes": "REFUTES the 2026-10-24 'no multibox rule' finding. The live site's short 6-rule list (homepage #rules) says nothing about boxing, but the operators' public repo aremais/PegasusXI (README: 'LandSandBoat-based FFXI server fork for PegasusXI' + 'PegasusXI Website Server') contains a full public/rules.html declaring a 'single box' server, one account per adventurer, multiple accounts per IP forbidden without an IP exception, and household 'functional dual boxing' banned. Caveats: that public/ folder dates from 2026-03-22 and its server-info.html is still an unfilled template ('Boxes single / dual / unrestricted ... Replace with your real details'), and the live site was redesigned since and no longer serves /rules.html (404). Corroboration that the rule is current-intent: live Server Info says 'One website account'; the server code added a custom LOGIN_LIMIT_EXEMPT_IPS setting (commit 90eba227, 2026-04-14, kept through 07/31/26) which implements per-IP session-limit exceptions matching the 'without an IP exception' wording. Evidence conflicts (live rules silent vs repo rules single-box); per instructions picked the most restrictive credible reading: one client per person. Launcher should allow 1 client for PegasusXI. Prohibited addon list also bans multibox-control tools (Multisend, Fastfollow, SendTarget, CurePlease, BoxDestroyer)."
+     },
+     {
+      "world": "Moghouse XI",
+      "verdict": "unlimited_explicit",
+      "cap": null,
+      "evidence": [
+       {
+        "url": "https://ffxiprivateservers.com/servers/23-moghouse-xi",
+        "quote": "Expansion: RoTZ, CoP, ToAU, WoTG, Adoulin. Move speed: 10x. Level sync: Yes. Trusts: Yes. Dual-boxing: Yes. Custom content: Custom Commands, all users get GM Level 1.. Notes: This has been a fun server and one of the oldest operating private servers (since 2006 as eArena, then BNET.cc, now renamed as Moghouse. Its designed for a simple purpose. To do whatever you want. :)",
+        "source_kind": "third-party listing"
+       },
+       {
+        "url": "https://moghouse.cc/installing-on-ubuntu-wine/",
+        "quote": "Wine/Ashita did not work very well with multiple sessions active at once with previous versions of Wine. With the 8.x versions, this seems to no longer be an issue. Multi-boxing may be an option, but that is beyond the scope of this document.",
+        "source_kind": "own site (technical guide, not a rule)"
+       },
+       {
+        "url": "https://moghouse.cc/",
+        "quote": "Moghouse is back as a FunServer. GM Commands setup! Use: --server ffxi.cc",
+        "source_kind": "own site"
+       }
+      ],
+      "sources_checked": [
+       "https://moghouse.cc/",
+       "https://moghouse.cc/getting-setup/",
+       "https://moghouse.cc/rules (404)",
+       "https://moghouse.cc/faq (404)",
+       "https://moghouse.cc/wp-json/wp/v2/pages (all 25 pages listed)",
+       "https://moghouse.cc/wp-json/wp/v2/posts (all 3 posts)",
+       "https://moghouse.cc/wp-json/wp/v2/search (box, multi, dual, rule, account, mule)",
+       "https://moghouse.cc/other-servers/",
+       "https://moghouse.cc/gm-commands/",
+       "https://moghouse.cc/fun-stuff/",
+       "https://moghouse.cc/welcome-to-moghouse-cc/",
+       "https://moghouse.cc/installing-on-ubuntu-wine/",
+       "https://moghouse.cc/ashita-setup-guide-2/",
+       "https://moghouse.cc/windower-setup-guide-2/",
+       "https://moghouse.cc/updating-ffxi-client-files/",
+       "https://moghouse.cc/client-setup-guide/",
+       "https://moghouse.cc/132-2/",
+       "https://moghouse.cc/discord",
+       "http://ffxi.cc/ (redirects to an AMP admin login panel, no rules)",
+       "https://bnet.cc/ (Battle.net emulator site, no FFXI rules)",
+       "https://web.archive.org/cdx/search/cdx?url=moghouse.cc* (no rules page ever archived)",
+       "https://ffxiprivateservers.com/servers",
+       "https://ffxiprivateservers.com/servers/23-moghouse-xi",
+       "https://github.com/XiPrivateServers/Servers (not listed)",
+       "WebSearch: Moghouse ffxi.cc dual box; moghouse multibox; ffxi.cc moghouse; nostalgic.gg moghouse (nothing relevant)"
+      ],
+      "unreadable": [
+       "Moghouse Discord (https://discord.gg/3ZfEJrp56X) - not joined",
+       "https://redlib.hbubli.cc/r/FFXIPrivateServers/wiki/index (maintenance mode)",
+       "https://old.reddit.com/r/FFXIPrivateServers/wiki/* (login wall)"
+      ],
+      "confidence": "low",
+      "notes": "Source of the reported 'dual box yes' is ffxiprivateservers.com (profile 23-moghouse-xi): 'Dual-boxing: Yes' with no number or conditions; the notes read as operator-submitted. Moghouse's own site (WordPress, every page and post enumerated via wp-json) has no rules, FAQ, or account-limit text at all; its only multibox mention is a technical Linux/Wine guide line that is not a rule. On own pages alone this would be 'silent'; the only explicit statement is the third-party 'Yes' with no cap, so classed unlimited_explicit at low confidence. Either way nothing forbids or caps boxing, so unlimited is consistent with the owner's instruction. Context: a GM-powers 'FunServer' where every user gets GM level 1."
+     },
+     {
+      "world": "Olympus XI",
+      "verdict": "silent",
+      "cap": null,
+      "evidence": [
+       {
+        "url": "https://olympus-games.dev/rules",
+        "quote": "Server Rules These apply in game and on our Discord. Be respectful ... Keep it SFW ... No real-money trading No buying or selling gil, items, characters, accounts or services for real money, and no offers to do so. No spam ... No advertising ... Respect privacy ... Report exploits privately",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://olympus-games.dev/create",
+        "quote": "New here? Create an account and your first character. Already playing? Sign in and add another character to your account.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://ffxiprivateservers.com/servers",
+        "quote": "Olympus XI ... Dual-boxing Unknown",
+        "source_kind": "third-party listing"
+       }
+      ],
+      "sources_checked": [
+       "https://olympus-games.dev/",
+       "https://olympus-games.dev/rules",
+       "https://olympus-games.dev/create",
+       "https://olympus-games.dev/join",
+       "https://olympus-games.dev/community",
+       "https://olympus-games.dev/news (32 items grepped)",
+       "https://olympus-games.dev/wiki (404)",
+       "https://olympus-games.dev/faq (404)",
+       "https://olympus-games.dev/terms (404)",
+       "https://olympus-games.dev/tos (404)",
+       "https://github.com/bobertdrake/olympus-xi-patch (README.md, only file in tree)",
+       "https://api.github.com/repos/bobertdrake/olympus-xi-patch/releases (all 55 release notes, incl. launcher-0.3.0..0.7.18, grepped)",
+       "https://api.github.com/users/bobertdrake/repos",
+       "https://ffxiprivateservers.com/servers",
+       "https://ffxiprivateservers.com/servers/24-olympus-xi",
+       "https://github.com/XiPrivateServers/Servers (not listed)",
+       "WebSearch: Olympus XI dual box/multibox/multiple accounts (nothing)"
+      ],
+      "unreadable": [
+       "Olympus Discord (https://discord.gg/apYsQ4b4GN) - not joined; rules page says the same rules apply there",
+       "In-game /owiki (only in launcher/game)"
+      ],
+      "confidence": "medium",
+      "notes": "Confirms the earlier read: the rules page lists 7 conduct rules and none covers multiboxing, accounts per person, or per-IP limits. The FAQ only restricts addons ('A few that would spoil the game, like ones that show hidden monsters or skip travel, are not allowed'). The patch repo holds only game files, a wiki data zip, and VanaCore. Its 55 release notes never mention boxing or instances. The third-party listing says 'Unknown'. Process note: fetching https://olympus-games.dev/download returned the Windows installer EXE directly (NSIS, 33 MB) instead of an HTML page. It was deleted at once, without being opened or run."
+     },
+     {
+      "world": "DriftwoodXI",
+      "verdict": "forbidden",
+      "cap": null,
+      "evidence": [
+       {
+        "url": "https://xi.driftwoodgaming.com/news/one-account-sixteen-characters",
+        "quote": "One account per player is the rule on DriftwoodXI.",
+        "source_kind": "own site (staff announcement, 28 July 2026, by Zatara)"
+       },
+       {
+        "url": "https://xi.driftwoodgaming.com/news/one-account-sixteen-characters",
+        "quote": "Why multi-boxing is against the rules ... So a second account has no honest use, and that is exactly why it is against the rules. When someone is running two, something fishy is usually going on (RMT mules, ban evasion, market manipulation) and the staff have the tools to see it and will investigate.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://xi.driftwoodgaming.com/news/one-account-sixteen-characters",
+        "quote": "Two players in one home sharing a connection is completely fine and is not multi-boxing, each person gets their own account. Let the staff know you share a connection and they will make a note of it, so the two of you never look like one person with two accounts.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://xi.driftwoodgaming.com/",
+        "quote": "House rules ... One account per player. Sixteen characters is a squad, a mercenary roster and all the storage you will need, a second account is never necessary.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://xi.driftwoodgaming.com/",
+        "quote": "Sixteen character slots, one account, one game window. Your squad plays from the same client you do, nothing to alt-tab, nothing to run twice.",
+        "source_kind": "own site (marketing copy)"
+       },
+       {
+        "url": "https://xi.driftwoodgaming.com/register",
+        "quote": "One account per player is plenty, it holds up to 16 characters.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://github.com/XiPrivateServers/Servers/blob/main/SERVERS.md",
+        "quote": "| [DiftwoodXI](https://xi.driftwoodgaming.com/) | ... | :x: (Custom) |  (Dual-Boxing? column)",
+        "source_kind": "third-party listing"
+       },
+       {
+        "url": "https://ffxiprivateservers.com/servers",
+        "quote": "DriftwoodXI ... Dual-boxing No",
+        "source_kind": "third-party listing"
+       }
+      ],
+      "sources_checked": [
+       "https://xi.driftwoodgaming.com/",
+       "https://xi.driftwoodgaming.com/news/one-account-sixteen-characters",
+       "https://xi.driftwoodgaming.com/register",
+       "https://xi.driftwoodgaming.com/download",
+       "https://xi.driftwoodgaming.com/custom",
+       "https://xi.driftwoodgaming.com/commands",
+       "https://xi.driftwoodgaming.com/addons",
+       "https://xi.driftwoodgaming.com/rules (404)",
+       "https://xi.driftwoodgaming.com/faq (404)",
+       "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/servers/99_custom/driftwood.md (no multibox field)",
+       "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/SERVERS.md",
+       "https://ffxiprivateservers.com/servers",
+       "https://ffxiprivateservers.com/servers/18-driftwoodxi"
+      ],
+      "unreadable": [
+       "Driftwood Discord (https://discord.gg/DriftwoodGaming) - not joined"
+      ],
+      "confidence": "high",
+      "notes": "The home-page line 'Sixteen character slots, one account, one game window.' is marketing copy, but the actual rule sits beside it under 'House rules' ('One account per player.'). A staff news post titled 'One account, sixteen characters' states it outright: 'Why multi-boxing is against the rules'. Both third-party listings agree (XiPrivateServers ':x: (Custom)', ffxiprivateservers.com 'No'). The server's design is that one client controls up to 6 of the account's 16 characters (DWSquad alt-trusts), so a second client is never needed. Launcher should allow 1 client per person. Separate household members on their own accounts are allowed, but that is a different person, not one person boxing. The post also notes the server holds a crashed character in-world for about 30 s, so a quick relaunch can bounce at character select."
+     }
+    ]
+   },
+   "verified": {
+    "worlds": [
+     {
+      "world": "PegasusXI",
+      "verdict": "forbidden",
+      "cap": null,
+      "evidence": [
+       {
+        "url": "https://raw.githubusercontent.com/aremais/PegasusXI/base/public/rules.html",
+        "quote": "PegasusXI is a “single box” server. Each Adventurer may only ever have one account, and each account is tied to the IP addresses that access it. An account is restricted to three (3) characters per account. Using multiple accounts on the same IP address is expressly forbidden without an IP exception. This includes account sharing on the same IP address by Adventurers who live in the same household and “functional dual boxing”.",
+        "source_kind": "own public GitHub (operator repo aremais/PegasusXI, public/rules.html, single commit 5623f6a1 dated 2026-03-22; not served on the live site)"
+       },
+       {
+        "url": "https://raw.githubusercontent.com/aremais/PegasusXI/base/public/rules.html",
+        "quote": "As mentioned in II, each adventurer may only ever have one account. If this account is banned, players are not allowed to start fresh with a new account or character on PegasusXI.",
+        "source_kind": "own public GitHub"
+       },
+       {
+        "url": "https://pegasusxi.com/server-info.html",
+        "quote": "Accounts / characters One website account; create characters in-game",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://pegasusxi.com/addons.js",
+        "quote": "var ASHITA_PROHIBITED = [ ... { name: 'BoxDestroyer' }, ... { name: 'CurePlease' }, { name: 'Fastfollow' }, ... { name: 'Multisend' }, ... { name: 'SendTarget' },",
+        "source_kind": "own site (live prohibited addon list; Windower list also bans BoxDestroyer, CurePlease, Send)"
+       },
+       {
+        "url": "https://api.github.com/repos/aremais/PegasusXI/commits/90eba227",
+        "quote": "+    -- Comma-separated IPv4 addresses exempt from LOGIN_LIMIT (unlimited concurrent sessions from those IPs)\n+    LOGIN_LIMIT_EXEMPT_IPS = '',  ...  +                const auto loginLimitOK = loginLimit == 0 || sessionCount < loginLimit || excepted || ipExempt;",
+        "source_kind": "own public GitHub (server code, commit 2026-04-14)"
+       },
+       {
+        "url": "https://pegasusxi.com/",
+        "quote": "IV No botting or automation. Unattended gameplay through bots or macros that play the game for you are not allowed. You must be present at your keyboard. ... VI Staff decisions are final.",
+        "source_kind": "own site (live 6-rule list; says nothing about boxing)"
+       }
+      ],
+      "sources_checked": [
+       "https://pegasusxi.com/",
+       "https://pegasusxi.com/server-info.html",
+       "https://pegasusxi.com/faq.html",
+       "https://pegasusxi.com/addons.html",
+       "https://pegasusxi.com/addons.js",
+       "https://pegasusxi.com/config.js",
+       "https://pegasusxi.com/launcher/news.json",
+       "https://pegasusxi.com/register.html (-> /new_accounts/index.html)",
+       "https://pegasusxi.com/account.html",
+       "https://pegasusxi.com/files/",
+       "https://pegasusxi.com/rules (404)",
+       "https://pegasusxi.com/rules.html (404)",
+       "https://pegasusxi.com/news.json (404)",
+       "https://pegasusxi.com/w/api.php search: box, dual, multibox, account, rules, IP (BG-Wiki mirror content only)",
+       "https://web.archive.org/cdx/search/cdx?url=pegasusxi.com* (only index.html 2026-09-28 archived)",
+       "https://web.archive.org/web/20260928235525id_/https://pegasusxi.com/index.html",
+       "https://raw.githubusercontent.com/aremais/PegasusXI/base/public/rules.html",
+       "https://raw.githubusercontent.com/aremais/PegasusXI/base/public/index.html",
+       "https://raw.githubusercontent.com/aremais/PegasusXI/base/public/server-info.html",
+       "https://api.github.com/repos/aremais/PegasusXI/contents/public",
+       "https://api.github.com/repos/aremais/PegasusXI/commits?path=public/rules.html",
+       "https://api.github.com/repos/aremais/PegasusXI/commits?path=settings/default/login.lua",
+       "https://api.github.com/repos/aremais/PegasusXI/commits/90eba227",
+       "https://raw.githubusercontent.com/aremais/PegasusXI/base/settings/default/login.lua",
+       "https://raw.githubusercontent.com/LandSandBoat/server/base/settings/default/login.lua",
+       "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/SERVERS.md (not listed)",
+       "https://ffxiprivateservers.com/compare (not listed)",
+       "https://discord.com/api/v9/invites/M3NFvpm75E (public invite metadata only: name PegasusXI, no description)",
+       "WebSearch: PegasusXI single box / dual box / multibox / one account (nothing)",
+       "WebSearch: reddit FFXIPrivateServers PegasusXI dual box (nothing)"
+      ],
+      "unreadable": [
+       "PegasusXI Discord #rules channel (repo rules say Discord Rules also apply; not joined, read-only)",
+       "Live LOGIN_LIMIT value (only settings/default is public; it ships 0, the production override is not public)"
+      ],
+      "confidence": "medium",
+      "notes": "The researcher's 'forbidden' holds. The evidence conflicts. The live rules (homepage #rules, the same in the 2026-09-28 Wayback snapshot; the FAQ says 'Server rules are on the homepage Rules section') list 6 conduct rules and say nothing about boxing or accounts. The operator's public repo has a full rules.html that declares a 'single box' server, one account per adventurer, no multiple accounts per IP without an IP exception, and bans household 'functional dual boxing'. That file sits in a public/ folder committed once on 2026-03-22. The folder looks like an unfinished draft: its server-info.html still reads 'Boxes single / dual / unrestricted Replace with your real details.' The live site never served /rules.html (404, never archived). Three things show the single-box rule is still intended: (1) live Server Info says 'One website account'; (2) the live prohibited-addon list bans the tools used to run several clients (BoxDestroyer, Multisend, SendTarget, Fastfollow, CurePlease, Send); (3) on 2026-04-14 the operators added LOGIN_LIMIT_EXEMPT_IPS, a per-IP exemption from the concurrent-session limit, which matches the rule's 'without an IP exception' wording and only matters if LOGIN_LIMIT is set above 0 in production. Per the instructions I picked the most restrictive credible reading: one client. 'forbidden' fits better than 'one_account_per_person' because the text says 'single box' outright. Launcher: 1 client."
+     },
+     {
+      "world": "Moghouse XI",
+      "verdict": "unlimited_explicit",
+      "cap": null,
+      "evidence": [
+       {
+        "url": "https://ffxiprivateservers.com/servers/23-moghouse-xi",
+        "quote": "Expansion: RoTZ, CoP, ToAU, WoTG, Adoulin. Move speed: 10x. Level sync: Yes. Trusts: Yes. Dual-boxing: Yes. Custom content: Custom Commands, all users get GM Level 1..",
+        "source_kind": "third-party listing (submitted via the directory's form; the notes read as operator-written)"
+       },
+       {
+        "url": "https://ffxiprivateservers.com/compare",
+        "quote": "Moghouse XI | 99 CUSTOM | RoTZ, CoP, ToAU, WoTG, Adoulin | 30x/5x | 10x | Yes | Yes | Yes |",
+        "source_kind": "third-party listing (Dual-box column; other servers fill this free-text column with caps such as 'yes (3 active)' or 'Yes (up to two simultaneous accounts)', Moghouse gives no number)"
+       },
+       {
+        "url": "https://moghouse.cc/installing-on-ubuntu-wine/",
+        "quote": "Wine/Ashita did not work very well with multiple sessions active at once with previous versions of Wine. With the 8.x versions, this seems to no longer be an issue. Multi-boxing may be an option, but that is beyond the scope of this document.",
+        "source_kind": "own site (technical guide, not a rule)"
+       },
+       {
+        "url": "https://moghouse.cc/",
+        "quote": "Moghouse is back as a FunServer. GM Commands setup! Use: --server ffxi.cc",
+        "source_kind": "own site"
+       }
+      ],
+      "sources_checked": [
+       "https://moghouse.cc/",
+       "https://moghouse.cc/getting-setup/",
+       "https://moghouse.cc/wp-json/wp/v2/pages?per_page=100 (all 25 pages, full content grepped: box, multi, account, dual, session, instance, alt, mule, rule, allowed, ban)",
+       "https://moghouse.cc/wp-json/wp/v2/posts?per_page=100 (all 3 posts)",
+       "https://moghouse.cc/gm-commands/",
+       "https://moghouse.cc/other-servers/",
+       "https://moghouse.cc/installing-on-ubuntu-wine/",
+       "https://moghouse.cc/ashita-setup-guide-2/",
+       "https://moghouse.cc/windower-setup-guide-2/",
+       "https://moghouse.cc/132-2/",
+       "https://moghouse.cc/client-update-guide/",
+       "https://moghouse.cc/welcome-to-moghouse-cc/",
+       "https://ffxiprivateservers.com/servers/23-moghouse-xi",
+       "https://ffxiprivateservers.com/compare",
+       "https://ffxiprivateservers.com/about",
+       "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/SERVERS.md (not listed)",
+       "https://api.github.com/repos/XiPrivateServers/Servers/git/trees/main?recursive=1 (no Moghouse file)",
+       "https://discord.com/api/v9/invites/3ZfEJrp56X (public invite metadata only; description is a casual tagline, no rules)",
+       "WebSearch: moghouse ffxi.cc dual box / multibox / multiple accounts (nothing)",
+       "WebSearch: reddit FFXIPrivateServers Moghouse dual box (nothing)"
+      ],
+      "unreadable": [
+       "Moghouse Discord (https://discord.gg/3ZfEJrp56X), not joined",
+       "r/FFXIPrivateServers wiki (redlib mirror in maintenance; reddit login wall)",
+       "ffxi.cc (redirects to an AMP admin login, no public rules)"
+      ],
+      "confidence": "low",
+      "notes": "Re-verified; I found no rule that forbids or caps boxing. Moghouse's own WordPress site has no rules, FAQ, or account-limit text in any of its 25 pages or 3 posts. Its only multibox mention is a Wine guide line that is technical, not a rule. The GM-commands !posfix entry ('You can make a second char to do this to your first.') is about fixing a stuck offline character, not boxing. The only explicit statement is the ffxiprivateservers.com Dual-boxing field: 'Yes', with no number. That column is free text, and servers with caps state them there (Omega 'yes (2 active)', Scythe 'Yes (up to two simultaneous accounts)'). So a bare 'Yes' reads as boxing allowed with no cap, not literally two. The column label 'Dual-boxing' is the directory's generic field name. The world is a GM-level-1 'FunServer' whose Discord tagline is about messing around without limits. If the third-party listing is discounted, the verdict becomes 'silent', which also means unlimited under the owner's rule. Launcher: unlimited."
+     },
+     {
+      "world": "Olympus XI",
+      "verdict": "silent",
+      "cap": null,
+      "evidence": [
+       {
+        "url": "https://olympus-games.dev/rules",
+        "quote": "Server Rules These apply in game and on our Discord. Be respectful ... Keep it SFW ... No real-money trading No buying or selling gil, items, characters, accounts or services for real money, and no offers to do so. No spam ... No advertising ... Respect privacy ... Report exploits privately ... Breaking the rules can mean a warning, a timeout or a ban.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://olympus-games.dev/",
+        "quote": "Can I use addons? Yes. The launcher comes with our own addons already switched on, and many more are a click away. A few that would spoil the game, like ones that show hidden monsters or skip travel, are not allowed.",
+        "source_kind": "own site (FAQ)"
+       },
+       {
+        "url": "https://olympus-games.dev/create",
+        "quote": "New here? Create an account and your first character. Already playing? Sign in and add another character to your account.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://ffxiprivateservers.com/compare",
+        "quote": "Olympus XI | 75 CUSTOM | CoP, ToAU | ... | Yes | Yes | Unknown |",
+        "source_kind": "third-party listing (Dual-box column = Unknown)"
+       }
+      ],
+      "sources_checked": [
+       "https://olympus-games.dev/",
+       "https://olympus-games.dev/rules",
+       "https://olympus-games.dev/create",
+       "https://olympus-games.dev/join",
+       "https://olympus-games.dev/community",
+       "https://olympus-games.dev/news",
+       "https://olympus-games.dev/ballista",
+       "https://olympus-games.dev/fishing",
+       "https://olympus-games.dev/fallen",
+       "https://olympus-games.dev/news/astraea",
+       "https://olympus-games.dev/news/lantern",
+       "https://olympus-games.dev/news/vaudun",
+       "https://olympus-games.dev/news/nanaa",
+       "https://olympus-games.dev/sitemap.xml",
+       "https://olympus-games.dev/robots.txt",
+       "https://olympus-games.dev/faq, /about, /info, /guide, /guides (generic not-found page)",
+       "https://olympus-games.dev/_next/static/*.js (12 site bundles grepped for account-limit / per-IP / multibox strings; nothing)",
+       "https://raw.githubusercontent.com/bobertdrake/olympus-xi-patch/main/README.md",
+       "https://api.github.com/repos/bobertdrake/olympus-xi-patch/git/trees/HEAD?recursive=1 (README.md only)",
+       "https://api.github.com/repos/bobertdrake/olympus-xi-patch/releases?per_page=100 (55 release notes grepped; only hits were 'Dual Wield' and 'reply box')",
+       "https://api.github.com/users/bobertdrake/repos",
+       "https://ffxiprivateservers.com/compare",
+       "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/SERVERS.md (not listed)",
+       "https://discord.com/api/v9/invites/apYsQ4b4GN (public invite metadata only, no description)",
+       "WebSearch: Olympus XI / olympus-games.dev dual box / multibox / accounts (nothing)"
+      ],
+      "unreadable": [
+       "Olympus XI Discord (https://discord.gg/apYsQ4b4GN), not joined; the rules page says the same rules apply there",
+       "In-game /owiki data (wiki-20261022.2209.zip release asset, not downloaded; it is game data: monsters, items, quests)",
+       "https://olympus-games.dev/download (robots.txt disallows it; it serves the installer EXE, not fetched)"
+      ],
+      "confidence": "medium",
+      "notes": "Confirmed silent. The live rules page (it lives at /rules, linked from the sitemap) lists 7 conduct rules, and none covers multiboxing, accounts per person, or per-IP limits. The only 'accounts' mention is the real-money-trading ban on selling accounts. The FAQ restricts only addons that spoil the game, such as showing hidden monsters or skipping travel. The patch repo and its 55 release notes never address boxing. The third-party listing says 'Unknown'. The Hardcore mode limits party, trade and mail partners to other Hardcore characters; that is a character rule, not a client limit. Remaining gap: the Discord may hold extra rules. Launcher: unlimited, per the owner's rule."
+     },
+     {
+      "world": "DriftwoodXI",
+      "verdict": "forbidden",
+      "cap": null,
+      "evidence": [
+       {
+        "url": "https://xi.driftwoodgaming.com/news/one-account-sixteen-characters",
+        "quote": "One account per player is the rule on DriftwoodXI. It is not a limit, your sixteen characters are a full squad, a mercenary roster, and all the storage you will ever need.",
+        "source_kind": "own site (staff announcement, 28 July 2026, by Zatara)"
+       },
+       {
+        "url": "https://xi.driftwoodgaming.com/news/one-account-sixteen-characters",
+        "quote": "Why multi-boxing is against the rules On most servers people run a second account because they have to. The game wants a party and one character is not a party. Here that reason does not exist. Your squad is the party, on one account, in one client. So a second account has no honest use, and that is exactly why it is against the rules. When someone is running two, something fishy is usually going on (RMT mules, ban evasion, market manipulation) and the staff have the tools to see it and will investigate.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://xi.driftwoodgaming.com/news/one-account-sixteen-characters",
+        "quote": "Two players in one home sharing a connection is completely fine and is not multi-boxing, each person gets their own account. Let the staff know you share a connection and they will make a note",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://xi.driftwoodgaming.com/",
+        "quote": "House rules No cash shop , and there never will be one. Nothing is sold, so nothing can be pay-to-win. One account per player. Sixteen characters is a squad, a mercenary roster and all the storage you will need, a second account is never necessary.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://xi.driftwoodgaming.com/",
+        "quote": "Sixteen character slots, one account, one game window . Your squad plays from the same client you do, nothing to alt-tab, nothing to run twice.",
+        "source_kind": "own site (feature/marketing copy next to the House rules)"
+       },
+       {
+        "url": "https://xi.driftwoodgaming.com/register",
+        "quote": "One account per player is plenty, it holds up to 16 characters.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://xi.driftwoodgaming.com/custom",
+        "quote": "One account per player, sixteen characters on it, and everything above is reached by playing.",
+        "source_kind": "own site"
+       },
+       {
+        "url": "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/SERVERS.md",
+        "quote": "| [DiftwoodXI](https://xi.driftwoodgaming.com/) | [Join](https://discord.gg/DriftwoodGaming) | CoP (ToAU Planned) | Custom | 1.5x Retail | :heavy_check_mark: (Custom) | :heavy_check_mark: (Custom) | :x: (Custom) | [Link](/servers/99_custom/driftwood.md) |",
+        "source_kind": "third-party listing (Dual-Boxing? column = :x:)"
+       },
+       {
+        "url": "https://ffxiprivateservers.com/compare",
+        "quote": "DriftwoodXI | 99 CUSTOM | COP,ToAU,WotG | 3x | 1.5x | Yes | Limited / custom | No |",
+        "source_kind": "third-party listing (Dual-box column = No)"
+       }
+      ],
+      "sources_checked": [
+       "https://xi.driftwoodgaming.com/",
+       "https://xi.driftwoodgaming.com/news/one-account-sixteen-characters",
+       "https://xi.driftwoodgaming.com/news",
+       "https://xi.driftwoodgaming.com/register",
+       "https://xi.driftwoodgaming.com/addons",
+       "https://xi.driftwoodgaming.com/custom",
+       "https://xi.driftwoodgaming.com/commands",
+       "https://xi.driftwoodgaming.com/rules (404)",
+       "https://xi.driftwoodgaming.com/faq (404)",
+       "https://xi.driftwoodgaming.com/sitemap.xml (404)",
+       "https://xi.driftwoodgaming.com/robots.txt",
+       "https://raw.githubusercontent.com/XiPrivateServers/Servers/main/SERVERS.md",
+       "https://api.github.com/repos/XiPrivateServers/Servers/git/trees/main?recursive=1 (servers/99_custom/driftwood.md)",
+       "https://ffxiprivateservers.com/compare",
+       "https://discord.com/api/v9/invites/DriftwoodGaming (public invite metadata only, general studio Discord)"
+      ],
+      "unreadable": [
+       "Driftwood Gaming Discord (https://discord.gg/DriftwoodGaming), not joined"
+      ],
+      "confidence": "high",
+      "notes": "Confirmed, with every quote re-read today. The home-page line 'Sixteen character slots, one account, one game window.' is feature copy. The binding rule sits beside it under 'House rules' ('One account per player.'), and the staff post states 'Why multi-boxing is against the rules'. On LandSandBoat a second live client needs a second account, so the cap is 1 client per person. Separate people in one household may each have their own account and should tell staff they share a connection. That covers two people, not one person running two clients. Both third-party listings agree (:x: and No). Launcher: 1 client."
+     }
+    ]
+   }
+  }
+ ]
+}

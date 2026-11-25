@@ -388,6 +388,27 @@ index e52ead2..cf7a5e5 100644
  #include "d3d9_format.h"
  #include "d3d9_util.h"
  #include "d3d9_caps.h"
+diff --git a/src/d3d9/d3d9_cursor.cpp b/src/d3d9/d3d9_cursor.cpp
+index 408268c..c1e8c1f 100644
+--- a/src/d3d9/d3d9_cursor.cpp
++++ b/src/d3d9/d3d9_cursor.cpp
+@@ -15,7 +15,15 @@ namespace dxvk {
+ 
+ 
+   BOOL D3D9Cursor::ShowCursor(BOOL bShow) {
+-    ::SetCursor(bShow ? m_hCursor : nullptr);
++    // Backport of upstream b0b46fd075 (PR #3562, first in v2.3). With no D3D cursor set,
++    // 1.10.3 called SetCursor(NULL) here and erased the game's own Win32 cursor: FFXI's
++    // Hardware Mouse is an .ani set with user32 SetCursor, and d3d8to9 forwards the game's
++    // ShowCursor straight to us. Native D3D9 and wined3d leave that cursor alone.
++    if (likely(m_hCursor != nullptr))
++      ::SetCursor(bShow ? m_hCursor : nullptr);
++    else
++      Logger::debug("D3D9Cursor::ShowCursor: Software cursor not implemented.");
++
+     return std::exchange(m_visible, bShow);
+   }
+ 
 diff --git a/src/d3d9/d3d9_cursor.h b/src/d3d9/d3d9_cursor.h
 index 32645d2..f729b8f 100644
 --- a/src/d3d9/d3d9_cursor.h

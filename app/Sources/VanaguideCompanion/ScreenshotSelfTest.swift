@@ -1,0 +1,334 @@
+// Copyright (c) 2026 Daniel Bates / Bates LLC. All rights reserved.
+
+import Foundation
+
+extension CompanionSelfTest {
+    @MainActor static func screenshotChecks() -> [(String, Bool)] {
+        let quests = QuestCatalogue.parse("""
+        local Q = {}
+        Q.quests = { sandoria = {
+          [10] = { name = 'A Squire\\'s Test', zone = 230, x = -138.33, z = 65.76, npc = 'Balasiel' },
+          [11] = { name = 'A Squire\\'s Test II', zone = 230 },
+        } }
+        return Q
+        """, mission: false)
+        let missions = QuestCatalogue.parse("""
+        local M = {}
+        M.missions = { zilart = { [30] = { name = 'Dawn' } } }
+        return M
+        """, mission: true)
+        let entries = quests + missions
+        let authored = Guide(name: "Authored trial", desc: "", levels: "", steps: [
+            GuideStep(kind: "A", title: "Speak with Balasiel", tags: ["QA": "sandoria,10"]),
+            GuideStep(kind: "T", title: "Finish the trial", tags: ["Q": "sandoria,10"]),
+        ])
+        let guides = [authored] + QuestCatalogue.referenceGuides(entries)
+        let match: (String) -> ScreenshotGuideMatch? = {
+            ScreenshotGuideMatcher.match(text: $0, entries: entries, guides: guides)
+        }
+        let trial = match("Quest accepted: A Squire’s Test.")
+        var tracker = ScreenshotMatchTracker()
+        let first = tracker.observe(trial)
+        let second = tracker.observe(trial)
+        let third = tracker.observe(trial)
+        _ = tracker.observe(nil)
+        _ = tracker.observe(trial)
+        let repeated = tracker.observe(trial)
+        var interrupted = ScreenshotMatchTracker()
+        _ = interrupted.observe(trial)
+        _ = interrupted.observe(nil)
+        let interruptedFirst = interrupted.observe(trial)
+
+        var checks: [(String, Bool)] = [
+            ("catalogue parses literal quest and mission facts", quests.count == 2 && missions.count == 1),
+            ("OCR title normalizes curly apostrophes and punctuation", trial?.title == "A Squire's Test"),
+            ("OCR opens authored acceptance before a generated reference", trial?.guide == 0 && trial?.step == 0),
+            ("a quest giver's dialogue opens their quest", match("Balasiel : Bring me a root.")?.key == "Q:sandoria,10"),
+            ("an unknown later speaker falls back to the last quest giver", match("Balasiel : Hello.\nGulemont : Ahhh!")?.key == "Q:sandoria,10"
+                && match("Someone : Hi.\nBalasiel : Hello.")?.key == "Q:sandoria,10"),
+            ("a player or unknown speaker opens nothing", match("Labguide : !pos 1 2 3") == nil),
+            ("a speaker named only inside a line opens nothing", match("Ask Balasiel about it.") == nil),
+            ("OCR rejects several quest titles in one capture",
+             match("A Squire's Test\nMission: Dawn") == nil),
+            ("OCR does not match inside a longer word", match("A Squire's Testing") == nil),
+            ("OCR refuses an overlapping sequel title", match("A Squire's Test II") == nil),
+            ("single-word dialogue needs a mission or quest label", match("Dawn") == nil),
+            ("explicit single-word mission matches its reference", match("Mission: Dawn")?.key == "M:zilart,30"),
+            ("empty OCR does not select a guide", match(" \n ") == nil),
+            ("OCR needs two consecutive matching samples", first == nil && second == trial),
+            ("persistent chat never pulls the guide backward again", third == nil && repeated == nil),
+            ("a blank sample resets the two-sample confirmation", interruptedFirst == nil),
+        ]
+        let idleCapture = ScreenGuideCapture()
+        checks.append(("a new companion capture stays idle until explicit window selection and Start",
+                       !idleCapture.running && !idleCapture.busy && idleCapture.windows.isEmpty
+                           && idleCapture.selectedID == nil && !idleCapture.discovering))
+        let gate = OCRRecognitionGate()
+        let firstToken = gate.claim(warmUp: true)!
+        checks.append(("OCR gate shares one worker across warm-up and captures",
+                       !gate.isWarm && gate.claim() == nil && gate.claim(warmUp: true) == nil))
+        checks.append(("OCR gate rejects unowned callbacks and failed model preparation",
+                       !gate.finish(UUID(), succeeded: true) && gate.finish(firstToken, succeeded: false) && !gate.isWarm))
+        let secondToken = gate.claim()!
+        checks.append(("OCR gate records readiness after owned completion and prevents re-warming",
+                       !gate.finish(firstToken, succeeded: true) && gate.finish(secondToken, succeeded: true) && gate.isWarm && gate.claim(warmUp: true) == nil))
+        let duplicate = QuestCatalogue.parse("local Q = { bastok = { [3] = { name = 'A Squire\\'s Test' } } }", mission: false)
+        checks.append(("identical quest titles in different logs are ambiguous",
+                       ScreenshotGuideMatcher.match(text: "A Squire's Test", entries: entries + duplicate,
+                                                    guides: guides) == nil))
+        let references = QuestCatalogue.referenceGuides(entries)
+        if let trial {
+            checks.append(("OCR preserves a manually advanced authored route checkpoint",
+                           ScreenshotGuideMatcher.preservesCheckpoint(currentGuide: trial.guide, currentStep: 1,
+                                                                     match: trial, guides: guides)))
+        }
+        let referenceMatch = ScreenshotGuideMatcher.match(text: "Quest: A Squire's Test", entries: entries,
+                                                         guides: references)
+        checks.append(("OCR selects earlier independent targets in the same reference list",
+                       referenceMatch.map {
+                           !ScreenshotGuideMatcher.preservesCheckpoint(currentGuide: $0.guide, currentStep: $0.step + 1,
+                                                                       match: $0, guides: references)
+                       } == true))
+        let referenceStep = references.flatMap(\.steps).first { $0.tags["Q"] == "sandoria,10" }
+        checks.append(("reference targets preserve recorded coordinates and stay manual",
+                       referenceStep?.zone == 230 && referenceStep?.posX == -138.33
+                           && referenceStep?.posZ == 65.76 && referenceStep?.fixed == true))
+        // Getting started: a whole log page is read, many titles at once.
+        let page = LogSurvey.read(text: "Quests\nSan d'Oria\nCompleted Quests\nA Squire's Test\nA Squire's Test II\nGil: 1200",
+                                  entries: entries + duplicate, fallback: .current)
+        checks.append(("log page records exact titles and its heading's list",
+                       page.status == .completed && page.area == "sandoria" && page.keys == ["Q:sandoria,10", "Q:sandoria,11"]))
+        checks.append(("log page without a heading uses the step's list",
+                       LogSurvey.read(text: "A Squire's Test", entries: entries, fallback: .current).status == .current))
+        checks.append(("a truncated long title matches its unique stem",
+                       LogSurvey.read(text: "A Squire's Te...", entries: quests.filter { $0.id == 10 },
+                                      fallback: .current).keys == ["Q:sandoria,10"]))
+        var record = CharacterProgress(character: "Test", world: "Local")
+        _ = record.record("Q:sandoria,10", .completed, source: "quest log")
+        let downgraded = record.record("Q:sandoria,10", .current, source: "quest log")
+        _ = record.record("Q:sandoria,11", .current, source: "quest log")
+        let upgraded = record.record("Q:sandoria,11", .completed, source: "done")
+        checks.append(("progress never downgrades completed; Done upgrades current",
+                       !downgraded && upgraded && record.completedCount == 2 && record.currentCount == 0))
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("vg-progress-\(UUID().uuidString)")
+        let saved = ProgressStore.save(record, in: dir)
+        let loaded = ProgressStore.load(character: "Test", world: "Local", in: dir)
+        try? FileManager.default.removeItem(at: dir)
+        checks.append(("progress round-trips through its JSON file",
+                       saved && loaded.entries.keys.sorted() == record.entries.keys.sorted()))
+        checks.append(("character file names cannot escape the folder",
+                       !ProgressStore.fileName(character: "../x", world: "a/b").contains("/")))
+        checks.append(("guide names are shown in title case",
+                       QuestCatalogue.displayName("Support jobs - Mhaura") == "Support Jobs — Mhaura"
+                           && QuestCatalogue.displayName("San d'Oria - every quest") == "San d'Oria — Every Quest"
+                           && QuestCatalogue.displayName("Starting out") == "Starting Out"))
+        let map = WorldMap.parse(
+            names: "local Z = {}\nZ.name = { [230] = 'Southern San d\\'Oria', [231] = 'Northern San d\\'Oria', [232] = 'Port San d\\'Oria', [246] = 'Port Jeuno' }\nZ.id = {}",
+            zonelines: "local Z = {}\nZ.walk = { { 230, 231 }, { 231, 232 } }",
+            travel: "local T = {}\nT.transit = { { from = 232, to = 246, via = 'Airship to Jeuno (Port San d\\'Oria counter)', cost = 420, pass = true } }\nreturn T")
+        checks.append(("zones are shown by name, never by number",
+                       map.name(232) == "Port San d'Oria" && map.name(nil) == "an unrecorded place"
+                           && map.name(9999) == "an unnamed zone"))
+        checks.append(("the current zone comes from the game's Area line",
+                       map.zone(inChat: "Labguide : hi\n=== Area: Northern San d'Oria ===") == 231))
+        let hops = map.route(from: 230, to: 246) ?? []
+        checks.append(("routes walk zone to zone, then take transit, in plain words",
+                       map.directions(hops) == ["Walk to Northern San d'Oria", "Walk to Port San d'Oria",
+                                                "Airship to Jeuno (Port San d'Oria counter) (needs an Airship Pass)"]))
+        checks.append(("already there is an empty route", map.route(from: 232, to: 232) == []))
+        checks.append(("NPC names drop underscores", "Fyi_Chalmwoh".npcDisplay == "Fyi Chalmwoh"))
+        checks.append(("??? spots read as markers, not names",
+                       "qm1".npcDisplay == "the ??? marker" && "qm6 (H-10/Boat)".npcDisplay == "the ??? marker (H-10/Boat)"
+                           && "Hanaa_Punaa".npcDisplay == "Hanaa Punaa"))
+        checks.append(("misread addon lines are not speakers",
+                       LearnedData.speakers(in: "Vanaguidel release : x\nHanaa Punaa : Hello") == ["Hanaa Punaa"]))
+        checks.append(("speakers are read from NPC lines, not system lines",
+                       LearnedData.speakers(in: "Gulemont : Ahhh!\n=== Area: Port San d'Oria ===\nObtained: Gil\n[1] Labguide : hi\nPortaure : Well, well...")
+                           == ["Gulemont", "Portaure"]))
+        var learned = LearnedData()
+        _ = learned.hear("Gulemont : Ahhh!", zone: 232)
+        _ = learned.hear("Gulemont : Ahhh!", zone: 232)
+        learned.givers["Q:sandoria,10"] = LearnedGiver(npc: "Balasiel", zone: 230, recorded: Date(timeIntervalSince1970: 0))
+        let exported = learned.export(entries: entries, zoneName: { "zone \($0)" }, date: Date(timeIntervalSince1970: 0))
+        checks.append(("heard speakers are counted per zone", learned.speakers["Gulemont"]?["232"] == 2))
+        checks.append(("export writes mergeable guide data",
+                       exported.contains("[10] = { name = 'A Squire\\'s Test', zone = 230, npc = 'Balasiel' },")))
+        checks.append(("a character-name window title is the character",
+                       CharacterDiscovery.name(fromTitle: "Labguide") == "Labguide"
+                           && CharacterDiscovery.name(fromTitle: "FFXI on Mac") == nil
+                           && CharacterDiscovery.name(fromTitle: "FFXI") == nil))
+        checks.append(("the status box gives the name beside the HP",
+                       CharacterDiscovery.candidates(fromStatus: "Solo\nLabguide 507 g") == ["Labguide"]
+                           && CharacterDiscovery.candidates(fromStatus: "Solo 3\nGil 1200 Gulemont") == []))
+        var vote = CharacterDiscovery.Vote()
+        let once = vote.observe(["Labguide"])
+        let twice = vote.observe(["Labguide"])
+        checks.append(("a name is trusted after two readings", once == nil && twice == "Labguide"))
+        let sessionDir = FileManager.default.temporaryDirectory.appendingPathComponent("vg-session-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        let sessionFile = sessionDir.appendingPathComponent("session.json")
+        try? Data(#"{"updated":"x","world":"Local server"}"#.utf8).write(to: sessionFile)
+        let walkDir = FileManager.default.temporaryDirectory.appendingPathComponent("vg-walk-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: walkDir.appendingPathComponent("data"), withIntermediateDirectories: true)
+        try? Data("""
+        local T = {}
+        T.quests = { sandoria = { [0] = { scripted = 'full', steps = { 'Talk to Glenne.', 'Trade the Dose of Ointment to Aaveleon.' } } } }
+        T.missions = { cop = { [840] = { scripted = 'stub', steps = { 'Not scripted.' } } } }
+        return T
+        """.utf8).write(to: walkDir.appendingPathComponent("data/quest_steps.lua"))
+        let walks = QuestCatalogue.walkthroughs(at: walkDir)
+        try? FileManager.default.removeItem(at: walkDir)
+        let linkGuides = [Guide(name: "Aht Urhgan Quests", desc: "", levels: "", steps: [
+            GuideStep(kind: "Q", title: "Luck of the Draw", tags: ["Q": "x"]),
+            GuideStep(kind: "Q", title: "No Strings Attached", tags: ["Q": "y"])], isReference: true)]
+        checks.append(("a quest named on a gear page finds its guide step",
+                       CompanionState.questStep(in: linkGuides, named: "Quest: No Strings Attached (Aht Urhgan)").map { [$0.guide, $0.step] } == [0, 1]
+                           && CompanionState.questStep(in: linkGuides, named: "Treasure coffer, opened during the quest No Strings Attached (Jeuno)").map { $0.step } == 1
+                           && CompanionState.questStep(in: linkGuides, named: "Dropped by a goblin") == nil))
+        // Skills tab picks.
+        let recipesFixture = [
+            CraftRecipe(level: 12, name: "Cheap", crystal: "Fire", parts: [], cost: 100, sell: 50, needsKeyItem: false, other: []),
+            CraftRecipe(level: 13, name: "Spot On", crystal: "Fire", parts: [], cost: 300, sell: 200, needsKeyItem: false, other: []),
+            CraftRecipe(level: 14, name: "Earner", crystal: "Fire", parts: [], cost: 100, sell: 900, needsKeyItem: false, other: []),
+            CraftRecipe(level: 13, name: "Needs Smithing", crystal: "Fire", parts: [], cost: 1, sell: 9999, needsKeyItem: false, other: ["Smithing 8"]),
+            CraftRecipe(level: 30, name: "Too High", crystal: "Fire", parts: [], cost: 1, sell: 9999, needsKeyItem: false, other: []),
+        ]
+        checks.append(("craft pick: about 3 above your level, made with this craft alone",
+                       SkillPicks.forSkill(recipesFixture, level: 10)?.name == "Spot On"))
+        checks.append(("craft gil pick: most NPC gil in the same window",
+                       SkillPicks.forGil(recipesFixture, level: 10)?.name == "Earner"))
+        checks.append(("craft pick widens when nothing is close", SkillPicks.forSkill(recipesFixture, level: 22)?.name == "Too High"))
+        let mobsFixture = [
+            SkillTarget(name: "Aggro", zone: 1, min: 11, max: 12, spawns: 50, aggro: true, links: false),
+            SkillTarget(name: "Linker", zone: 1, min: 11, max: 12, spawns: 50, aggro: false, links: true),
+            SkillTarget(name: "Calm", zone: 1, min: 11, max: 12, spawns: 10, aggro: false, links: false),
+            SkillTarget(name: "Too Weak", zone: 1, min: 3, max: 5, spawns: 99, aggro: false, links: false),
+        ]
+        checks.append(("monster pick: not aggressive, not linking, not too weak",
+                       SkillPicks.monster(mobsFixture, level: 10)?.name == "Calm"))
+        // Content order and achievement links.
+        let refsFixture = [Guide(name: "Bastok Quests", desc: "", levels: "", steps: [
+                               GuideStep(kind: "Q", title: "The Doorman", tags: ["Q": "a"]),
+                               GuideStep(kind: "Q", title: "Blade of Darkness", tags: ["Q": "b"])], isReference: true),
+                           Guide(name: "Windurst Missions", desc: "", levels: "", steps: [
+                               GuideStep(kind: "M", title: "The Horutoto Ruins Experiment", tags: ["M": "c"])], isReference: true)]
+        let ordered = QuestCatalogue.contentOrder([Guide(name: "Bastok Quests", desc: "", levels: "", steps: []),
+                                                   Guide(name: "Bastok Missions", desc: "", levels: "", steps: []),
+                                                   Guide(name: "Support Jobs", desc: "", levels: "", steps: []),
+                                                   Guide(name: "Starting Out", desc: "", levels: "", steps: [])]).map(\.name)
+        checks.append(("content order: start, jobs, missions, quests",
+                       ordered == ["Starting Out", "Support Jobs", "Bastok Missions", "Bastok Quests"]))
+        checks.append(("job unlocks list each advanced job's quest",
+                       QuestCatalogue.jobUnlockGuide(from: refsFixture)?.steps.first?.tags["JOB"] == "Dark Knight"))
+        checks.append(("an achievement opens the quest it quotes",
+                       CompanionState.achievementStep(in: refsFixture, description: "Complete 'The Doorman' and obtain the Razor Axe.").map { [$0.guide, $0.step] } == [0, 0]))
+        checks.append(("a nation rank achievement opens that nation's missions",
+                       CompanionState.achievementStep(in: refsFixture, description: "Achieve Rank 7 in Windurst.").map { $0.guide } == 1
+                           && CompanionState.achievementStep(in: refsFixture, description: "Reach level 55 as a Warrior.") == nil))
+        checks.append(("quest walkthroughs are read per quest and mission",
+                       walks["Q:sandoria,0"]?.steps.count == 2 && walks["M:cop,840"]?.scripted == "stub"))
+        checks.append(("a server's own Gear and Skills folder is keyed by its name",
+                       WikiState.serverKey(for: "CatsEyeXI") == "catseyexi" && WikiState.serverKey(for: "PegasusXI") == "pegasusxi"
+                           && WikiState.serverKey(for: "Local server") == "localserver" && WikiState.serverKey(for: "") == ""))
+        checks.append(("the launcher's world fills in World",
+                       CharacterDiscovery.launcherWorld(at: sessionFile) == "Local server"))
+        checks.append(("before the launcher shares its list, Server lists the shipped worlds",
+                       CharacterDiscovery.launcherWorlds(at: sessionFile).contains("HorizonXI")))
+        try? Data(#"{"world":"CatsEyeXI","worlds":["CatsEyeXI","Local server"]}"#.utf8).write(to: sessionFile)
+        checks.append(("Server lists exactly the launcher's servers, in its order",
+                       CharacterDiscovery.launcherWorlds(at: sessionFile) == ["CatsEyeXI", "Local server"]
+                       && CharacterDiscovery.launcherWorld(at: sessionFile) == "CatsEyeXI"))
+        try? FileManager.default.removeItem(at: sessionDir)
+        let rows = OCRPiece.rows([
+            OCRPiece(text: "It's been twenty years", x: 0.2, midY: 0.50, height: 0.04, width: 0.5),
+            OCRPiece(text: "Gulemont", x: 0.0, midY: 0.505, height: 0.04, width: 0.14),
+            OCRPiece(text: "Deleted San d'Oria", x: 0.0, midY: 0.10, height: 0.04, width: 0.3),
+            OCRPiece(text: "quest 6 from Labguide.", x: 0.31, midY: 0.10, height: 0.04, width: 0.3),
+            OCRPiece(text: "=== Area: Port San d'Oria ===", x: 0.0, midY: 0.30, height: 0.04),
+            OCRPiece(text: "Labguide : !pos 1 2 3", x: 0.0, midY: 0.70, height: 0.04),
+        ])
+        checks.append(("OCR pieces rebuild chat rows and the speaker separator",
+                       rows == ["Labguide : !pos 1 2 3", "Gulemont : It's been twenty years",
+                                "=== Area: Port San d'Oria ===", "Deleted San d'Oria quest 6 from Labguide."]))
+        var me = LearnedData()
+        checks.append(("the player's own lines are not speakers",
+                       me.hear("Labguide : !pos 1\nGulemont : Hi", zone: 232, excluding: "Labguide") == ["Gulemont"]))
+        var seen = Set(ChatDiff.keys(["top cut", "a", "Glenne : Oh"]))
+        let arrivedFirst = ChatDiff.newLines(seen: &seen, current: ["top cut off", "a", "Glenne : Oh", "Lusiane : Hi"])
+        let again = ChatDiff.newLines(seen: &seen, current: ["a", "Lusiane : Hi", "Glenne : Oh"])
+        let repeatLine = ChatDiff.newLines(seen: &seen, current: ["a", "Glenne : Oh", "Lusiane : Hi", "Glenne : Oh"])
+        checks.append(("a line counts once, the first time it shows; the cut top row never does",
+                       arrivedFirst == ["Lusiane : Hi"] && again.isEmpty))
+        checks.append(("an NPC repeating the same line is heard again", repeatLine == ["Glenne : Oh"]))
+        var full = Set(ChatDiff.keys(["x", "a", "Glenne : Oh", "b"]))
+        let scrolled = ChatDiff.newLines(seen: &full, previous: ["x", "a", "Glenne : Oh", "b"],
+                                         current: ["a", "Glenne : Oh", "b", "Glenne : Oh"])
+        checks.append(("a repeat that scrolls the old copy away is still heard", scrolled == ["Glenne : Oh"]))
+        checks.append(("bottom chat crop scales to screenshot pixels",
+                       ChatCrop().rect(width: 1600, height: 1000) == CGRect(x: 0, y: 650, width: 1600, height: 350)))
+        checks.append(("invalid and nonfinite crop values are refused",
+                       !ChatCrop(left: 90, top: 0, width: 20, height: 30).valid
+                           && !ChatCrop(left: .nan, top: 0, width: 20, height: 30).valid
+                           && !ChatCrop(left: 0, top: 0, width: 0, height: 30).valid))
+        checks.append(("FFXI browser and terminal titles are never capture candidates",
+                       !GameWindowIdentity.matches(title: "FFXI Wiki", owner: "Google Chrome",
+                                                   bundle: "com.google.chrome", executable: "Google Chrome")
+                           && !GameWindowIdentity.matches(title: "FFXI on Mac", owner: "Terminal",
+                                                          bundle: "com.apple.Terminal", executable: "Terminal")))
+        checks.append(("game-window title also needs Wine or game process identity",
+                       GameWindowIdentity.matches(title: "FFXI on Mac", owner: "wine64-preloader",
+                                                  bundle: "", executable: "wine64-preloader")
+                           && GameWindowIdentity.matches(title: "HorizonXI", owner: "unknown",
+                                                         bundle: "", executable: "horizon-loader.exe")
+                           && !GameWindowIdentity.matches(title: "Notepad", owner: "wine64-preloader",
+                                                          bundle: "org.winehq.wine", executable: "wine64-preloader")))
+        checks.append(("a character-named window of an FFXI loader process is the game",
+                       GameWindowIdentity.matches(title: "Labguide", owner: "wine", bundle: "",
+                                                  executable: "wine", gameProcess: true)
+                           && !GameWindowIdentity.matches(title: "Labguide", owner: "Google Chrome",
+                                                          bundle: "com.google.chrome", executable: "Google Chrome",
+                                                          gameProcess: true)
+                           && !GameWindowIdentity.isGameProcess(ProcessInfo.processInfo.processIdentifier)))
+        // Explicit developer override only: never enumerate or hydrate Drive during this fixture.
+        if let path = ProcessInfo.processInfo.environment["VANAGUIDE_ROOT"] {
+            let real = QuestCatalogue.entries(at: URL(fileURLWithPath: path))
+            checks.append(("real quest and mission catalogues load over 500 named entries", real.count > 500))
+            // How many of the player's RetroAchievements open a guide (read-only, if present).
+            if let snap = ProgressSnapshot.read(FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support/VanaGuide Server-Safe/retroachievements.json")) {
+                let refs = QuestCatalogue.referenceGuides(real)
+                let all = snap.games.flatMap { $0.achievements.values.compactMap(\.description) }
+                let linked = all.filter { CompanionState.achievementStep(in: refs, description: $0) != nil }
+                print("  info: \(linked.count)/\(all.count) achievements open a quest or mission guide")
+                all.filter { CompanionState.achievementStep(in: refs, description: $0) == nil && $0.contains("'") }
+                    .prefix(12).forEach { print("  unlinked: \($0)") }
+            }
+            // Every quest/mission source on a gear page should open a guide step.
+            if let gear = WikiData.gear(URL(fileURLWithPath: path).appendingPathComponent("data/gear_guide.lua")) {
+                let refs = QuestCatalogue.referenceGuides(real)
+                // Lines that name a quest ("Quest: …", "during the quest …"); notes like "Not handed
+                // out by this server's scripts yet" name none and stay plain text.
+                let lines = gear.items.flatMap(\.how).filter { ($0.kind == "quest" || $0.kind == "mission")
+                    && $0.text.range(of: #"(?i)(quest|mission):|the (quest|mission) "#, options: .regularExpression) != nil }
+                let missed = lines.filter { CompanionState.questStep(in: refs, named: $0.text) == nil }
+                missed.prefix(8).forEach { print("  unlinked: \($0.text)") }
+                checks.append(("gear quest sources link to guides (\(lines.count - missed.count)/\(lines.count))",
+                               // 2026-10-28: 203/221; the 18 left (Borghertz hands quests, A Candlelight
+                               // Vigil, Guest of Hauteur) have no entry in data/quests.lua to open.
+                               !lines.isEmpty && missed.count * 10 <= lines.count))
+            }
+            checks.append(("real database produces manual reference sections",
+                           QuestCatalogue.referenceGuides(real).flatMap(\.steps).count == real.count
+                               && QuestCatalogue.referenceGuides(real).flatMap(\.steps).allSatisfy(\.fixed)))
+            let world = WorldMap.load(root: URL(fileURLWithPath: path))
+            checks.append(("real zone names and routes load",
+                           world.names.count > 250 && world.name(232) == "Port San d'Oria"
+                               && world.route(from: 230, to: 232) != nil
+                               && (world.route(from: 230, to: 246)?.isEmpty == false)))
+            let located = real.filter { $0.data["zone"]?.int != nil }
+            checks.append(("every located quest names a known zone",
+                           located.allSatisfy { world.names[$0.data["zone"]!.int!] != nil }))
+        }
+        return checks
+    }
+}

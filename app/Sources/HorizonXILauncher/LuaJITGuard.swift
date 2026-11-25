@@ -27,7 +27,7 @@ enum LuaJITGuard {
 
     /// Apply to every `addons/<name>/<name>.lua`. Returns how many files were changed this run.
     @discardableResult
-    static func apply(_ install: Install, log: (String) -> Void = { _ in }) -> Int {
+    static func apply(_ install: Install, policy: AddonPolicy? = nil, log: (String) -> Void = { _ in }) -> Int {
         let fm = FileManager.default
         let addonDir = install.gameDir.appendingPathComponent("addons")
         guard let kids = try? fm.contentsOfDirectory(at: addonDir, includingPropertiesForKeys: nil)
@@ -38,6 +38,7 @@ enum LuaJITGuard {
             guard fm.fileExists(atPath: k.path, isDirectory: &isDir), isDir.boolValue else { continue }
             let name = k.lastPathComponent
             if name.lowercased() == "libs" { continue }
+            if let p = policy, p.isRestricting, !p.allows(name) { continue }
             let entry = k.appendingPathComponent("\(name).lua")
             guard fm.fileExists(atPath: entry.path) else { continue }
             if patch(entry) { changed += 1; log("==> jit guard: \(name)") }
@@ -59,6 +60,6 @@ enum LuaJITGuard {
         var bom = ""
         if body.hasPrefix("\u{FEFF}") { bom = "\u{FEFF}"; body.removeFirst() }
         let out = bom + shim + body
-        return (try? out.write(to: url, atomically: true, encoding: .utf8)) != nil
+        return Credentials.writeFile(out, to: url)
     }
 }

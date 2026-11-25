@@ -22,6 +22,13 @@ enum GameRegistry {
         try? String(contentsOf: marker(i), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Forget the cached target, so the next `point` writes the registry and COM entries again.
+    /// Play calls this when Preflight finds them missing (a fresh download, a new prefix):
+    /// the marker alone would make `point` skip exactly the work that is needed.
+    static func invalidate(_ i: Install) {
+        try? FileManager.default.removeItem(at: marker(i))
+    }
+
     /// Re-point if needed. Must run while no wineserver holds the registry (Runner calls it right
     /// after `RendererSetup.apply`, which stops it). Returns false if the world's SquareEnix folder
     /// is not there to point at.
@@ -54,21 +61,16 @@ enum GameRegistry {
         for cand in [polu, i.driveC.appendingPathComponent("polu.reg")] where fm.fileExists(atPath: cand.path) {
             wine(i, ["regedit", "/S", Install.winePath(cand, driveC: i.driveC)]); break
         }
-        try? target.write(to: marker(i), atomically: true, encoding: .utf8)
+        Credentials.writeFile(target, to: marker(i))
         RendererSetup.stopWineserver(i)
         return true
     }
 
+    /// No window driver: registry and COM work draws nothing, and on a fresh prefix the Mac
+    /// driver's explorer can crash-loop and hold regsvr32 for good (see install.sh). `point`
+    /// stops the wineserver afterwards, so the game's own session starts with the driver on.
     private static func wine(_ i: Install, _ args: [String]) {
-        let p = Process()
-        p.executableURL = i.wine
-        p.arguments = args
-        var env = ProcessInfo.processInfo.environment
-        env["WINEPREFIX"] = i.prefix.path; env["WINEDEBUG"] = "-all"
-        env.removeValue(forKey: "DYLD_FALLBACK_LIBRARY_PATH"); env.removeValue(forKey: "DYLD_LIBRARY_PATH")
-        p.environment = env
-        p.standardOutput = Pipe(); p.standardError = Pipe()
-        guard (try? p.run()) != nil else { return }
-        p.waitUntilExit()
+        let cmd = "export WINEPREFIX=\(Bridge.shellQuote(i.prefix.path)); export WINEDEBUG=-all; export WINEBOOT_HIDE_DIALOG=1; export WINEDLLOVERRIDES='winemac.drv=d'; \(Bridge.shellQuote(Runner.playWine(i).path)) " + args.map(Bridge.shellQuote).joined(separator: " ")
+        Bridge.runShell(cmd)
     }
 }

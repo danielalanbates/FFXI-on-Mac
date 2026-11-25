@@ -179,10 +179,12 @@ def game_window():
             Quartz.kCGWindowListExcludeDesktopElements)
     wins = [w for w in Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID)
             if (w.get("kCGWindowOwnerName") or "") == "wine"]
-    # The client titles its window "FINAL FANTASY XI". Prefer that outright: during start-up
-    # wine also has a 1440x30 strip and a 500x500 helper window, and picking by size alone
-    # resolves to one of those in the window between launch and the game window appearing.
-    named = [w for w in wins if "FINAL FANTASY" in (w.get("kCGWindowName") or "").upper()]
+    # The client titles its window "FINAL FANTASY XI" (b69+: "FFXI on Mac", gamewindow.dylib).
+    # Prefer that outright: during start-up wine also has a 1440x30 strip and a 500x500 helper
+    # window, and picking by size alone resolves to one of those in the window between launch and
+    # the game window appearing.
+    named = [w for w in wins if any(t in (w.get("kCGWindowName") or "").upper()
+                                    for t in ("FINAL FANTASY", "FFXI ON MAC"))]
     if named:
         return max(named, key=lambda w: w["kCGWindowBounds"]["Width"] *
                                         w["kCGWindowBounds"]["Height"])

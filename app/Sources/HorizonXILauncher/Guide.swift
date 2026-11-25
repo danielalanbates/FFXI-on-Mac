@@ -1,0 +1,255 @@
+import Foundation
+import AppKit
+
+/// Vanaguide: Zygor-style quest / mission guide for Vana'diel.
+///
+/// Lives in its own repository (`github.com/danielalanbates/vanaguide`). This file only wires
+/// the launcher to it at launch — copy the Lua addon into the game folder and switch it on in
+/// Ashita's start-up script. Everything it writes is confined to `addons/Vanaguide` and one
+/// line in the world's script, outside the block AddonSuite owns, so the two never fight.
+///
+/// **LSB / unrestricted only.** Vanaguide is on nobody's published allowlist. On HorizonXI,
+/// CatsEyeXI, FFEra, and any other allowlist world the launcher refuses to install it and
+/// removes any leftover copy, same safety model as `Narration.swift` for VanaVoice.
+enum Guide {
+    /// Separate, user-opened GUI. Keeping a copy inside the launcher also lets a launcher
+    /// update carry the matching guide UI without installing an unapproved game addon.
+    /// Server-Safe needs macOS 14 (ScreenCaptureKit screenshots); its bundle says so too.
+    static var companionSupported: Bool {
+        ProcessInfo.processInfo.isOperatingSystemAtLeast(OperatingSystemVersion(majorVersion: 14, minorVersion: 0, patchVersion: 0))
+    }
+
+    static var companionURL: URL? {
+        guard companionSupported else { return nil }
+        let candidates = [
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/VanaGuide Server-Safe.app"),
+            URL(fileURLWithPath: "/Applications/VanaGuide Server-Safe.app"),
+        ]
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        return companionURL(in: candidates, osVersion: "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)")
+    }
+
+    /// A standalone beta may be updated while the playable launcher stays open. Prefer the
+    /// newest compatible copy, preserving candidate order (embedded first) on equal builds.
+    /// Read the plist directly: Bundle caches can retain metadata from before a bundle swap.
+    static func companionURL(in candidates: [URL], osVersion: String) -> URL? {
+        var selected: (url: URL, build: UpdateRules.Build)?
+        for url in candidates {
+            guard let data = try? Data(contentsOf: url.appendingPathComponent("Contents/Info.plist")),
+                  let info = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
+                  info["CFBundleIdentifier"] as? String == "org.batesai.vanaguide-companion",
+                  info["CFBundleExecutable"] as? String == "VanaguideCompanion",
+                  let version = info["CFBundleShortVersionString"] as? String,
+                  version.range(of: #"\A[0-9]+(?:\.[0-9]+){1,2}\z"#, options: .regularExpression) != nil,
+                  let buildText = info["CFBundleVersion"] as? String, let number = Int(buildText), number > 0,
+                  let minimumOS = info["LSMinimumSystemVersion"] as? String,
+                  minimumOS.range(of: #"\A[0-9]+(?:\.[0-9]+){0,2}\z"#, options: .regularExpression) != nil,
+                  UpdateRules.compare(osVersion, minimumOS) >= 0,
+                  FileManager.default.isExecutableFile(atPath: url.appendingPathComponent("Contents/MacOS/VanaguideCompanion").path)
+            else { continue }
+            let build = UpdateRules.Build(version: version, build: number)
+            if selected == nil || UpdateRules.isOffered(build, over: selected!.build) {
+                selected = (url, build)
+            }
+        }
+        return selected?.url
+    }
+
+    /// Tells Server-Safe which world is being played and which worlds the launcher offers, so
+    /// its Server list matches this one and World fills in by itself. A tiny JSON file in
+    /// Server-Safe's own Application Support folder; no accounts or credentials.
+    static func shareSession(world: String = "", worlds: [String]? = nil) {
+        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        else { return }
+        let dir = base.appendingPathComponent("VanaGuide Server-Safe", isDirectory: true)
+        let url = dir.appendingPathComponent("session.json")
+        var body = (try? Data(contentsOf: url))
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        if !world.isEmpty { body["world"] = world }
+        if let worlds { body["worlds"] = worlds }
+        guard body["world"] != nil || body["worlds"] != nil else { return }
+        body["updated"] = ISO8601DateFormatter().string(from: Date())
+        guard let data = try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]) else { return }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? data.write(to: url, options: .atomic)
+    }
+
+    /// "Open with Play" checkbox: Server-Safe opens alongside the game.
+    static let autoOpenKey = "guide.autoOpenWithPlay"
+
+    /// `activate: false` (Play) opens Server-Safe behind the game instead of in front of it, and
+    /// leaves an already running copy where it is.
+    static func openCompanion(world: String = "", worlds: [String]? = nil, activate: Bool = true) {
+        shareSession(world: world, worlds: worlds)
+        let identifier = "org.batesai.vanaguide-companion"
+        if let existing = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == identifier
+        }) {
+            if activate { existing.activate() }
+            return
+        }
+        guard let url = companionURL else { return }
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = activate
+        NSWorkspace.shared.openApplication(at: url, configuration: config)
+    }
+
+    static let loadLine = "/addon load vanaguide"
+    static let marker = "# Vanaguide quest guide"
+    /// Folder name matches `vanaguide/tools/install.sh` (`addons/Vanaguide`).
+    static let addonDirName = "Vanaguide"
+
+    /// Candidate source trees, first hit wins.
+    ///
+    /// Prefer this launcher's bundled snapshot, then live Drive/iCloud checkouts and a Downloads
+    /// copy for development. Never read from `/Applications/*.app` playable trees as edit sources.
+    private static var candidateSources: [URL] {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let icloudCode = home
+            .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs/Code")
+        let bundled = Bundle.main.resourceURL?
+            .appendingPathComponent("Vanaguide", isDirectory: true)
+        let drive = CodeFolders.googleDriveCodeRoots.flatMap { codeRoot in [
+            codeRoot.appendingPathComponent("GitHub/vanaguide/Vanaguide", isDirectory: true),
+            codeRoot.appendingPathComponent("GitHub/Vanaguide/Vanaguide", isDirectory: true),
+            codeRoot.appendingPathComponent("vanaguide/Vanaguide", isDirectory: true),
+            codeRoot.appendingPathComponent("Vanaguide/Vanaguide", isDirectory: true),
+        ] }
+        let fallbacks = [
+            icloudCode.appendingPathComponent("Vanaguide/Vanaguide", isDirectory: true),
+            icloudCode.appendingPathComponent("GitHub/vanaguide/Vanaguide", isDirectory: true),
+            icloudCode.appendingPathComponent("GitHub/Vanaguide/Vanaguide", isDirectory: true),
+            home.appendingPathComponent("Downloads/Vanaguide", isDirectory: true),
+            home.appendingPathComponent("Downloads/vanaguide/Vanaguide", isDirectory: true),
+        ]
+        return (bundled.map { [$0] } ?? []) + drive + fallbacks
+    }
+
+    /// Is a Vanaguide addon tree present somewhere we can copy from?
+    static var isAvailable: Bool { addonSource != nil }
+
+    /// May this world run it at all?
+    ///
+    /// This project only permits the guide on its own local LandSandBoat world. An unknown
+    /// hosted-server policy is not permission to install an unapproved addon.
+    static func allowed(by policy: AddonPolicy) -> Bool {
+        if case .unrestricted = policy { return true }
+        return false
+    }
+
+    /// Directory that contains `Vanaguide.lua` (the Ashita addon root).
+    static var addonSource: URL? {
+        let fm = FileManager.default
+        for u in candidateSources {
+            guard isCompleteAddon(at: u, fileManager: fm) else { continue }
+            return u
+        }
+        return nil
+    }
+
+    static func isCompleteAddon(at source: URL, fileManager: FileManager) -> Bool {
+        let requiredFiles = [
+            "Vanaguide.lua", "core/guide.lua", "core/progress.lua", "core/story.lua",
+            "core/conditions.lua", "core/util.lua", "core/lookup.lua", "core/verify.lua",
+            "core/walk.lua", "guides/init.lua", "routing/zonegraph.lua", "routing/router.lua",
+            "routing/path.lua", "routing/zonepoints.lua", "routing/navgrid.lua",
+            "ui/arrow.lua", "ui/window.lua", "ui/line.lua", "ui/project.lua",
+            "data/zone_names.lua", "data/zonelines.lua", "data/zonepoints.lua",
+            "data/drops.lua", "data/gear.lua", "data/missions.lua", "data/nm.lua",
+            "data/quests.lua", "data/travel.lua", "data/vendors.lua",
+        ]
+        let filesExist = requiredFiles.allSatisfy {
+            fileManager.fileExists(atPath: source.appendingPathComponent($0).path)
+        }
+        let directoriesExist = ["guides", "data", "routing", "ui"].allSatisfy {
+            var isDirectory = ObjCBool(false)
+            return fileManager.fileExists(
+                atPath: source.appendingPathComponent($0, isDirectory: true).path,
+                isDirectory: &isDirectory
+            ) && isDirectory.boolValue
+        }
+        return filesExist && directoriesExist
+    }
+
+    /// Reuse Narration's boot-script resolution so a world that points `script=` at `lsb.txt`
+    /// (or any other file) gets the load line in the file Ashita actually runs.
+    static func scriptName(in install: Install, profile: String) -> String {
+        Narration.scriptName(in: install, profile: profile)
+    }
+
+    /// Called on every launch. Never fatal: if any part fails the game still starts without
+    /// the guide, exactly as it did before.
+    ///
+    /// `othersLive`: another client shares this game folder right now. Its addons stay on disk
+    /// (it may have them loaded); only this world's load line is taken out.
+    static func prepare(_ install: Install, enabled: Bool, policy: AddonPolicy,
+                        profile: String = "horizonxi.ini", othersLive: Bool = false,
+                        log: (String) -> Void) {
+        let fm = FileManager.default
+        let script = scriptName(in: install, profile: profile)
+        let scripts = install.gameDir.appendingPathComponent("scripts/\(script)")
+        let dest = install.gameDir.appendingPathComponent("addons/\(addonDirName)",
+                                                          isDirectory: true)
+
+        // Server rules first: scrub leftovers from older manual installs or prior launcher
+        // builds so an allowlist world never carries Vanaguide into a session.
+        guard allowed(by: policy) else {
+            if fm.fileExists(atPath: dest.path) {
+                if othersLive { log("==> vanaguide: addons/\(addonDirName) kept on disk — another world is running") }
+                else { try? fm.removeItem(at: dest) }
+            }
+            if removeLoadLine(from: scripts) || enabled {
+                log("==> vanaguide: not allowed here — this world runs an addon allowlist and "
+                    + "VanaGuide is not on it")
+            }
+            return
+        }
+
+        guard enabled else {
+            let removedAddon = !othersLive && fm.fileExists(atPath: dest.path)
+            if removedAddon { try? fm.removeItem(at: dest) }
+            if removeLoadLine(from: scripts) || removedAddon { log("==> vanaguide: off") }
+            return
+        }
+        guard let src = addonSource else {
+            log("==> vanaguide: no source tree found (expected Code/Vanaguide/Vanaguide or "
+                + "Downloads/Vanaguide); skipping")
+            return
+        }
+
+        // Replacing swaps the folder out from under a client that has it loaded.
+        if othersLive, isCompleteAddon(at: dest, fileManager: fm) {
+            log("==> vanaguide: another world is running; using the copy already installed")
+        } else {
+            do { try AddonInstaller.replaceDirectory(at: dest, with: src, preserving: ["data/nav"], fileManager: fm) }
+            catch {
+                log("==> vanaguide: could not install the addon — \(error.localizedDescription)")
+                return
+            }
+        }
+
+        addLoadLine(to: scripts)
+        log("==> vanaguide: on (from \(src.path), via scripts/\(script))")
+    }
+
+    /// Append the load line after everything AddonSuite manages.
+    private static func addLoadLine(to scripts: URL) {
+        var text = Credentials.readFile(at: scripts) ?? "/load Addons\n"
+        guard !text.contains(loadLine) else { return }
+        if !text.hasSuffix("\n") { text += "\n" }
+        text += "\n\(marker)\n\(loadLine)\n"
+        Credentials.writeFile(text, to: scripts)
+    }
+
+    @discardableResult
+    private static func removeLoadLine(from scripts: URL) -> Bool {
+        guard let text = Credentials.readFile(at: scripts),
+              text.contains(loadLine) else { return false }
+        let kept = TextFile.lines(of: text).filter {
+            let t = $0.trimmingCharacters(in: .whitespaces)
+            return t != loadLine && t != marker
+        }
+        Credentials.writeFile(kept.joined(separator: "\n"), to: scripts)
+        return true
+    }
+}

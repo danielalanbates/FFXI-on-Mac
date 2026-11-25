@@ -1,30 +1,165 @@
 #!/bin/zsh
 # bundle.sh — build FFXI-on-Mac.app from the SPM executable.
 # No Xcode required; this machine only has the Command Line Tools.
+#
+#   ./app/bundle.sh <output-dir>        e.g. ./app/bundle.sh ~/Downloads/FFXI-build
+#
+# There is no default output. /Applications/FFXI-on-Mac.app is the copy Daniel plays on: build
+# elsewhere, and install there only with the launcher and every game client quit (this script
+# refuses /Applications while any of them runs). A bundle it replaces is moved into
+# ~/Downloads/FFXI-on-Mac-build/archive-apps/, never deleted. Version and build: app/VERSION.
+# Swift build intermediates stay in Downloads.
 set -euo pipefail
 
 HERE="${0:A:h}"
 REPO="${HERE:h}"
-# Default output is beside the sources, except when the checkout lives in iCloud Drive: iCloud
-# re-adds extended attributes to files while they are being written, and codesign refuses any
-# bundle carrying them ("resource fork, Finder information, or similar detritus not allowed").
-# Stripping them does not help -- they come back mid-build -- so build somewhere else entirely.
-if [[ -n "${1:-}" ]]; then
-  OUT="$1"
-elif [[ "$HERE" == *"/Mobile Documents/"* ]]; then
-  OUT="${TMPDIR:-/tmp}/ffxi-on-mac-build"
-else
-  OUT="$HERE/build"
+if [[ -z "${1:-}" ]]; then
+  echo "usage: ${0:t} <output-dir>   (e.g. ${0:t} ~/Downloads/FFXI-build)" >&2
+  exit 2
 fi
+OUT="$1"
 APP="$OUT/FFXI-on-Mac.app"
+BUILD_DIR="${HXI_BUILD_DIR:-$HOME/Downloads/FFXI-on-Mac-build/swift-build}"
+ARCHIVE_DIR="${HXI_ARCHIVE_DIR:-$HOME/Downloads/FFXI-on-Mac-build/archive-apps}"
+
+# app/VERSION: SHORT=<CFBundleShortVersionString>, BUILD=<CFBundleVersion>. The updater compares
+# both, so a new local beta is a one-line BUILD bump there.
+APP_SHORT_VERSION="" APP_BUILD=""
+while IFS='=' read -r key value || [[ -n "$key" ]]; do
+  value="${value//[[:space:]]/}"
+  case "${key//[[:space:]]/}" in
+    SHORT) APP_SHORT_VERSION="$value" ;;
+    BUILD) APP_BUILD="$value" ;;
+  esac
+done < "$HERE/VERSION"
+if [[ ! "$APP_SHORT_VERSION" =~ '^[0-9]+(\.[0-9]+){1,2}$' || "$APP_BUILD" != <-> ]]; then
+  echo "app/VERSION must hold SHORT=<x.y[.z]> and BUILD=<number> (got '$APP_SHORT_VERSION' / '$APP_BUILD')" >&2
+  exit 1
+fi
+
+# Physical path: symlinks and firmlinks (/System/Volumes/Data/Applications) resolve, so the
+# overlap and /Applications checks below see the folder the app really lands in.
+canonical_path() {
+  local path="$1"
+  /bin/mkdir -p "${path:h}"
+  (cd -P "${path:h}" && print -r -- "$(pwd -P)/${path:t}")
+}
+
+APP_CANONICAL="$(canonical_path "$APP")"
+if [[ "$APP_CANONICAL" == */*.app/Contents/* ]]; then
+  echo "output app cannot be created inside another application bundle: $APP_CANONICAL" >&2
+  exit 1
+fi
+
+# Never swap the bundle Daniel plays on while it, the game or this project's wine is running: the
+# launcher and the x87 sidecar it starts, a loader or Ashita, and anything run from the patched
+# wine (X87Sidecar.patchedWineCandidates, all .../wine-coop/wine) or a wrapper's wine
+# (.../SharedSupport/wine, the only layout Install accepts). Its wineserver shows up as
+# .../wine/lib/wine/../../bin/wineserver, so the whole folder is matched. Other Wine apps
+# (CrossOver, Whisky, XIV on Mac) keep their wine elsewhere and do not count. Checked before the
+# build and again right before the swap. "Install FFXI on Mac.command" uses the same pattern.
+LIVE_PATTERN='FFXI-on-Mac\.app/Contents/(MacOS|Resources/x87sidecar|Helpers/[^/]+\.app/Contents/MacOS/VanaguideCompanion)|horizon-loader|Ashita-cli|/wine-coop/wine/|/SharedSupport/wine/'
+APPLICATIONS_ID="$(/usr/bin/stat -f %d:%i /Applications)"
+# Pid and executable of each match, never the arguments: a loader's carry the account password.
+# Fails when nothing matches.
+live_processes() {
+  local pids
+  pids="$(/usr/bin/pgrep -f "$LIVE_PATTERN" 2>/dev/null)" || return 1
+  /bin/ps -o pid=,comm= -p "${(j:,:)${(f)pids}}" 2>/dev/null
+  return 0
+}
+refuse_if_live() {
+  # By device and inode, so no other spelling of /Applications gets past it.
+  [[ "$(/usr/bin/stat -f %d:%i "${APP_CANONICAL:h}" 2>/dev/null)" == "$APPLICATIONS_ID" ]] || return 0
+  local live
+  if live="$(live_processes)"; then
+    echo "refusing to replace $APP_CANONICAL: the launcher, a game client or its wine is running." >&2
+    echo "Quit them first (in game, /shutdown; never kill a logged-in client):" >&2
+    print -r -- "$live" >&2
+    exit 1
+  fi
+}
+refuse_if_live
+for source in "${HXI_VANAGUIDE_SOURCE:-$REPO/../vanaguide/Vanaguide}" \
+              "${HXI_VANAVOICE_SOURCE:-$REPO/../vanavoice/addon/vanavoice}" \
+              "${HXI_WINECURSOR_SOURCE:-$REPO/addons/winecursor}"; do
+  SOURCE_CANONICAL="$(canonical_path "$source")"
+  if [[ "$SOURCE_CANONICAL" == "$APP_CANONICAL" || "$SOURCE_CANONICAL" == "$APP_CANONICAL"/* \
+     || "$APP_CANONICAL" == "$SOURCE_CANONICAL"/* ]]; then
+    echo "addon source and output app overlap; refusing unsafe bundle: $source" >&2
+    exit 1
+  fi
+done
 
 cd "$HERE"
-swift build -c release
-BIN="$(swift build -c release --show-bin-path)/HorizonXILauncher"
+if [[ -n "${HXI_BINARY:-}" ]]; then
+  BIN="$HXI_BINARY"
+else
+  swift build --build-system native -c release -j 1 --scratch-path "$BUILD_DIR" -Xswiftc -parse-as-library
+  BIN="$(swift build --build-system native -c release --scratch-path "$BUILD_DIR" --show-bin-path)/HorizonXILauncher"
+fi
 [[ -x "$BIN" ]] || { echo "build produced no binary" >&2; exit 1; }
 
-rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+bundle_addon() {
+  local addon_name="$1" addon_source="$2" entry_file="$3" license_file="$4"
+  local addon_destination="$APP/Contents/Resources/$addon_name"
+  mkdir -p "$addon_destination"
+  cp -R "$addon_source/." "$addon_destination/"
+  cp "$license_file" "$addon_destination/LICENSE"
+}
+
+VANAGUIDE_SOURCE="${HXI_VANAGUIDE_SOURCE:-$REPO/../vanaguide/Vanaguide}"
+VANAVOICE_SOURCE="${HXI_VANAVOICE_SOURCE:-$REPO/../vanavoice/addon/vanavoice}"
+WINECURSOR_SOURCE="${HXI_WINECURSOR_SOURCE:-$REPO/addons/winecursor}"
+VANAGUIDE_LICENSE="${VANAGUIDE_SOURCE:h}/LICENSE"
+VANAVOICE_LICENSE="${VANAVOICE_SOURCE:h:h}/LICENSE"
+
+for relative in \
+  Vanaguide.lua core/guide.lua core/progress.lua core/story.lua core/conditions.lua \
+  core/util.lua core/lookup.lua core/verify.lua core/walk.lua guides/init.lua \
+  routing/zonegraph.lua routing/router.lua routing/path.lua routing/zonepoints.lua \
+  routing/navgrid.lua ui/arrow.lua ui/window.lua ui/line.lua ui/project.lua \
+  data/zone_names.lua data/zonelines.lua data/zonepoints.lua data/drops.lua \
+  data/gear.lua data/missions.lua data/nm.lua data/quests.lua data/travel.lua data/vendors.lua; do
+  [[ -f "$VANAGUIDE_SOURCE/$relative" ]] || {
+    echo "incomplete Vanaguide source; missing $relative" >&2
+    exit 1
+  }
+done
+[[ -f "$VANAVOICE_SOURCE/vanavoice.lua" ]] || {
+  echo "incomplete VanaVoice source; missing vanavoice.lua" >&2
+  exit 1
+}
+[[ -f "$WINECURSOR_SOURCE/winecursor.lua" ]] || {
+  echo "incomplete winecursor source; missing winecursor.lua" >&2
+  exit 1
+}
+
+for required in \
+  "$VANAGUIDE_SOURCE/Vanaguide.lua" "$VANAGUIDE_LICENSE" \
+  "$VANAVOICE_SOURCE/vanavoice.lua" "$VANAVOICE_LICENSE" \
+  "$WINECURSOR_SOURCE/winecursor.lua" \
+  "$REPO/scripts/install.sh" "$REPO/scripts/fix-wine-rpath.sh" \
+  "$REPO/scripts/lsb-server.sh" "$REPO/scripts/update-client.sh" "$REPO/scripts/game-wine.sh" \
+  "$REPO/scripts/catseye-launcher.sh" "$REPO/scripts/retail-client.sh" \
+  "$REPO/vendor/dxvk.conf" "$REPO/LICENSE" "$HERE/Resources/horizonxi-boot.ini" \
+  "$REPO/vendor/licenses/README.txt" "$REPO/vendor/licenses/d3d8to9-BSD-3-Clause.txt" \
+  "$REPO/vendor/licenses/DXVK-zlib.txt" "$REPO/vendor/licenses/MoltenVK-Apache-2.0.txt" \
+  "$REPO/vendor/licenses/cereal-BSD-3-Clause.txt" "$REPO/vendor/licenses/x87sidecar-MIT.txt" \
+  "$REPO/vendor/licenses/mingw-w64-runtime-ZPL-2.1.txt" "$REPO/vendor/ashita-send.exe"; do
+  [[ -f "$required" ]] || { echo "required bundle input missing: $required" >&2; exit 1; }
+done
+
+STAGE="$OUT/.FFXI-on-Mac.app.staging-$$"
+BACKUP="$OUT/.FFXI-on-Mac.app.previous-$$"
+rm -rf "$STAGE" "$BACKUP"
+trap 'rm -rf "$STAGE"; if [[ -e "$BACKUP" && ! -e "$APP_CANONICAL" ]]; then mv "$BACKUP" "$APP_CANONICAL"; fi' EXIT
+mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources"
+APP="$STAGE"
+bundle_addon Vanaguide "$VANAGUIDE_SOURCE" Vanaguide.lua "$VANAGUIDE_LICENSE"
+bundle_addon vanavoice "$VANAVOICE_SOURCE" vanavoice.lua "$VANAVOICE_LICENSE"
+mkdir -p "$APP/Contents/Resources/winecursor"
+cp "$WINECURSOR_SOURCE/winecursor.lua" "$APP/Contents/Resources/winecursor/winecursor.lua"
 cp "$BIN" "$APP/Contents/MacOS/FFXI-on-Mac"
 
 # install.sh + its helper are the Repair action; lsb-server.sh is the whole local-server world
@@ -33,19 +168,35 @@ cp "$REPO/scripts/install.sh"        "$APP/Contents/Resources/install.sh"
 cp "$REPO/scripts/fix-wine-rpath.sh" "$APP/Contents/Resources/fix-wine-rpath.sh"
 cp "$REPO/scripts/lsb-server.sh"     "$APP/Contents/Resources/lsb-server.sh"
 cp "$REPO/scripts/update-client.sh"  "$APP/Contents/Resources/update-client.sh"
+cp "$REPO/scripts/game-wine.sh"      "$APP/Contents/Resources/game-wine.sh"
+cp "$HERE/Resources/apply-update.sh" "$APP/Contents/Resources/apply-update.sh"
+# HorizonXI's boot profile: their client ships none (their launcher writes it at Play), so a new
+# horizonxi.ini is made from this one (BootProfile.swift). This project's own file.
+cp "$HERE/Resources/horizonxi-boot.ini" "$APP/Contents/Resources/horizonxi-boot.ini"
 cp "$REPO/scripts/catseye-launcher.sh" "$APP/Contents/Resources/catseye-launcher.sh"
 cp "$REPO/scripts/retail-client.sh"    "$APP/Contents/Resources/retail-client.sh"
 chmod +x "$APP/Contents/Resources/"*.sh
 
 # The Metal/DXVK renderer ships inside the app: Renderer.swift resolves these by name out of
 # Bundle.main, so the user never has to fetch a DLL by hand.
-for dll in d3d8to9.dll dxvk-1.10.3-x32-d3d9-horizonxi.dll; do
+for dll in d3d8to9.dll dxvk-1.10.3-x32-d3d9-horizonxi.dll libMoltenVK-1.4.2.dylib; do
   [[ -f "$REPO/vendor/$dll" ]] && cp "$REPO/vendor/$dll" "$APP/Contents/Resources/$dll"
 done
+# This project's own helper (tools/ashita-send.c, built by scripts/build-ashita-send.sh): run under
+# the game's wine, it hands an Addons… change to a client that is already running, through Ashita's
+# Thirdparty plugin (LiveAddons.swift). A Windows program, so a sealed resource, not signed itself.
+cp "$REPO/vendor/ashita-send.exe" "$APP/Contents/Resources/ashita-send.exe"
+# DXVK's settings file. Play copies it into the prefix and sets DXVK_CONFIG_FILE (Renderer.swift).
+cp "$REPO/vendor/dxvk.conf" "$APP/Contents/Resources/dxvk.conf"
+# The licence texts travel with the binaries (BSD-3, zlib, Apache-2.0 and MIT all require it), and
+# this project's own LICENSE beside them. Index and provenance: vendor/NOTICE.md.
+mkdir -p "$APP/Contents/Resources/ThirdPartyNotices"
+cp "$REPO/vendor/licenses/"*.txt "$APP/Contents/Resources/ThirdPartyNotices/"
+cp "$REPO/LICENSE" "$APP/Contents/Resources/LICENSE"
 
 # x87sidecar: the fix for FFXI's x87 floating-point math running ~100x slow under Rosetta (see
-# docs/X87-WALL.md). Signed individually below with its own entitlements -- the app's deep-sign
-# strips them otherwise, and without get-task-allow/cs.debugger it cannot attach to the game.
+# docs/X87-WALL.md). Signed individually below, before the app -- x87sidecar_entitled needs its
+# own cs.debugger entitlement to attach to the game. Order and reasons: vendor/NOTICE.md.
 if [[ -f "$REPO/vendor/x87sidecar-coop" ]]; then
   # Cooperative-mode sidecar (no entitlements, notarizable); preferred on macOS >= 26.5.2.
   cp "$REPO/vendor/x87sidecar-coop" "$APP/Contents/Resources/x87sidecar-coop"
@@ -68,6 +219,14 @@ if [[ ! -f "$REPO/app/Resources/audiofollow.dylib" ]]; then
 fi
 [[ -f "$REPO/app/Resources/audiofollow.dylib" ]] && \
   cp "$REPO/app/Resources/audiofollow.dylib" "$APP/Contents/Resources/audiofollow.dylib"
+# gamewindow.dylib -- inserted into wine the same way; keeps the game window's picture in
+# proportion when it is resized, and carries DYLD_INSERT_LIBRARIES across the x87 sidecar's exec
+# (see window/gamewindow.c). Built here if it is missing so a fresh clone still gets it.
+if [[ ! -f "$REPO/app/Resources/gamewindow.dylib" ]]; then
+  "$REPO/scripts/build-gamewindow.sh" >/dev/null 2>&1 || true
+fi
+[[ -f "$REPO/app/Resources/gamewindow.dylib" ]] && \
+  cp "$REPO/app/Resources/gamewindow.dylib" "$APP/Contents/Resources/gamewindow.dylib"
 
 # Dock/Finder icon: an original crystal mark in the launcher's own Vana'diel palette (see
 # scripts/make_icon.py), not extracted from Square Enix's client -- this project's own art.
@@ -76,7 +235,24 @@ fi
 # DockIcon.swift, so it has to ride along in the launcher's Resources.
 [[ -f "$HERE/GameIcon.icns" ]] && cp "$HERE/GameIcon.icns" "$APP/Contents/Resources/GameIcon.icns"
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+# Which launcher, Vanaguide and VanaVoice commits this bundle carries: all three are built or
+# copied from checkouts as they sit on disk. "-dirty" means uncommitted changes went in;
+# package.sh refuses that for a release and prints the revisions for the release notes.
+checkout_revision() {
+  local root="$1" rev state
+  [[ -e "$root/.git" ]] || { print -r -- "unknown"; return 0; }
+  rev="$(/usr/bin/git -C "$root" rev-parse HEAD 2>/dev/null)" || { print -r -- "unknown"; return 0; }
+  if ! state="$(/usr/bin/git -C "$root" --no-optional-locks status --porcelain 2>/dev/null)" \
+     || [[ -n "$state" ]]; then
+    rev="$rev-dirty"
+  fi
+  print -r -- "$rev"
+}
+LAUNCHER_REVISION="$(checkout_revision "$REPO")"
+VANAGUIDE_REVISION="$(checkout_revision "${VANAGUIDE_SOURCE:h}")"
+VANAVOICE_REVISION="$(checkout_revision "${VANAVOICE_SOURCE:h:h}")"
+
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -97,21 +273,54 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>NSDesktopFolderUsageDescription</key><string>To find a wrapper you keep on the Desktop.</string>
   <key>NSDocumentsFolderUsageDescription</key><string>To find a wrapper you keep in Documents.</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>3.8</string>
-  <key>CFBundleVersion</key><string>21</string>
+  <key>CFBundleShortVersionString</key><string>${APP_SHORT_VERSION}</string>
+  <key>CFBundleVersion</key><string>${APP_BUILD}</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
+  <!-- AscensionXI publishes its client, DATs and addon catalog only over plain HTTP
+       (http://dl.ascensionffxi.com:54290 and dl2), and every file is checked against the SHA-256
+       their manifest gives before it is used (AscensionChannel.swift). That one domain only. -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <!-- The Ascension self-test serves a fake channel only on 127.0.0.1. -->
+    <key>NSAllowsLocalNetworking</key><true/>
+    <key>NSExceptionDomains</key>
+    <dict>
+      <key>ascensionffxi.com</key>
+      <dict>
+        <key>NSIncludesSubdomains</key><true/>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key><true/>
+      </dict>
+    </dict>
+  </dict>
+  <key>HXILauncherRevision</key><string>${LAUNCHER_REVISION}</string>
+  <key>HXIAddonRevisions</key>
+  <dict>
+    <key>Vanaguide</key><string>${VANAGUIDE_REVISION}</string>
+    <key>VanaVoice</key><string>${VANAVOICE_REVISION}</string>
+  </dict>
 </dict>
 </plist>
 PLIST
 
+# Default to the Developer ID when it is in the keychain, so a Full Disk Access grant (keyed to
+# bundle id + team) survives rebuilds. HXI_ADHOC=1 forces ad-hoc.
+if [[ -z "${HXI_SIGN_ID:-}" && -z "${HXI_ADHOC:-}" ]]; then
+  HXI_SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ {print $2; exit}')"
+fi
+# The guide remains a separate process and starts only when the player opens it. Embed the
+# matching GUI so the ordinary GitHub launcher update carries both parts together.
+COMPANION_BIN="${HXI_COMPANION_BINARY:-${BIN:h}/VanaguideCompanion}"
+[[ -x "$COMPANION_BIN" ]] || { echo "companion binary missing: $COMPANION_BIN" >&2; exit 1; }
+HXI_COMPANION_BINARY="$COMPANION_BIN" HXI_VANAGUIDE_SOURCE="$VANAGUIDE_SOURCE" \
+  HXI_SIGN_ID="${HXI_SIGN_ID:-}" "$HERE/bundle-server-safe.sh" "$APP/Contents/Helpers"
 # Signature. Ad-hoc by default; set HXI_SIGN_ID to a Developer ID hash for a release build
 # that can be notarised. Use the certificate *hash*, not its name -- there are two identical
 # "Developer ID Application: Daniel Bates" certs in the login keychain and codesign rejects
 # the name as ambiguous. Do NOT pass --timestamp here: it hangs on this network.
-# Order matters, and the obvious order is wrong. x87sidecar_entitled needs its own entitlements
-# (get-task-allow, cs.debugger) or it cannot attach to the game at all. Signing it *after* the
+# Order matters, and the obvious order is wrong. x87sidecar_entitled needs its own entitlement
+# (cs.debugger; get-task-allow is left out because the notary rejects it) or it cannot attach. Signing it *after* the
 # app breaks the app's seal -- `codesign -v` then reports "a sealed resource is missing or
 # invalid" and Gatekeeper rejects the bundle. So sign the nested binary FIRST, then sign the app
 # WITHOUT --deep, which leaves nested signatures alone and seals them as they are.
@@ -123,29 +332,58 @@ find "$APP" -exec xattr -c {} \; 2>/dev/null || true
 X87SC="$APP/Contents/Resources/x87sidecar_entitled"
 X87COOP="$APP/Contents/Resources/x87sidecar-coop"
 AUDIOFOLLOW="$APP/Contents/Resources/audiofollow.dylib"
+GAMEWINDOW="$APP/Contents/Resources/gamewindow.dylib"
+MOLTENVK="$APP/Contents/Resources/libMoltenVK-1.4.2.dylib"
 if [[ -n "${HXI_SIGN_ID:-}" ]]; then
   # The cooperative sidecar has no entitlements, so it can carry the hardened runtime and the
   # secure timestamp the notary demands of nested executables. --timestamp is required here:
   # without it notarization returns Invalid on exactly this file (measured 2026-08-20).
-  [[ -f "$X87COOP" ]] && codesign --force --options runtime --timestamp -s "$HXI_SIGN_ID" "$X87COOP"
-  [[ -f "$X87SC" ]] && codesign --force --options runtime -s "$HXI_SIGN_ID" \
-    --entitlements "$REPO/vendor/x87sidecar-entitlements.plist" "$X87SC"
+  if [[ -f "$X87COOP" ]]; then codesign --force --options runtime --timestamp -s "$HXI_SIGN_ID" "$X87COOP"; fi
+  if [[ -f "$X87SC" ]]; then
+    codesign --force --options runtime -s "$HXI_SIGN_ID" \
+      --entitlements "$REPO/vendor/x87sidecar-entitlements.plist" "$X87SC"
+  fi
   # Nested dylibs need the hardened runtime and a secure timestamp too, or the notary rejects
   # the whole bundle on this one file.
-  [[ -f "$AUDIOFOLLOW" ]] && codesign --force --options runtime --timestamp -s "$HXI_SIGN_ID" "$AUDIOFOLLOW"
+  if [[ -f "$AUDIOFOLLOW" ]]; then codesign --force --options runtime --timestamp -s "$HXI_SIGN_ID" "$AUDIOFOLLOW"; fi
+  if [[ -f "$GAMEWINDOW" ]]; then codesign --force --options runtime --timestamp -s "$HXI_SIGN_ID" "$GAMEWINDOW"; fi
+  if [[ -f "$MOLTENVK" ]]; then codesign --force --options runtime --timestamp -s "$HXI_SIGN_ID" "$MOLTENVK"; fi
   codesign --force --options runtime -s "$HXI_SIGN_ID" "$APP"
 else
-  [[ -f "$X87SC" ]] && codesign --force -s - \
-    --entitlements "$REPO/vendor/x87sidecar-entitlements.plist" "$X87SC" >/dev/null 2>&1 || true
-  [[ -f "$AUDIOFOLLOW" ]] && codesign --force -s - "$AUDIOFOLLOW" >/dev/null 2>&1 || true
-  codesign --force -s - "$APP" >/dev/null 2>&1 || true
+  if [[ -f "$X87SC" ]]; then
+    codesign --force -s - --entitlements "$REPO/vendor/x87sidecar-entitlements.plist" "$X87SC"
+  fi
+  if [[ -f "$AUDIOFOLLOW" ]]; then codesign --force -s - "$AUDIOFOLLOW"; fi
+  if [[ -f "$GAMEWINDOW" ]]; then codesign --force -s - "$GAMEWINDOW"; fi
+  if [[ -f "$MOLTENVK" ]]; then codesign --force -s - "$MOLTENVK"; fi
+  codesign --force -s - "$APP"
 fi
+codesign --verify --deep --strict "$APP"
 
 # Re-register with Launch Services. Replacing a bundle in place leaves the Dock and Finder
 # showing the icon they cached for that path -- after a rebuild the app came up with the generic
 # executable icon even though AppIcon.icns was present and complete.
 touch "$APP"
+refuse_if_live
+if [[ -e "$APP_CANONICAL" ]]; then mv "$APP_CANONICAL" "$BACKUP"; fi
+if ! mv "$APP" "$APP_CANONICAL"; then
+  [[ -e "$BACKUP" ]] && mv "$BACKUP" "$APP_CANONICAL"
+  rm -rf "$STAGE"
+  exit 1
+fi
+# Archive rule: exactly one live copy here; the one it replaced goes to the archive, never rm.
+if [[ -e "$BACKUP" ]]; then
+  old_version="$(/usr/bin/plutil -extract CFBundleShortVersionString raw "$BACKUP/Contents/Info.plist" 2>/dev/null || print unknown)"
+  old_build="$(/usr/bin/plutil -extract CFBundleVersion raw "$BACKUP/Contents/Info.plist" 2>/dev/null || print unknown)"
+  archived="$ARCHIVE_DIR/FFXI-on-Mac-$old_version-b$old_build-$(date +%Y%m%d-%H%M%S).app"
+  if /bin/mkdir -p "$ARCHIVE_DIR" && mv "$BACKUP" "$archived"; then
+    echo "archived the previous app to $archived"
+  else
+    echo "warning: could not archive the previous app; it is still at $BACKUP" >&2
+  fi
+fi
+trap - EXIT
 LSREG=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
-[[ -x "$LSREG" ]] && "$LSREG" -f "$APP" >/dev/null 2>&1 || true
+[[ -x "$LSREG" ]] && "$LSREG" -f "$APP_CANONICAL" >/dev/null 2>&1 || true
 
-echo "built $APP"
+echo "built $APP_CANONICAL"

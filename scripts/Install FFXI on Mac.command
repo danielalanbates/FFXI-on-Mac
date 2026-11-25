@@ -17,11 +17,11 @@ say()  { print -r -- "$BOLD$*$OFF" }
 info() { print -r -- "  $*" }
 ok()   { print -r -- "  ${GRN}✓$OFF $*" }
 warn() { print -r -- "  ${YEL}!$OFF $*" }
-die()  { print -r -- "\n  ${RED}✗ $*$OFF\n"; print -r -- "  Press return to close."; read -r _; exit 1 }
+die()  { print; print -r -- "  ${RED}✗ $*$OFF"; print; print -r -- "  Press return to close."; read -r _; exit 1 }
 
 clear
 say "FINAL FANTASY XI on Mac — installer"
-print -r -- "${DIM}This sets up the launcher. It will tell you before it changes anything.$OFF\n"
+print -r -- "${DIM}This sets up the launcher. It will tell you before it changes anything.$OFF"; print
 
 # ---------------------------------------------------------------- 1. this Mac
 say "1. Checking this Mac"
@@ -32,7 +32,7 @@ ok "macOS $os on $(uname -m)"
 [[ "$(uname -m)" == arm64 ]] || warn "Intel Mac — untested. It may work; nobody has tried."
 
 # ---------------------------------------------------------------- 2. the wrapper
-say "\n2. Looking for a Wine wrapper with a HorizonXI client"
+print; say "2. Looking for a Wine wrapper with a HorizonXI client"
 typeset -a found
 for root in /Applications ~/Applications /Volumes/*(N); do
   for app in $root/**/*.app(N/); do
@@ -62,7 +62,7 @@ if (( ${#found} == 0 )); then
   volume, and if it is on an external drive every app touching it needs the
   "Removable Volumes" permission in System Settings › Privacy & Security.
 TXT
-  print -r -- "\n  Press return to close."; read -r _; exit 1
+  print; print -r -- "  Press return to close."; read -r _; exit 1
 fi
 
 if (( ${#found} == 1 )); then
@@ -70,43 +70,53 @@ if (( ${#found} == 1 )); then
 else
   print -r -- ""
   for i in {1..${#found}}; do info "$i) ${found[$i]%%::*} (${found[$i]##*::})"; done
-  print -rn -- "\n  Which one? [1] "; read -r n; n=${n:-1}
+  print; print -rn -- "  Which one? [1] "; read -r n; n=${n:-1}
   choice="${found[$n]:-${found[1]}}"
 fi
 APP="${choice%%::*}"; PREFIX="${choice##*::}"
 ok "using ${APP:t} · $PREFIX"
 
+# Nothing below may run under a live game: step 3 rewrites the prefix the client is using and
+# step 4 replaces the launcher. The same processes app/bundle.sh refuses to install under (see its
+# LIVE_PATTERN); it checks again itself before the swap. Pid and executable only: a loader's
+# arguments carry the account password.
+LIVE_PATTERN='FFXI-on-Mac\.app/Contents/(MacOS|Resources/x87sidecar|Helpers/[^/]+\.app/Contents/MacOS/VanaguideCompanion)|horizon-loader|Ashita-cli|/wine-coop/wine/|/SharedSupport/wine/'
+if live=$(/usr/bin/pgrep -f "$LIVE_PATTERN"); then
+  print -r -- ""
+  /bin/ps -o pid=,comm= -p "${(j:,:)${(f)live}}" 2>/dev/null | while read -r line; do info "$DIM$line$OFF"; done
+  die "FFXI on Mac or the game is running. Quit it (in game, type /shutdown) and run this again."
+fi
+
 # ---------------------------------------------------------------- 3. configure
-say "\n3. Configuring the Wine prefix"
+print; say "3. Configuring the Wine prefix"
 info "This writes the PlayOnline registry keys and registers FFXI's COM servers."
 info "It does not touch anything outside the wrapper."
-print -rn -- "\n  Continue? [Y/n] "; read -r go
+print; print -rn -- "  Continue? [Y/n] "; read -r go
 [[ "${go:l}" == n* ]] && die "Stopped at your request. Nothing was changed."
 "$REPO/scripts/install.sh" "$APP" "$PREFIX" || die "Configuration failed. See the output above."
 ok "prefix configured"
 
 # ---------------------------------------------------------------- 4. the app
-say "\n4. Installing the launcher"
-if [[ -d "$REPO/app/build/FFXI-on-Mac.app" ]]; then
-  SRC="$REPO/app/build/FFXI-on-Mac.app"
-elif command -v swift >/dev/null 2>&1; then
-  info "Building it (about a minute)…"
-  "$REPO/app/bundle.sh" >/dev/null || die "Build failed."
-  SRC="$REPO/app/build/FFXI-on-Mac.app"
-else
-  die "No prebuilt app and no Swift toolchain. Install Xcode Command Line Tools:
+print; say "4. Installing the launcher"
+command -v swift >/dev/null 2>&1 || die "No Swift toolchain. Install Xcode Command Line Tools:
       xcode-select --install"
-fi
-rm -rf "/Applications/FFXI-on-Mac.app"
-cp -R "$SRC" /Applications/ || die "Could not copy to /Applications."
+info "Building it (about a minute)…"
+# Step 3's wine keeps its wineserver up for a few seconds after its last command. That matches
+# LIVE_PATTERN (.../SharedSupport/wine/), and bundle.sh checks before it builds, so it would
+# refuse the install. Give it up to 30 s to exit; a real game still running is refused there.
+for _ in {1..60}; do /usr/bin/pgrep -qf "$LIVE_PATTERN" || break; /bin/sleep 0.5; done
+# bundle.sh builds beside the installed copy and swaps it in only once the new one is complete
+# (putting the old one back if that fails), and moves the old one to
+# ~/Downloads/FFXI-on-Mac-build/archive-apps instead of deleting it.
+"$REPO/app/bundle.sh" /Applications >/dev/null || die "Could not install to /Applications. See the lines above."
 ok "installed to /Applications/FFXI-on-Mac.app"
 
 # ---------------------------------------------------------------- done
-say "\nDone."
+print; say "Done."
 cat <<'TXT'
 
   Open FFXI on Mac from /Applications, pick your server, type your account
-  name and password, and press PLAY. Your password goes into the macOS Keychain.
+  name and password, and press PLAY. Your password is saved for your Mac user only.
 
   Two things to expect:
 

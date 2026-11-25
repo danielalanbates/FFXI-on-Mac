@@ -27,6 +27,15 @@ struct PerfSettings: Codable {
     /// `scripts/tests/audiofollow-test.sh`. Harmless if it fails: the audio keeps playing exactly
     /// where it already was.
     var followSoundOutput = true
+    /// Keep the game's picture in proportion when its window is resized.
+    ///
+    /// FFXI's back buffer is fixed at the profile's 0001 x 0002 and the renderer scales it to the
+    /// window, so dragging the window to another shape squeezed or stretched the whole picture.
+    /// `gamewindow.dylib` (see `window/gamewindow.c` and `GameWindow`) is inserted into wine and
+    /// sets the window's content aspect ratio to the size the client was started at, so AppKit keeps
+    /// every drag in proportion. Harmless if it fails: the window resizes freely, as before.
+    /// The same dylib keeps the window's title "FFXI on Mac" (b69), so this one setting covers both.
+    var keepWindowShape = true
     /// FFXI limits itself to 60/n fps, n=2 by default (30 fps) -- but under wine the limiter
     /// overshoots and the client spends more than the 33.3ms budget per frame even while only
     /// ~52% busy. Our d3d9.dll patches the divisor at start-up (see docs/PERFORMANCE.md);
@@ -59,13 +68,47 @@ struct PerfSettings: Codable {
     /// Off by default: it installs an addon into the game folder and starts a second app, and
     /// neither should happen to somebody who never asked for a narrator.
     var narrateCutscenes = false
+    /// Install Vanaguide (quest / mission guide) into this world's addons folder (see Guide.swift).
+    /// Off by default. The launcher will only honour this on unrestricted / unknown-policy worlds
+    /// (local LandSandBoat); allowlist servers scrub it even if the toggle was left on.
+    var enableVanaguide = false
     /// Large address aware heap hint for the 32-bit client.
     var largeAddressAware = true
-    /// Extra environment, one KEY=VALUE per line, for experiments.
+    /// Extra environment, one KEY=VALUE per line, for experiments. It wins over every value the
+    /// launcher sets itself; `KEY=` with nothing after the `=` takes KEY out of the game's
+    /// environment, including one of the launcher's own defaults (see `extraEnvironment`).
     var extraEnv = ""
     /// Which renderer pathway to run. Metal/DXVK reaches FFXI's 30 fps cap with the world
     /// drawing correctly, so it is the default; Vulkan and Classic are fallbacks.
     var renderer: Renderer = .metal
+
+    /// One policy for every server, including integrations with their own launch path.
+    func forServer(_ server: Server) -> PerfSettings {
+        var effective = self
+        if !server.msync { effective.msync = false }
+        if let renderer = server.renderer { effective.renderer = renderer }
+        return effective
+    }
+
+    func phoenixPerformance(install: Install, server: Server) -> PhoenixPerformance {
+        let effective = forServer(server)
+        let override = ProcessInfo.processInfo.environment["FFXI_ON_MAC_X87"]
+        let broken = X87Sidecar.coopBinary().map { X87Guard.isBroken(sidecar: $0) } ?? false
+        let x87 = X87Guard.enabled(worldAllows: server.x87, override: override, brokenHere: broken)
+            && X87Sidecar.patchedWine() != nil
+        let graphics = GraphicsSettings.load(world: server.name)
+        var env = effective.environment(for: install, x87: x87, world: server.name,
+                                        gameWine: X87Sidecar.patchedWine() != nil,
+                                        gameSize: .init(width: graphics.width, height: graphics.height))
+        // A shared profile is never used for Phoenix's cache or runtime state.
+        env["WINEPREFIX"] = PhoenixGameLaunch.prefix.path
+        var dlls: [String: URL] = [:]
+        if let d3d8 = Bundle.main.url(forResource: "d3d8to9", withExtension: "dll") { dlls["d3d8.dll"] = d3d8 }
+        if let d3d9 = Bundle.main.url(forResource: "dxvk-1.10.3-x32-d3d9-horizonxi", withExtension: "dll") { dlls["d3d9.dll"] = d3d9 }
+        return PhoenixPerformance(environment: env, renderer: effective.renderer.rawValue,
+                                  rendererTitle: effective.renderer.title, dlls: dlls,
+                                  dxvkConfig: RendererSetup.bundledDXVKConfig())
+    }
 
     static let key = "perf.settings"
 
@@ -86,13 +129,15 @@ struct PerfSettings: Codable {
         msync = b(.msync, true)
         esync = b(.esync, false)
         silenceWineDebug = b(.silenceWineDebug, true)
-        metalHUD = b(.metalHUD, false)
+        metalHUD = false
         disableAppNap = b(.disableAppNap, true)
         fpsDivisorOne = b(.fpsDivisorOne, true)
         followSoundOutput = b(.followSoundOutput, true)
-        flareReadbackNoWait = b(.flareReadbackNoWait, false)
+        keepWindowShape = b(.keepWindowShape, true)
+        flareReadbackNoWait = false   // option removed: NPCs blink with it on
         largeAddressAware = b(.largeAddressAware, true)
         narrateCutscenes = b(.narrateCutscenes, false)
+        enableVanaguide = b(.enableVanaguide, false)
         extraEnv = ((try? c.decodeIfPresent(String.self, forKey: .extraEnv)) ?? nil) ?? ""
         renderer = ((try? c.decodeIfPresent(Renderer.self, forKey: .renderer)) ?? nil) ?? .metal
     }
@@ -115,9 +160,30 @@ struct PerfSettings: Codable {
         if let d = try? JSONEncoder().encode(self) { UserDefaults.standard.set(d, forKey: Self.key) }
     }
 
+    /// The patched game Wine's switch for keeping no-execute on; see `environment`.
+    static let nxCompatKey = "WINE_DISABLE_NX_COMPAT"
+
+    /// `extraEnv`, line by line, in order (a later line wins): `KEY=VALUE` sets KEY, `KEY=`
+    /// removes it (nil). A line with no `=`, or no name before it, is ignored.
+    var extraEnvironment: [(key: String, value: String?)] {
+        extraEnv.split(whereSeparator: \.isNewline).compactMap { line in
+            let parts = line.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2 else { return nil }
+            let key = parts[0].trimmingCharacters(in: .whitespaces)
+            let value = parts[1].trimmingCharacters(in: .whitespaces)
+            return key.isEmpty ? nil : (key, value.isEmpty ? nil : value)
+        }
+    }
+
     /// Environment applied to the wine process.
     /// - Parameter x87: whether this world may use x87 acceleration (`Server.x87`).
-    func environment(for install: Install, x87: Bool = true) -> [String: String] {
+    /// - Parameter world: names the default frame-rate log, so two clients never share one.
+    /// - Parameter gameWine: the client runs under the patched game Wine (`X87Sidecar.patchedWine`),
+    ///   not the wrapper's own.
+    /// - Parameter gameSize: the size the client will be started at (`GameWindow.launchSize`), for
+    ///   `HXI_GAME_ASPECT`; nil when unknown.
+    func environment(for install: Install, x87: Bool = true, world: String = "",
+                     gameWine: Bool = true, gameSize: WindowMemory.Size? = nil) -> [String: String] {
         var env: [String: String] = [:]
         env["WINEPREFIX"] = install.prefix.path
         env["D3DMETAL_FRAMEWORK_PATH"] = install.d3dMetal.path
@@ -143,7 +209,17 @@ struct PerfSettings: Codable {
         // surfaces <= 32 px. See patches/dxvk-1.10.3-horizonxi-fencewait.patch.
         env["D3D9_RT_READBACK_FENCE"] = "32"
         env["MVK_CONFIG_USE_COMMAND_POOLING"] = "1"
-        if metalHUD { env["MTL_HUD_ENABLED"] = "1" }
+        // A GPU reset elsewhere fails one of our Metal command buffers (2026-10-16 21:31,
+        // "Discarded (victim of GPU error/recovery)"). By default MoltenVK then marks the VkDevice
+        // lost for good. With this it still signals that buffer's fence and the device stays usable
+        // (one frame of GPU work lost); a lost GPU (removed/access revoked) is still fatal.
+        env["MVK_CONFIG_RESUME_LOST_DEVICE"] = "1"
+        // The last macOS 27 session emitted thousands of identical DXVK/MoltenVK warnings
+        // after login. They are still available when explicitly requested for diagnostics,
+        // but routine play should not spend time writing them or redrawing the log pane.
+        env["DXVK_LOG_LEVEL"] = ProcessInfo.processInfo.environment["DXVK_LOG_LEVEL"] ?? "error"
+        env["MVK_CONFIG_LOG_LEVEL"] = ProcessInfo.processInfo.environment["MVK_CONFIG_LOG_LEVEL"] ?? "1"
+        env.removeValue(forKey: "MTL_HUD_ENABLED")  // never on a player's game
         // Only our patched d3d9.dll reads this; harmless (silently ignored) on the other
         // renderer pathways.
         if fpsDivisorOne { env["FFXI_FPS_DIVISOR"] = "1" }
@@ -153,29 +229,26 @@ struct PerfSettings: Codable {
         // x87 acceleration, the way athei's patched wine actually wants to be told about it.
         //
         // `ROSETTA_X87_PATH` is read by wine's own loader (athei/wine commit 3804c30b, "ntdll:
-        // HACK: Recognize ROSETTA_X87_PATH and attach x87sidecar cooperatively"): **every** i386
-        // wine process re-execs itself through the named sidecar and does the task-port handshake
-        // in __wine_main. That is the whole point — the client this project cares about is a
-        // *grandchild* (Ashita-cli.exe injects into horizon-loader.exe and exits), and only this
-        // pathway reaches it.
+        // HACK: Recognize ROSETTA_X87_PATH and attach x87sidecar cooperatively"): i386 wine
+        // processes re-exec through the named sidecar. The client is an Ashita grandchild, so
+        // the launcher must verify in-world speed before treating a handshake as acceleration.
         //
         // Wrapping the command instead — `x87sidecar-coop --cooperative wine Ashita-cli.exe` —
-        // accelerates exactly one process: the injector, which exits within seconds, taking the
-        // sidecar with it and leaving the game unaccelerated. Measured 2026-08-21: one handshake
-        // with the wrapper, two with this variable, and the difference in-world is the whole 2.5x.
-        // That misuse is what made x87 look broken for a day, and it cost the frame rate twice —
-        // once by not accelerating, and once more because ROSETTA_DISABLE_AOT was being set by
-        // hand on top of it. The sidecar disables AOT itself when it attaches; do not set it here.
+        // reaches only the short-lived injector. Do not set ROSETTA_DISABLE_AOT by hand: when
+        // the x87 hook fails, that forced slow path caused the measured 19x regression.
         if x87, let sidecar = X87Sidecar.coopBinary() {
             env["ROSETTA_X87_PATH"] = sidecar.path
         }
         // Frame-rate log, on demand: FFXI_ON_MAC_FPSLOG=1 in the launcher's own environment
         // makes the vendored DXVK write one CSV row per second (fps, draws, passes, barriers,
-        // submits) next to the client. This is how a launch on the *shipped* path gets measured
+        // submits) next to the client. Set FFXI_ON_MAC_FPSLOG_PATH to override the destination,
+        // for example to a Z: path in Downloads when preserving an older in-prefix fps.csv.
+        // This is how a launch on the *shipped* path gets measured
         // rather than a hand-built shell run -- which is how a 19x x87 regression went unnoticed:
         // every fps number came from a shell that did not match what Play actually did.
         if ProcessInfo.processInfo.environment["FFXI_ON_MAC_FPSLOG"] == "1" {
-            env["DXVK_FPS_LOG"] = "C:\\" + install.gameDir.lastPathComponent + "\\fps.csv"
+            env["DXVK_FPS_LOG"] = ProcessInfo.processInfo.environment["FFXI_ON_MAC_FPSLOG_PATH"]
+                ?? MultiWorld.fpsLogPath(gameDirName: install.gameDir.lastPathComponent, world: world)
         }
         // Sound-output following. Only set when the dylib is really there and really has the
         // slice this Mac will run wine as — a DYLD_INSERT_LIBRARIES pointing at a missing or
@@ -184,20 +257,46 @@ struct PerfSettings: Codable {
         //
         // GOTCHA for anyone reworking the launch: this variable does NOT survive an exec through
         // `arch(1)` or any other system binary — dyld strips DYLD_* across those. The wine
-        // command has to be exec'd directly.
+        // command has to be exec'd directly. The hardened x87 sidecar strips it too; see
+        // InsertedLibrary and the carry in window/gamewindow.c.
         if followSoundOutput, let dylib = AudioFollow.dylib() {
-            let existing = env["DYLD_INSERT_LIBRARIES"]
-            env["DYLD_INSERT_LIBRARIES"] = existing.map { $0 + ":" + dylib.path } ?? dylib.path
+            InsertedLibrary.insert(dylib.path, into: &env)
+        }
+        // The game window keeps its shape when resized and its title "FFXI on Mac" (b69):
+        // gamewindow.dylib, same rules, the ratio the client is started at and the title. Joined
+        // to audiofollow's with ':' when both are on.
+        if keepWindowShape {
+            GameWindow.apply(to: &env, dylib: GameWindow.dylib(), size: gameSize)
         }
         if disableAppNap { env["LSAppNapIsDisabled"] = "1" }
         if largeAddressAware { env["WINE_LARGE_ADDRESS_AWARE"] = "1" }
         for (k, v) in renderer.environment { env[k] = v }
-        for line in extraEnv.split(separator: "\n") {
-            let parts = line.split(separator: "=", maxSplits: 1).map(String.init)
-            if parts.count == 2 {
-                env[parts[0].trimmingCharacters(in: .whitespaces)] =
-                    parts[1].trimmingCharacters(in: .whitespaces)
-            }
+        // DXVK 1.10.3 never wrote its state cache beside horizon-loader.exe (none existed on
+        // 2026-09-26), so every session recompiled every pipeline: turning the camera stalled.
+        // An explicit C:\ path is written; a lap on local LSB went 7.5 -> 13.2 fps as it filled.
+        if env["DXVK_STATE_CACHE_PATH"] == nil { env["DXVK_STATE_CACHE_PATH"] = #"C:\dxvk-cache"# }
+        // DXVK reads $DXVK_CONFIG_FILE, else dxvk.conf in the cwd at the moment its instance is
+        // created. The 2026-10-02 session logged 5 compiler threads and no "Found config file"
+        // although C:\HorizonXI\dxvk.conf (4 threads) was there, so the shipped settings never
+        // applied. One explicit file for every world instead (vendor/dxvk.conf, put in place by
+        // RendererSetup.syncDXVKConfig).
+        if env["DXVK_CONFIG_FILE"] == nil { env["DXVK_CONFIG_FILE"] = RendererSetup.dxvkConfigWinePath }
+        // Keep no-execute on: the fault storm (b66, docs/BETA-66.md). The game's Wine
+        // (athei/wine-build cx-26.3.0-1) turns NX off for the whole process as soon as any module
+        // without the PE NX_COMPAT flag loads (i386 ntdll alloc_module ->
+        // NtSetInformationProcess(ProcessExecuteFlags, MEM_EXECUTE_OPTION_ENABLE)). The loaders
+        // and Ashita carry the flag; Square Enix's FFXiMain.dll, FFXi.dll, polhook.dll, app.dll
+        // and polcore.dll do not, in every world. With NX off every readable page is mapped
+        // executable, and under Rosetta that measured 85-94k page faults/s, 50-84% kernel time,
+        // 2-minute zone loads and multi-second freezes (2026-10-15); with this set, the same
+        // character select ran at ~3k faults/s and the game played normally. That build only
+        // asks whether the variable exists. Reported upstream as athei/wine-build#3 and fixed in
+        // cx-26.3.0-6, where "0" brings the slow behaviour back -- so always "1". Only for the
+        // game's Wine: the wrapper's own build was never measured with it. An explicit value in
+        // extraEnv (below) wins; `WINE_DISABLE_NX_COMPAT=` there removes it.
+        if gameWine { env[Self.nxCompatKey] = "1" }
+        for (key, value) in extraEnvironment {
+            if let value { env[key] = value } else { env.removeValue(forKey: key) }
         }
         return env
     }

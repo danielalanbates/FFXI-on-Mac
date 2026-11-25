@@ -69,3 +69,13 @@ Addon development and testing happen **only on the local LandSandBoat world**
 (`scripts/lsb-server.sh`, 127.0.0.1). Never load an addon under test against HorizonXI or any
 other hosted server — the allowlist above exists because that is a bannable offence, and an
 automated test run has no way to know which addon a server tolerates.
+
+## VanaVoice and Vanaguide (not on any allowlist)
+
+| Addon | Wiring | Allowlist worlds | Local LSB |
+| --- | --- | --- | --- |
+| VanaVoice | `Narration.swift` | Refused + scrubbed | Toggle **Read cutscenes aloud** |
+| Vanaguide | `Guide.swift` | Refused + scrubbed | Toggle **Quest guide (Vanaguide, local LSB only)** |
+
+Neither is listed in shipped `addons/default.txt`. Load lines sit outside the AddonSuite markers. Details: `docs/VANAGUIDE.md`, vanaguide `docs/SERVERS.md`.
+

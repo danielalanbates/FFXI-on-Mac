@@ -1,6 +1,7 @@
 .DS_Store
 *.log
 app/.build/
+.build/
 app/build/
 dist/
 
@@ -22,3 +23,49 @@ scripts/harness/shots/
 
 # archived .app builds are binaries, not source
 archive/app-builds/
+
+# personal / local-server secrets (never commit even if copied into the tree)
+accounts.json
+**/.dbpass
+.dbpass
+*.dbpass
+**/accounts.json
+*.bak
+*.macos26.bak
+
+# secrets and signing material (notary API keys are AuthKey_<id>.p8)
+.env
+.env.*
+*api-key*
+AuthKey_*.p8
+*.p8
+*.p12
+*.pem
+*.keychain-db
+# boot profiles anywhere in the tree, not only at the root (they hold --user/--pass)
+**/config/boot/*.ini
+**/config/boot/*.xml
+# repo-level boot profiles; addons/lsb2.ini.example is the template for twoclient.py
+addons/*.ini
+# per-launch diagnostics, chat/command channels (chat carries character names), ImGui layout
+last-spawn*.txt
+**/cmdpipe/cmd.txt
+**/cmdpipe/chat.txt
+**/sigscan/answers.txt
+**/sigscan/dump-*.bin
+imgui.ini
+
+# Personal achievement snapshots and optional local OCR diagnostics.
+retroachievements.json
+retroachievements-snapshots.json
+*.personal.json
+ocr-captures/
+screen-captures/
+
+# Private Phoenix login handoffs and local acceptance artifacts.
+**/private/launch-*.json
+**/game-*.log
+
+# Local credential stores are never source artifacts.
+**/CREDENTIALS.md
+**/secrets.json

@@ -1,42 +1,48 @@
 import Foundation
+import CoreFoundation
 
 /// Refreshes what the launcher knows about each server from that server's own published pages,
 /// on startup, in the background.
 ///
-/// ## What is actually fetchable, checked 2026-08-14
+/// ## What is actually fetchable
 ///
-/// **Addon lists: yes, for HorizonXI.** <https://horizonxi.info/addons> is plain HTML and is the
-/// page HorizonXI's own wiki sends players to. It parses reliably. No other server on the list
-/// publishes its addon rules anywhere this project could find.
+/// **Addon lists: yes, for HorizonXI** (checked 2026-08-14). <https://horizonxi.info/addons> is
+/// plain HTML and is the page HorizonXI's own wiki sends players to. It parses reliably. No other
+/// server on the list publishes its addon rules anywhere this project could find.
 ///
-/// **News: no, for everybody.** This was checked properly before writing any of it, because a
-/// banner that invents its contents is worse than no banner:
+/// **News: yes, for HorizonXI** (checked 2026-10-15, overturning the 2026-08-14 finding below).
+/// `GET https://api.horizonxi.com/api/v1/news` answers `200 application/json` with an array of
+/// the newest 30 posts, each `{slug, title, date (ISO 8601), author, excerpt, html, readingTime,
+/// printReadingTime, printDate, category, categoryLabel}`. Categories seen: `server-notices`
+/// ("Server Notice"), `patch-notes` ("Patch Notes"), `known-issues` ("Known Issue"),
+/// `announcements` ("Announcement"); the site's bundle also knows `launcher-notices` and
+/// `discord-notices`. It is what horizonxi.com's own news page reads (its JS bundle's news query
+/// is `api.horizonxi.com/api/v1/` + `news`), it is relayed from their Discord, so titles carry
+/// mention tokens ("@everyoneApologies for…") and the "()" a stripped Discord timestamp leaves;
+/// `News.clean` takes those out. Each post's page is `https://horizonxi.com/news/<slug>`: the
+/// site routes `/news/$slug` and declares that address as the post's `mainEntityOfPage`.
+/// `Server.newsURL`/`newsPageURL` carry the source per world (`News`, `NewsPanel`).
 ///
-/// - `horizonxi.com` is a client-rendered SPA. `/rss.xml`, `/feed` and `/api/news` all return the
-///   app shell, not data. Its real backend is `api.horizonxi.com`, which answers 404 on every
-///   obvious news path; the paths in its JS bundle are front-end routes, not endpoints.
-/// - CatsEyeXI, Eden, FFEra: no feed. `/feed` is 404 or the SPA shell.
-/// - Most of these communities publish news to Discord, which is not fetchable without a bot
-///   token and a server invite.
+/// What 2026-08-14 found, and why it was wrong for HorizonXI: `horizonxi.com/rss.xml`, `/feed`
+/// and `/api/news` return the SPA shell, and `api.horizonxi.com` answered 404 on the obvious
+/// paths tried then; the versioned `/api/v1/news` was not among them. Still true for the others:
+/// CatsEyeXI, Eden, FFEra publish no feed (`/feed` is 404 or the SPA shell), and most of these
+/// communities post news to Discord, which is not fetchable without a bot token and an invite.
 ///
-/// So `NewsItem`s are **not scraped and never fabricated**. The banner rotates what the launcher
-/// genuinely knows: the selected server's era and note, whether this project has verified it,
-/// and the state of its addon policy. `feedURL` exists on `Server` so that the day any server
-/// ships an RSS or JSON feed, it is one line to turn on — `parseFeed` already handles RSS and
-/// JSON Feed.
+/// So news is **only ever the server's own posts, never fabricated**: a world without a feed, or
+/// whose feed has never been fetched (and has no cached copy), shows no panel and no text.
 @MainActor
 final class ServerFeeds: ObservableObject {
-    struct NewsItem: Identifiable, Hashable {
-        var id: String { title + source }
-        var title: String
-        var source: String
-        /// nil for items the launcher derived itself rather than fetched.
-        var url: URL?
-        var fetched: Bool
-    }
-
-    @Published private(set) var items: [NewsItem] = []
     @Published private(set) var lastRefresh: Date?
+    /// World name -> that world's published news, newest first (`Server.newsURL`). Absent: the
+    /// world has no feed, or it has never been fetched and nothing is cached. A failed fetch
+    /// keeps the last good copy; it never empties the panel or puts text in it.
+    @Published private(set) var news: [String: [NewsItem]] = [:]
+    /// Feed address -> when it was last asked for (successfully or not), so the several
+    /// triggers (start-up, the window coming into view, the 15-minute tick) cost one GET.
+    private var newsAsked: [String: Date] = [:]
+    private var newsInFlight: Set<String> = []
+    private let newsCacheDir: URL
     /// Server name -> the addon list fetched from that server, if the fetch worked.
     @Published private(set) var fetchedAddonLists: [String: AddonPolicy] = [:]
     /// Server name -> the retail client version its login server currently requires, read from
@@ -52,16 +58,98 @@ final class ServerFeeds: ObservableObject {
     /// Where each server publishes its live online count, and how the payload reads. All three
     /// are the same numbers the servers' own websites display (verified 2026-08-19); nothing is
     /// scraped from HTML, so a redesign of their pages cannot silently break this.
-    private static let populationSources: [(server: String, url: String, jsonKey: String?)] = [
+    nonisolated static let populationSources: [(server: String, url: String, jsonKey: String?)] = [
         // Plain integer body, the counter horizonxi.com shows.
         ("HorizonXI", "https://api.horizonxi.com/api/v1/misc/status", nil),
         // {"online":true,"playerCount":647,...} — catseyexi.com's homepage counter.
         ("CatsEyeXI", "https://www.catseyexi.com/api/online-count", "playerCount"),
         // Plain integer body — edenxi.com's "active" counter.
         ("Eden", "https://edenxi.com/api/v1/misc/active", nil),
+        // {"state":"online","client_ver":…,"stats":{"online":22,…}} — the counter their launcher shows.
+        ("Vanadreams", "https://vanadreams.org/api/public/vanadreams/status", "stats.online"),
+        // {"playersOnline":44} -- the count on their home page.
+        ("DriftwoodXI", "https://xi.driftwoodgaming.com/api/players", "playersOnline"),
+        // {"status":"online","server":"play.pegasusxi.com","playerCount":0,"levelCap":99} -- their header bar.
+        ("PegasusXI", "https://pegasusxi.com/api/status", "playerCount"),
+        // {"ok":true,"status":"online","onlinePlayers":0,"totalCharacters":34,"clientVersion":"30260805_0",…}
+        ("MistXI", "https://api.mistxi.com/status.php", "onlinePlayers"),
+        // {"online":true,"maintenance":false,"playersOnline":2,…} -- their site's counter.
+        ("Olympus XI", "https://olympus-games.dev/api/status", "playersOnline"),
     ]
 
-    /// Fetch every published online counter. Cheap (three tiny GETs), silent on failure, and a
+    /// A world's Discord, live: members online and in all, from Discord's public invite API
+    /// (`/api/v9/invites/<code>?with_counts=true`, no account, no key). Only for a world that
+    /// publishes no players-online counter of its own (Daniel, 2026-10-24: "if there's no such data
+    /// for a server, maybe it can pull the active discord numbers"), and always said to be the
+    /// Discord's: people online in a world's Discord are not players in it.
+    struct DiscordCount: Equatable { var online: Int; var members: Int }
+    @Published private(set) var discordCounts: [String: DiscordCount] = [:]
+    private var discordFetched: [String: Date] = [:]
+
+    /// The invite code of a `discord.gg/<code>` or `discord.com/invite/<code>` link, or nil.
+    nonisolated static func inviteCode(_ link: String) -> String? {
+        guard let u = URL(string: link), let host = u.host?.lowercased() else { return nil }
+        var parts = u.path.split(separator: "/").map(String.init)
+        switch host {
+        case "discord.gg", "www.discord.gg": break
+        case "discord.com", "www.discord.com", "discordapp.com", "www.discordapp.com":
+            guard parts.first == "invite" else { return nil }
+            parts.removeFirst()
+        default: return nil
+        }
+        guard parts.count == 1, let c = parts.first,
+              c.range(of: #"^[A-Za-z0-9-]{2,64}$"#, options: .regularExpression) != nil else { return nil }
+        return c
+    }
+
+    /// Discord's answer for an invite: `approximate_presence_count` online of
+    /// `approximate_member_count`; nil when either is missing or makes no sense.
+    nonisolated static func parseInvite(_ d: Data) -> DiscordCount? {
+        guard let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+              let on = (o["approximate_presence_count"] as? NSNumber)?.intValue,
+              let all = (o["approximate_member_count"] as? NSNumber)?.intValue, on >= 0, all >= on else { return nil }
+        return DiscordCount(online: on, members: all)
+    }
+
+    /// Whether a world's page falls back to its Discord: it has an invite, and no counter of its own.
+    nonisolated static func wantsDiscord(_ s: Server) -> Bool {
+        !s.local && inviteCode(s.discordURL) != nil && !populationSources.contains { $0.server == s.name }
+    }
+
+    /// The selected world's Discord count, at most once every ten minutes per world (one small GET);
+    /// a failed fetch removes the number rather than keeping a stale one.
+    func refreshDiscord(for server: Server?, minInterval: TimeInterval = 600,
+                        api: String = "https://discord.com/api/v9/invites/") async {
+        guard let s = server, Self.wantsDiscord(s), let code = Self.inviteCode(s.discordURL) else { return }
+        if let t = discordFetched[s.name], Date().timeIntervalSince(t) < minInterval { return }
+        discordFetched[s.name] = Date()
+        var count: DiscordCount?
+        if let url = URL(string: api + code + "?with_counts=true"),
+           let (data, resp) = try? await URLSession.shared.data(from: url),
+           (resp as? HTTPURLResponse)?.statusCode == 200 {
+            count = Self.parseInvite(data)
+        }
+        discordCounts[s.name] = count
+    }
+
+    /// Strict public-counter parser. A JSON bool, fractional/negative value or error page is
+    /// not a player count. Zero is a valid live count and must override the offline estimate.
+    nonisolated static func parsePopulation(_ data: Data, key: String?) -> Int? {
+        let count: Int?
+        if let key {
+            var node: Any? = try? JSONSerialization.jsonObject(with: data)
+            for part in key.split(separator: ".") { node = (node as? [String: Any])?[String(part)] }
+            guard let number = node as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  number.doubleValue.rounded(.towardZero) == number.doubleValue else { return nil }
+            count = Int(exactly: number.doubleValue)
+        } else {
+            count = Int(String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        guard let count, (0...1_000_000).contains(count) else { return nil }
+        return count
+    }
+
+    /// Fetch every published online counter, silently on failure. A
     /// stale number is worse than none: a failed fetch removes the entry rather than keeping it.
     func refreshPopulations() async {
         for src in Self.populationSources {
@@ -69,13 +157,7 @@ final class ServerFeeds: ObservableObject {
             if let url = URL(string: src.url),
                let (data, resp) = try? await URLSession.shared.data(from: url),
                (resp as? HTTPURLResponse)?.statusCode == 200 {
-                if let key = src.jsonKey {
-                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-                    count = json?[key] as? Int
-                } else {
-                    count = Int(String(decoding: data, as: UTF8.self)
-                        .trimmingCharacters(in: .whitespacesAndNewlines))
-                }
+                count = Self.parsePopulation(data, key: src.jsonKey)
             }
             populations[src.server] = count
         }
@@ -88,7 +170,48 @@ final class ServerFeeds: ObservableObject {
         return dir.appendingPathComponent("addon-lists.json")
     }
 
-    init() { loadCache() }
+    init(newsCacheDir: URL = News.defaultCacheDir) {
+        self.newsCacheDir = newsCacheDir
+        loadCache()
+    }
+
+    /// Each world's cached feed, read off the main actor; a world already showing fetched news
+    /// keeps it.
+    func loadCachedNews(servers: [Server]) async {
+        let feeds = servers.compactMap { s in URL(string: s.newsURL).map { (s.name, $0) } }
+        guard !feeds.isEmpty else { return }
+        let dir = newsCacheDir
+        let cached = await Task.detached(priority: .utility) { () -> [String: [NewsItem]] in
+            var out: [String: [NewsItem]] = [:]
+            for (world, url) in feeds { if let items = News.loadCache(feed: url, in: dir) { out[world] = items } }
+            return out
+        }.value
+        for (world, items) in cached where news[world] == nil { news[world] = items }
+    }
+
+    /// Fetch every world's feed not asked for in the last `minInterval` seconds. In the
+    /// background, one short GET per feed; a good answer replaces what is shown and the cache,
+    /// a failure changes nothing. `fetch` is `News.fetch`, swapped out by --selftest-news.
+    func refreshNews(servers: [Server], minInterval: TimeInterval = 60,
+                     fetch: @escaping (URL) async -> (items: [NewsItem], data: Data)? = { await News.fetch($0) }) async {
+        for s in servers {
+            guard !s.newsURL.isEmpty, let url = URL(string: s.newsURL) else { continue }
+            let key = url.absoluteString
+            if let last = newsAsked[key], Date().timeIntervalSince(last) < minInterval { continue }
+            guard !newsInFlight.contains(key) else { continue }
+            newsInFlight.insert(key)
+            newsAsked[key] = Date()
+            let got = await fetch(url)
+            newsInFlight.remove(key)
+            guard let got else { continue }
+            // Every world on this feed (normally one).
+            for w in servers where w.newsURL == s.newsURL && news[w.name] != got.items {
+                news[w.name] = got.items
+            }
+            let dir = newsCacheDir
+            Task.detached(priority: .utility) { News.saveCache(got.data, feed: url, in: dir) }
+        }
+    }
 
     /// Called once when the launcher window appears. Never blocks the UI, and a failure is
     /// silent by design: a launcher that cannot reach the internet must still start the game.
@@ -245,68 +368,5 @@ final class ServerFeeds: ObservableObject {
             fetchedAddonLists[name] = AddonPolicy.allowlist(
                 published: names, source: "cached from that server's published list")
         }
-    }
-
-    /// What the banner rotates through for the selected server. These are facts the launcher
-    /// holds, not headlines invented to fill a banner: if a server ever publishes a real feed,
-    /// fetched items are prepended and marked.
-    func bannerItems(for server: Server?, policy: AddonPolicy) -> [NewsItem] {
-        guard let server else { return [] }
-        var out = items.filter { $0.fetched }
-
-        // Which emulator this world runs, and what that means for it. Shown rather than acted
-        // on: it is the difference between a world that can pull fixes from a living upstream
-        // and one whose content is entirely its own team's work -- worth knowing, not worth
-        // hiding a thousand-player server over. See docs/CODEBASE.md.
-        switch server.codebase {
-        case .landSandBoat:
-            out.append(NewsItem(
-                title: "Runs LandSandBoat — the one FFXI emulator still in development, so this "
-                     + "world can pull upstream fixes and content.",
-                source: server.name, url: nil, fetched: false))
-        case .darkStarLineage:
-            out.append(NewsItem(
-                title: "Runs a DarkStar-lineage fork. DarkStar itself ended in 2020, so "
-                     + "everything new here is \(server.name)'s own team's work.",
-                source: server.name, url: nil, fetched: false))
-        case .unknown:
-            break
-        }
-        if !server.era.isEmpty {
-            out.append(NewsItem(title: "\(server.name) — \(server.era)",
-                                source: server.name, url: nil, fetched: false))
-        }
-        if !server.note.isEmpty {
-            out.append(NewsItem(title: server.note, source: server.name, url: nil, fetched: false))
-        }
-        switch policy {
-        case let .allowlist(names, source):
-            out.append(NewsItem(title: "\(names.count) approved addons — \(source)",
-                                source: server.name,
-                                url: AddonPolicies.publishedListURL(for: server), fetched: false))
-        case .unknown:
-            out.append(NewsItem(
-                title: "\(server.name)'s addon rules are not published anywhere this launcher "
-                     + "can read — check before you load anything.",
-                source: server.name, url: nil, fetched: false))
-        case let .unrestricted(reason):
-            out.append(NewsItem(title: reason, source: server.name, url: nil, fetched: false))
-        }
-        if !server.verified {
-            out.append(NewsItem(
-                title: "This project has not tested \(server.name) itself — its login host comes "
-                     + "from the server's own published setup guide.",
-                source: server.name, url: nil, fetched: false))
-        }
-        // Asked for by Daniel: the most common question about this list is why somebody's own
-        // world is missing from it. Rotated on *every* server's banner, not just one, because
-        // whoever is looking for the missing world will be sitting on whatever world is selected.
-        out.append(NewsItem(
-            title: "Not seeing your server? It is almost certainly not built on LandSandBoat — "
-                 + "the community-led codebase this launcher targets, and the only FFXI server "
-                 + "emulator still being actively developed.",
-            source: "FFXI on Mac",
-            url: URL(string: "https://github.com/LandSandBoat/server"), fetched: false))
-        return out
     }
 }

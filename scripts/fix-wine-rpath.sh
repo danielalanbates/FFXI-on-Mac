@@ -32,17 +32,24 @@ linked=0
 # (N) is zsh's null_glob qualifier: a pattern that matches nothing expands to nothing instead
 # of aborting the script. A freshly created wrapper has no dylibs loose in SharedSupport -- they
 # are all in Frameworks -- so without this the script dies on exactly the case it exists for.
+#
+# Links are relative (b60), so a wrapper that is moved or copied to another drive keeps working;
+# a link left dangling by such a move (the old absolute kind) is replaced instead of making
+# `ln` fail with "File exists".
 for f in "$FRAMEWORKS"/*.dylib(N) "$SHARED"/*.dylib(N); do
   [[ -e "$f" ]] || continue
   base="${f:t}"
+  [[ -L "$LIBDIR/$base" && ! -e "$LIBDIR/$base" ]] && rm -f "$LIBDIR/$base"
   [[ -e "$LIBDIR/$base" ]] && continue
-  ln -s "$f" "$LIBDIR/$base"
+  if [[ "$f" == "$FRAMEWORKS"/* ]]; then rel="../../../Frameworks/$base"; else rel="../../$base"; fi
+  ln -s "$rel" "$LIBDIR/$base"
   linked=$((linked + 1))
 done
 
 echo "linked $linked dylib(s) into $LIBDIR"
 
-# Verify: run wine with a deliberately empty environment. If this prints a path, the
-# wrapper no longer needs DYLD_* and is safe to drive from scripts and launchers.
+# Verify: wineserver loads the same dylibs and needs no prefix. (Running `wine cmd.exe` here
+# booted whatever WINEPREFIX was set -- ~/.wine from first-run setup, or the game prefix from a
+# Repair, which the wrapper's wine then re-stamped and the next Play had to update again.)
 env -u DYLD_FALLBACK_LIBRARY_PATH -u DYLD_LIBRARY_PATH \
-  "$SHARED/wine/bin/wine" cmd.exe /c echo '%AppData%' 2>/dev/null | tail -1
+  "$SHARED/wine/bin/wineserver" --version 2>&1 | tail -1
