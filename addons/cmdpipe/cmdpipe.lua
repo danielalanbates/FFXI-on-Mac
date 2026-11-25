@@ -40,13 +40,6 @@ local chat = _G.chat or require('chat');
 local BASE     = 'C:\\HorizonXI\\addons\\cmdpipe\\';
 local CMD_PATH = BASE .. 'cmd.txt';
 
--- A second, host-side pipe. macOS TCC can leave the game volume unreadable to the
--- terminal that drives an unattended run, while Z:\tmp (the Mac's /tmp) is always
--- writable by both sides. Harmless when the directory does not exist.
-local ALT_BASE     = 'Z:\\tmp\\ffxi-pipe\\';
-local ALT_CMD_PATH = ALT_BASE .. 'cmd.txt';
-local ALT_CHAT     = ALT_BASE .. 'chat.txt';
-
 local state = { chat_path = BASE .. 'chat.txt', packets = false };
 
 local function say(msg)
@@ -76,8 +69,6 @@ ashita.events.register('text_in', 'cmdpipe_text_in', function (e)
     local out = ('[%d] %s\n'):format(e.mode or -1, line);
     local f = io.open(state.chat_path, 'ab');
     if (f ~= nil) then f:write(out); f:close(); end
-    local g = io.open(ALT_CHAT, 'ab');
-    if (g ~= nil) then g:write(out); g:close(); end
 end);
 
 ashita.events.register('packet_out', 'cmdpipe_packet_out', function (e)
@@ -126,7 +117,6 @@ end
 
 local function pump()
     pump_one(CMD_PATH);
-    pump_one(ALT_CMD_PATH);
 end
 
 ashita.events.register('d3d_present', 'cmdpipe_present', function ()
