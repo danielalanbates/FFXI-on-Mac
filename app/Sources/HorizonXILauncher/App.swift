@@ -304,6 +304,8 @@ struct ContentView: View {
     @State private var cardsHeight: CGFloat?
     @State private var forceSetup = false
     @State private var newServer = false
+    /// The hand-added world the add sheet is editing; nil while it adds a new one.
+    @State private var editing: Server? = nil
     @State private var newName = ""
     @State private var newHost = ""
     @State private var newProfile = ""
@@ -808,7 +810,13 @@ struct ContentView: View {
                     }
                 }
                 Divider()
-                Button("Add a server…") { newServer = true }
+                Button("Add a server…") { editing = nil; newName = ""; newHost = ""; newProfile = ""; newServer = true }
+                if let s = store.selected, s.addedByUser {
+                    Button("Edit \(s.name)…") {
+                        editing = s; newName = s.name; newHost = s.host; newProfile = s.bootProfile; newServer = true
+                    }
+                    Button("Remove \(s.name)") { store.remove(s) }
+                }
             } label: {
                 worldRow
             }
@@ -1310,16 +1318,17 @@ struct ContentView: View {
 
     private var addServerSheet: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Add a server").font(.headline)
+            Text(editing == nil ? "Add a server" : "Edit \(editing!.name)").font(.headline)
             TextField("Name", text: $newName).textFieldStyle(.roundedBorder)
             TextField("Login host", text: $newHost).textFieldStyle(.roundedBorder)
             TextField("Boot profile (.ini)", text: $newProfile).textFieldStyle(.roundedBorder)
             HStack {
                 Spacer()
                 Button("Cancel") { newServer = false }
-                Button("Add") {
-                    store.add(name: newName, host: newHost, profile: newProfile)
-                    newName = ""; newHost = ""; newProfile = ""; newServer = false
+                Button(editing == nil ? "Add" : "Save") {
+                    if let e = editing { store.edit(e, name: newName, host: newHost, profile: newProfile) }
+                    else { store.add(name: newName, host: newHost, profile: newProfile) }
+                    editing = nil; newName = ""; newHost = ""; newProfile = ""; newServer = false
                 }
                 .keyboardShortcut(.defaultAction)
             }

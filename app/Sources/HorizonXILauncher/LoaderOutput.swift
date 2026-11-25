@@ -6,7 +6,11 @@ enum LoaderOutput {
     /// password." / "…Account already logged in." / "…xiloader version mismatch…"). Every xiloader
     /// fork prints one of these and then sits at its menu.
     static let refusalMarkers = ["Failed to login", "Bad json reply from remote", "Error from remote",
-                                 "version mismatch", "xi_connect", "Account already logged in"]
+                                 "version mismatch", "xi_connect", "Account already logged in",
+                                 // Eden's xiloader (EdenServer/xiloader network.cpp) words its
+                                 // refusals differently, then waits at "Press the ENTER key…".
+                                 "Invalid username or password", "Character logged in. Please wait",
+                                 "Too many connections from the same location", "Unexpected server response"]
 
     /// The loader's own account menu ("What would you like to do? 1.) Login 2.) Create New
     /// Account … Enter a selection:"). It reads the answer from a stdin that is never a terminal
@@ -14,7 +18,7 @@ enum LoaderOutput {
     /// 831 times in five minutes on 2026-10-15 (b60, a HorizonXI profile booting Ashita's
     /// DarkStar-era pol.exe), with no window and the button saying "Starting…". Reaching it means
     /// the autologin did not happen, whichever loader it is.
-    static let menuMarkers = ["What would you like to do?", "Enter a selection"]
+    static let menuMarkers = ["What would you like to do?", "Enter a selection", "Press the ENTER key to close and retry"]
 
     struct Refusal: Equatable {
         /// What the player is told: the loader's own words, or one plain line for the menu.
