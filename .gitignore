@@ -51,6 +51,8 @@ addons/*.ini
 last-spawn*.txt
 **/cmdpipe/cmd.txt
 **/cmdpipe/chat.txt
+**/sigscan/answers.txt
+**/sigscan/dump-*.bin
 imgui.ini
 
 # Personal achievement snapshots and optional local OCR diagnostics.
