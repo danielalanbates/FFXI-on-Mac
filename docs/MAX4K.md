@@ -283,8 +283,8 @@ paths + probe tooling: /tmp/game-sample.txt (transient), mvkprobe.c in session n
 The NOWAIT glitch had only ever been shown two ways: `blinkprobe.py`'s static frame-diff
 spikes (17/39 pairs) and Daniel's minute of play. This is the first confirmation under a
 **live, moving camera**, and it also re-verifies that the shipped FENCE path is visually clean
-under the same stress. Run on the local Docker world (`docs/LOCAL-TEST-SERVER.md`) via
-`menu-run.py`, human at the screen. Both arms had `D3D9_RT_READBACK_FENCE=32` (the shipped
+under the same stress. Run by rdbell on a local LandSandBoat world with the
+unattended driver from PR #22 (not merged), human at the screen. Both arms had `D3D9_RT_READBACK_FENCE=32` (the shipped
 default); the only variable was `D3D9_RT_READBACK_NOWAIT` layered on top — so this is
 *shipped baseline* vs *shipped baseline + NOWAIT*, not vs raw stock.
 

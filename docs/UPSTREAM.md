@@ -9,7 +9,7 @@ Environment when these were measured: MacBook Pro M1 (Apple M1, 8 GB), macOS 26.
 
 > **⚠ Staleness gate — read before filing (updated 2026-09-04).** These reports were measured on
 > the **older stack above**: M1, wine-10.0 (Gcenx), **MoltenVK 1.2.10**. The project has since moved to
-> a MacBook Pro **M2 Pro**, **athei `wine-cx-26.3.0-1`** (new-wow64), and **MoltenVK 1.4.1**. Filing on
+> **athei `wine-cx-26.3.0-1`** (new-wow64) and **MoltenVK 1.4.2** (`vendor/libMoltenVK-1.4.2.dylib`). Filing on
 > someone else's tracker is a public action — **re-verify each report still reproduces on the current
 > versions first**, or it may describe an already-fixed or misdiagnosed bug. In particular:
 >
