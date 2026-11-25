@@ -70,8 +70,8 @@ ends) are in `archive/docs-2026-08/`.
   the current beta with no manual intervention.
 - macOS 27.0.1 in-world fps, x87 on vs off (nobody has measured it since 09-27).
 - **Fresh users:** Play needs athei's wine-cx; *Install wine…* gives Sikarugir 10.0, whose wine
-  drops the client a second after login (`docs/WINE-BUILD.md`). Decide #20 (rebased) or say so
-  in the release notes.
+  drops the client a second after login (`docs/WINE-BUILD.md`). #20 was closed on 2026-11-25:
+  Setup has fetched the pinned wine-cx itself since v3.10 (`scripts/game-wine.sh`).
 - Ship with `scripts/package.sh` (Developer ID + notary profile, clean siblings) and
   `scripts/publish-release.sh` (checks only; `--yes` publishes, Daniel's call). Tag `v3.10`,
   asset `FFXI-on-Mac-3.10-b<n>.dmg`, notarized and stapled.
@@ -79,27 +79,28 @@ ends) are in `archive/docs-2026-08/`.
   than the installed build); first line of the 3.10 notes: "Quit the game before pressing
   Restart" (v3.9's Restart does not check).
 
-## Open pull requests (triage 2026-10-14, nothing posted to GitHub)
+## Pull requests (updated 2026-11-25: none open)
 
 Outside PRs need the contributor licence (`CONTRIBUTING.md`, added in b59) agreed on the PR
-before merging; asking needs Daniel's OK.
+before merging. On 2026-11-25 that was asked on #18 and #23, which were closed until rdbell replies.
 
-| PR | state | action |
+| PR | outcome (2026-11-25) | still open |
 | --- | --- | --- |
-| #36 quiet-wine-update | installed as b58; merges cleanly into master | merge once Daniel confirms b58/b59 plays |
-| #30 multi-world, #31 RetroAchievements | already in master through #33 (90d77ba) | close as merged; the two-client live test (`docs/MULTI_WORLD_LIVE_TEST.md`) never ran |
-| #32 quiet-updater-and-vanaguide | superseded by #36; conflicts in 7 files; turns PLAY into UPDATE | close; narrator-on-exit and the asset-host check are already in b59 |
-| #35 password-json | passes `--json` where the loader's flag is `--json-file`; wrong Windows path for override folders; temp file only removed by a 180 s task | fix those, call `scrubLoginFiles`, test a login on local LSB first |
-| #17 (rdbell) `/play` → `/play-now` | applies cleanly; both URLs answer 200 | merge only after confirming which page is canonical |
-| #18, #19 (rdbell) | #18 applies with reduced context; #19 conflicts | rebase |
-| #20 (rdbell) patched-wine installer | replaces Daniel's wine candidates and hard-blocks Play without a 1 GB+ runtime | rebase: keep existing candidates first, offer the install only when none is found, free-space check, no hard block |
-| #21 (rdbell) DXVK enforce-nx | biggest measured scene-load win (time below 10 fps 24 s → 1 s, M2 Max, macOS 26.5) but replaces `x87sidecar-coop` with upstream 4e9c738 and would undo the macOS 27 change (3c7c2f6) | do not merge as is. b66 sets `WINE_DISABLE_NX_COMPAT=1` on Play (written independently; the same stall, BETA-66.md); only if the patch still wins on top of that, take only the patch and a rebuilt dll |
-| #22 (rdbell) | ~29k lines, stacked on #20/#21 | after those |
-| #23, #28 (rdbell) docs | apply cleanly | merge after the licence agreement |
-| #24 (rdbell) era label | the same change landed in b59 (2e80269) | close with credit |
-| #26 (rdbell) cmdpipe | runs commands from world-writable `/tmp`, no hosted gate | dev tool only: per-user `$TMPDIR`, never bundled, local LSB only |
-| #9 release-check | stale paragraph; superseded by `publish-release.sh` | rebase or close |
-| Daniel's #4, #7, #8, #10, #11, #15, #16 (August) | open | triage separately |
+| #26 cmdpipe | merged (609c748) without the world-writable `/tmp` pipe; in-game-folder pipe only, not bundled | none |
+| #11 ashita-signature-repair | closed; `docs/SIGNATURES.md`, `patches/ashita/custom.pointers.ini` and `addons/sigscan` salvaged through #95 (fa3fc0a) | the winecursor ImGui click feed and the audiofollow restart watchdog (d0b1944) stay on branch `ashita-signature-repair`; both need an in-game check |
+| #17 (rdbell) `/play` → `/play-now` | merged (f47d255): horizonxi.com's route table has `/play-now` and no `/play` (the SPA answers 200 for any path) | ships with the next release |
+| #18 (rdbell) aria2 metadata retry | closed pending the licence; ported onto master as `fetch_torrent` (setup-scripts-test 94/94) on branch `port/rdbell-18-aria2-metadata` | reopen and merge when rdbell agrees on #18 |
+| #23 (rdbell) docs | closed pending the licence; PR plus two fixes (MoltenVK 1.4.2, MAX4K note points at #22) on branch `port/rdbell-23-docs` | reopen and merge when rdbell agrees on #23 |
+| #19 (rdbell) | closed as addressed (cc5ee53, cb9a9f4, 42edcfa) | `Install.remembered()`/`lastChosen()` still accept an `install.last` naming `prefix-installers` (only from builds before 3.11.2) |
+| #20 (rdbell) | closed as superseded: Setup fetches the pinned wine-cx through `scripts/game-wine.sh` since v3.10, a verified repack since 3.11.1 (#90); the PR's athei URL now returns 404 | `ServerStore.merge` does not refresh the built-in per-world `x87`/`msync` flags |
+| #21 (rdbell) DXVK enforce-nx | closed as superseded: `WINE_DISABLE_NX_COMPAT=1` (fffe128) and explicit `DXVK_CONFIG_FILE` (cd83afd); its vendored DXVK DLL and `x87sidecar-coop` would regress master | enforce-nx on top of NX_COMPAT stays an A/B (Performance item 3) |
+| #22 (rdbell) harness | closed: stacked on #20/#21, 16 conflicts, symbol maps for DLLs that no longer ship | none |
+| #4, #7, #8, #9, #10, #15, #28 (Daniel) | closed as superseded; branches kept | only on their branches: the ImGui click feed (#8, #10, #11), #10's `docs/MOUSE.md` reading of Ashita.dll (WH_MOUSE hook), the `--addons` command line (#15), Locate… (#4) |
+| #35 password-json | closed in favour of branch `fix-login-file-35` (834839f, WIP, no PR) | Wine loaders reject the `Z:\var\folders` path: move the file under `/private/var` or the prefix's `drive_c`, then a local-world login test |
+| #85 party-camp draft | closed: wiki-sourced, unverified, moved the Solo Guide out of the top section | branch `draft/horizon-party-camps` |
+| #16, #24, #30, #31, #32, #36 | closed earlier (#36 merged 2026-10-16) | none |
+| issue #25 beach-balls | closed as not planned: shutdown fixed (a13d09a); `launch()` is still synchronous on the main actor | `BETA-59.md` › Deferred; a `Runner.swift`-only PR is welcome |
+| issue #27 window | closed: fcd3adb, shipped since v3.10 | the on-screen check in `BETA-59.md` is not recorded as run |
 
 ## Performance
 
@@ -138,13 +139,14 @@ old CrossOver MoltenVK on macOS 27. Numbers: `MAX4K.md`, `PERFORMANCE.md`, `X87-
 
 ## Pathways (open, not started)
 
-- Fresh-user wine: #20 rebased as above, or a pinned athei wine-cx download with an external-drive
-  option.
-- Passwords: off the loader command line (#35, once fixed) and into the Keychain (`RAKeychain`
-  pattern); today they sit in `accounts.json` (0600) and the boot `.ini`.
+- Fresh-user wine: done since v3.10 (Setup's pinned `scripts/game-wine.sh` download into the
+  chosen folder; #20 closed as superseded).
+- Passwords: off the loader command line (branch `fix-login-file-35`, WIP; #35 closed) and into
+  the Keychain (`RAKeychain` pattern); today they sit in `accounts.json` (0600) and the boot `.ini`.
 - `x87sidecar-coop`'s macOS 27 change has no source or patch in the repo: recover it before the
   next Rosetta update breaks it.
-- `launch()` off the main actor (#25): order and plan in `BETA-59.md` › Deferred.
+- `launch()` off the main actor (#25, closed until a PR lands): order and plan in `BETA-59.md` ›
+  Deferred.
 - Personal data still in the tree or history: character name "Murn" and `docs/img/murn-*.png`,
   `/Users/daniel` paths (harness profiles, results JSON, scripts), volume names in
   `X87Sidecar.swift`/`Install.swift`, the login name inside the archived 2.7 app binary, and the
