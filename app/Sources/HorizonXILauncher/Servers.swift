@@ -372,7 +372,7 @@ struct Server: Codable, Identifiable, Hashable {
                // horizonxi.com, 2026-10-14: "Treasures of Aht Urhgan is live on HorizonXI"
                // (launched 2026-08-07); contributor PR #24 said the same.
                era: "Treasures of Aht Urhgan · 75 cap", population: 1496, codebase: .landSandBoat,
-               installURL: "https://horizonxi.com/play", installKind: .horizonTorrent,
+               installURL: "https://horizonxi.com/play-now", installKind: .horizonTorrent,
                installNote: "HorizonXI's own client, fetched the way their launcher does it: a 9.4 GB torrent, then their updates. Needs aria2 (brew install aria2).",
                accountURL: "https://horizonxi.com/register",
                accountHow: "Sign up on horizonxi.com, then log in here with that account.",
