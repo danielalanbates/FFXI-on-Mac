@@ -12,7 +12,7 @@
 ### What has been tested
 One Mac: an M1 MacBook Pro with 8 GB on macOS 27.2. Eden's real login program was run under the launcher's Wine against a local test server, and its output is in the self-tests, which all pass. Not tried: logging in to Eden's real server.
 
-Built from launcher LAUNCHER_SHA, Vanaguide 6682094 and VanaVoice afa7209.
+Built from launcher 956a2ff, Vanaguide 6682094 and VanaVoice afa7209.
 
 ---
 
