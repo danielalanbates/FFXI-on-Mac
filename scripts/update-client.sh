@@ -182,6 +182,47 @@ base_complete() {
     && [[ -f "$game/Ashita-cli.exe" || -f "$game/injector.exe" ]]
 }
 
+# HorizonXI's magnets carry no metadata, so aria2 must get the torrent's details from a peer
+# before it can create the file at all. One aria2 run can sit in that step far longer than
+# --bt-stop-timeout (seen: over 43 minutes with no file and no .aria2; contributed by rdbell,
+# PR #18). So: up to three short metadata-only runs, each a fresh process (aria2 rewrites a damaged
+# DHT file when it exits, so the next run starts from the repaired one), the details saved as
+# <info-hash>.torrent beside the download, then the download itself from that file, which a later
+# run (after a Stop or a stall) reuses. The metadata runs print no readout: the launcher's button
+# reads every "(N%)" it sees, and the metadata's own 100% would put it at the download's end.
+METADATA_TRIES="${HXI_METADATA_TRIES:-3}"
+METADATA_SECONDS="${HXI_METADATA_SECONDS:-60}"
+torrent_of() {   # <magnet> <dir>: where aria2 saves its details (named by the info hash)
+  local h="${1#*xt=urn:btih:}"; h="${h%%&*}"
+  [[ "$h" =~ '^[[:xdigit:]]{40}$' ]] || return 1
+  print -r -- "$2/${h:l}.torrent"
+}
+fetch_torrent() {   # <magnet> <zip name> <dir> <stall seconds> <message if it fails>
+  local magnet="$1" zip="$2" dir="$3" stall="$4" failed="$5" torrent n
+  torrent=$(torrent_of "$magnet" "$dir") \
+    || die "HorizonXI's download link for $zip is not one this launcher can use."
+  # -T: without it, --show-files exits 0 even when it cannot read the file (aria2 1.37).
+  if [[ -s "$torrent" ]] && ! "$ARIA2C" --show-files -T "$torrent" >/dev/null 2>&1; then
+    say "the saved download details for $zip were damaged; fetching them again"
+    rm -f "$torrent"
+  fi
+  if [[ ! -s "$torrent" ]]; then
+    rm -f "$torrent"
+    for (( n = 1; n <= METADATA_TRIES; n++ )); do
+      say "finding people sharing $zip (try $n of $METADATA_TRIES)"
+      "$ARIA2C" --dir="$dir" --bt-metadata-only=true --bt-save-metadata=true \
+             --stop="$METADATA_SECONDS" --bt-stop-timeout="$METADATA_SECONDS" \
+             --summary-interval=0 --show-console-readout=false --download-result=hide \
+             --console-log-level=warn --enable-dht=true "$magnet" >/dev/null 2>&1 || true
+      [[ -s "$torrent" ]] && break
+    done
+    [[ -s "$torrent" ]] || die "Nobody sharing $zip answered ($METADATA_TRIES tries) — try again later."
+  fi
+  "$ARIA2C" --dir="$dir" --seed-time=0 --bt-stop-timeout="$stall" --summary-interval=2 \
+         --console-log-level=warn --enable-dht=true --allow-overwrite=true "$torrent" \
+    || die "$failed"
+}
+
 tmpd=$(mktemp -d "${TMPDIR:-/tmp}/ffxi-update.XXXXXX")
 # A Stop during an unzip leaves its half-unpacked folder (up to 15 GB): ours, and never complete.
 tmpx=""
@@ -228,9 +269,7 @@ case "${1:-}" in
         need_space "$dl" $(( xl - have + 16000000000 )) "HorizonXI"
       fi
       say "fetching $base ($mv) by torrent into $dl — this is ~9.4 GB"
-      "$ARIA2C" --dir="$dl" --seed-time=0 --bt-stop-timeout=1800 --summary-interval=2 \
-             --console-log-level=warn --enable-dht=true --allow-overwrite=true "$magnet" \
-        || die "The HorizonXI download stalled or failed — press Setup again to resume."
+      fetch_torrent "$magnet" "$base" "$dl" 1800 "The HorizonXI download stalled or failed — press Setup again to resume."
       [[ -f "$dl/$base" && ! -f "$dl/$base.aria2" ]] || die "aria2 finished but $base is not complete in $dl"
     fi
     say "extracting $base"
@@ -246,7 +285,7 @@ case "${1:-}" in
     printf '{\n  "version": "%s"\n}\n' "$mv" > "$game/version.json"
     base_complete || die "$base unpacked, but the game files are still incomplete."
     # 9.4 GB that is no longer needed once unpacked.
-    rm -f "$dl/$base" "$dl/$base.aria2"
+    rm -f "$dl/$base" "$dl/$base.aria2" "$(torrent_of "$magnet" "$dl" || true)"
     say "base client in place — applying updates"
     rm -rf "$tmpd"
     exec "$0" horizon "$game"
@@ -285,9 +324,7 @@ case "${1:-}" in
       # A Stop leaves the full-size file plus its .aria2 control file: that is a resume, not a
       # finished download.
       if [[ ! -f "$dl/$zip" || -f "$dl/$zip.aria2" ]]; then
-        "$ARIA2C" --dir="$dl" --seed-time=0 --bt-stop-timeout=600 --summary-interval=2 \
-               --console-log-level=warn --enable-dht=true --allow-overwrite=true "$magnet" \
-          || die "The download of HorizonXI $mv stalled or failed (nobody may be sharing it right now) — try again later."
+        fetch_torrent "$magnet" "$zip" "$dl" 600 "The download of HorizonXI $mv stalled or failed (nobody may be sharing it right now) — try again later."
         [[ -f "$dl/$zip" && ! -f "$dl/$zip.aria2" ]] || die "aria2 finished but $zip is not complete in $dl"
       fi
       tmpk=$(mktemp -d)

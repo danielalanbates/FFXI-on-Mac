@@ -73,18 +73,38 @@ case "$url" in
   *) exit 6 ;;
 esac
 EOF
-# aria2c: "downloads" the zip a magnet names (dn=) from the fixture's seed folder, printing aria2's
-# own summary block once per --summary-interval (a tenth of the time, to keep the test quick) as the
-# real one does when its output is not a terminal: the launcher's button reads its "(N%)".
+# aria2c: a metadata-only run (--bt-metadata-only) saves <info-hash>.torrent naming the zip (dn=),
+# unless STUB_META_FAILS says how many such runs find nobody first; --show-files accepts a saved
+# file unless it reads "damaged"; a run on a saved .torrent "downloads" the zip it names from the
+# fixture's seed folder, printing aria2's own summary block once per --summary-interval (a tenth
+# of the time, to keep the test quick) as the real one does when its output is not a terminal:
+# the launcher's button reads its "(N%)".
 cat > "$stubs/aria2c" <<'EOF'
 #!/bin/zsh
 print -r -- "aria2c $*" >> "$STUB_LOG"
-[[ -n "${STUB_ARIA2_FAIL:-}" ]] && exit 7
-dir="" magnet="" every=60
+dir="" magnet="" torrent="" every=60 meta=0 show=0
 for a in "$@"; do
-  case "$a" in --dir=*) dir="${a#--dir=}" ;; magnet:*) magnet="$a" ;; --summary-interval=*) every="${a#--summary-interval=}" ;; esac
+  case "$a" in
+    --dir=*) dir="${a#--dir=}" ;; magnet:*) magnet="$a" ;; *.torrent) torrent="$a" ;;
+    --summary-interval=*) every="${a#--summary-interval=}" ;;
+    --bt-metadata-only=true) meta=1 ;; --show-files) show=1 ;;
+  esac
 done
-name="${${magnet#*dn=}%%&*}"
+if (( show )); then [[ "$(<"$torrent")" != damaged ]]; exit $?; fi
+if (( meta )); then
+  # What a real metadata run prints when it is let: the script must keep it from the button.
+  print -r -- "[#2089b0 175KiB/175KiB(100%) CN:2 SD:2 DL:20KiB]"
+  if [[ -n "${STUB_META_FAILS:-}" ]]; then
+    n=$(( $(cat "$STUB_META_COUNT" 2>/dev/null || print 0) + 1 )); print -r -- $n > "$STUB_META_COUNT"
+    (( n <= STUB_META_FAILS )) && exit 7
+  fi
+  h="${${magnet#*xt=urn:btih:}%%&*}"
+  print -r -- "${${magnet#*dn=}%%&*}" > "$dir/${h:l}.torrent"
+  exit 0
+fi
+# STUB_ARIA2_FAIL: the download itself stalls (its peers were found).
+[[ -n "${STUB_ARIA2_FAIL:-}" ]] && exit 7
+name="$(<"$torrent")"
 for pct in 0 25 50 75; do
   print -r -- ""
   print -r -- " *** Download Progress Summary as of Thu Oct 15 10:00:00 2026 ***"
@@ -123,7 +143,7 @@ export STUB_LOG="$LOG" STUB_API="$F/api" STUB_SEED="$F/seed"
 SAFE_PATH="$stubs:/usr/bin:/bin:/usr/sbin:/sbin"
 run() { env -i HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" PATH="${RUN_PATH:-$SAFE_PATH}" STUB_LOG="$STUB_LOG" STUB_API="$STUB_API" \
           STUB_SEED="$STUB_SEED" STUB_REGSVR32_FAIL="${STUB_REGSVR32_FAIL:-}" STUB_OFFLINE="${STUB_OFFLINE:-}" \
-          STUB_ARIA2_FAIL="${STUB_ARIA2_FAIL:-}" STUB_SLOW_UNZIP="${STUB_SLOW_UNZIP:-}" STUB_WINE_HANG="${STUB_WINE_HANG:-}" HXI_WINE="${HXI_WINE:-}" HXI_ARIA2C="${HXI_ARIA2C:-}" \
+          STUB_ARIA2_FAIL="${STUB_ARIA2_FAIL:-}" STUB_META_FAILS="${STUB_META_FAILS:-}" STUB_META_COUNT="${STUB_META_COUNT:-$F/meta-count}" STUB_SLOW_UNZIP="${STUB_SLOW_UNZIP:-}" STUB_WINE_HANG="${STUB_WINE_HANG:-}" HXI_WINE="${HXI_WINE:-}" HXI_ARIA2C="${HXI_ARIA2C:-}" \
           HXI_TOOLS="${HXI_TOOLS:-$F/tools}" HXI_ARIA2_URL="${HXI_ARIA2_URL:-}" HXI_GAME_WINE_URL="${HXI_GAME_WINE_URL:-}" \
           HXI_GAME_WINE_BYTES="${HXI_GAME_WINE_BYTES:-}" HXI_GAME_WINE_SHA256="${HXI_GAME_WINE_SHA256:-}" "$@"; }
 
@@ -149,12 +169,12 @@ seed="$F/seed"; mkdir -p "$seed" "$F/api"
 ( u="$F/build/u4"; mkdir -p "$u"; print v4 > "$u/patched-2.0.4.txt"
   cd "$u" && /usr/bin/zip -qr "$seed/HorizonXI-2_0_4.zip" . )
 cat > "$F/api/install-game.json" <<'EOF'
-{"latestVersion":23,"installData":{"baseGameVersion":21,"baseGameMarketingVersion":"2.0.2","baseGameMagnetLink":"magnet:?xt=urn:btih:aaaa&dn=HorizonXI.zip&xl=4096","baseZipName":"HorizonXI.zip"},"updateData":[{"marketingVersion":"2.0.4"}]}
+{"latestVersion":23,"installData":{"baseGameVersion":21,"baseGameMarketingVersion":"2.0.2","baseGameMagnetLink":"magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&dn=HorizonXI.zip&xl=4096","baseZipName":"HorizonXI.zip"},"updateData":[{"marketingVersion":"2.0.4"}]}
 EOF
 cat > "$F/api/update-game.json" <<'EOF'
-[{"deleteFiles":[],"updateZipName":"HorizonXI-1_1_1.zip","updateMagnetLink":"magnet:?xt=urn:btih:0000&dn=HorizonXI-1_1_1.zip","version":5,"marketingVersion":"1.1.1"},
- {"deleteFiles":[],"updateZipName":"HorizonXI-2_0_3.zip","updateMagnetLink":"magnet:?xt=urn:btih:3333&dn=HorizonXI-2_0_3.zip","version":22,"marketingVersion":"2.0.3"},
- {"deleteFiles":["stale-from-2.0.3.txt"],"updateZipName":"HorizonXI-2_0_4.zip","updateMagnetLink":"magnet:?xt=urn:btih:4444&dn=HorizonXI-2_0_4.zip","version":23,"marketingVersion":"2.0.4"}]
+[{"deleteFiles":[],"updateZipName":"HorizonXI-1_1_1.zip","updateMagnetLink":"magnet:?xt=urn:btih:0000000000000000000000000000000000000000&dn=HorizonXI-1_1_1.zip","version":5,"marketingVersion":"1.1.1"},
+ {"deleteFiles":[],"updateZipName":"HorizonXI-2_0_3.zip","updateMagnetLink":"magnet:?xt=urn:btih:3333333333333333333333333333333333333333&dn=HorizonXI-2_0_3.zip","version":22,"marketingVersion":"2.0.3"},
+ {"deleteFiles":["stale-from-2.0.3.txt"],"updateZipName":"HorizonXI-2_0_4.zip","updateMagnetLink":"magnet:?xt=urn:btih:4444444444444444444444444444444444444444&dn=HorizonXI-2_0_4.zip","version":23,"marketingVersion":"2.0.4"}]
 EOF
 
 # A wrapper: Frameworks with a dylib, stub wine, a prefix with drive_c/HorizonXI.
@@ -264,7 +284,10 @@ check "the 9 GB base zip is removed once unpacked" "[[ ! -e '$GAME/updates/Horiz
 check "the old 1.1.1 update was not applied" "! grep -q 'HorizonXI-1_1_1' '$LOG'"
 check "progress lines the launcher reads" "[[ \"\$out\" == *'==> base client in place'* && \"\$out\" == *'==> update 2.0.3 (1/2)'* && \"\$out\" == *'==> update 2.0.4 (2/2)'* ]]"
 check "python3 never ran" "! grep -q '^python3' '$LOG'"
-check "aria2 asked for its readout every 2 s, every time (it was every 60 s: 'stuck on setting up 0%')" "(( \$(grep -c '^aria2c' '$LOG') == 3 && \$(grep -c -- '--summary-interval=2 ' '$LOG') == 3 ))"
+check "aria2 asked for its readout every 2 s, every download (it was every 60 s: 'stuck on setting up 0%')" "(( \$(grep -c -- '--summary-interval=2 ' '$LOG') == 3 ))"
+check "each download found its peers first in a short metadata-only run, then fetched from the saved .torrent" "(( \$(grep -c -- '--bt-metadata-only=true' '$LOG') == 3 && \$(grep -c -- '--stop=60 ' '$LOG') == 3 && \$(grep -c -- '--summary-interval=2 .*\\.torrent\$' '$LOG') == 3 ))"
+check "the metadata run's own 100% never reaches the button" "[[ \"\$out\" != *'(100%)'* ]]"
+check "the base's saved .torrent goes with its zip once unpacked; the stall limits are unchanged" "[[ ! -e '$GAME/updates/$(printf 'a%.0s' {1..40}).torrent' ]] && grep -q -- '--bt-stop-timeout=1800 .*\\.torrent\$' '$LOG' && grep -q -- '--bt-stop-timeout=600 .*\\.torrent\$' '$LOG'"
 check "its readout reaches the launcher" "[[ \"\$out\" == *'MiB(25%)'* && \"\$out\" == *'MiB(75%)'* ]]"
 check "the unzip says how far it is, after 'extracting' and before the updates" "[[ \"\$out\" == *'==> extracting HorizonXI.zip'*'==> unpacking 100%'*'==> base client in place'* ]]"
 check "no half-unpacked folder or second copy left beside the game" "[[ ! -e '$GAME/updates/.base-extract' && ! -e '$GAME/updates/.update-extract' ]]"
@@ -292,7 +315,7 @@ print "14. a Stop leaves the zip and its .aria2 file: the next run resumes inste
 : > "$LOG"; print -r -- '{"version": "2.0.3"}' > "$GAME/version.json"
 mkdir -p "$GAME/updates"; print partial > "$GAME/updates/HorizonXI-2_0_4.zip"; : > "$GAME/updates/HorizonXI-2_0_4.zip.aria2"
 out=$(run /bin/zsh "$UPDATE" horizon "$GAME" 2>&1); rc=$?
-check "exit 0 and aria2 resumed" "(( rc == 0 )) && grep -q 'dn=HorizonXI-2_0_4.zip' '$LOG'"
+check "exit 0 and aria2 resumed, from the .torrent saved the first time" "(( rc == 0 )) && grep -q -- '--summary-interval=2 .*$(printf '4%.0s' {1..40}).torrent' '$LOG' && ! grep -q -- '--bt-metadata-only=true' '$LOG'"
 
 print "15. offline: one line saying so"
 print -r -- '{"version": "2.0.3"}' > "$GAME/version.json"
@@ -303,6 +326,25 @@ print "16. a stalled torrent: one line, press Setup again"
 make_wrapper; : > "$LOG"
 out=$(STUB_ARIA2_FAIL=1 run /bin/zsh "$UPDATE" install "$GAME" 2>&1); rc=$?
 check "exit 1, says press Setup again" "(( rc == 1 )) && [[ \"\$out\" == *'stalled or failed — press Setup again'* ]]"
+
+print "16b. nobody answers the first metadata run: a fresh run finds them (contributed by rdbell, PR #18)"
+make_wrapper; : > "$LOG"; rm -f "$F/meta-count"
+out=$(STUB_META_FAILS=1 run /bin/zsh "$UPDATE" install "$GAME" 2>&1); rc=$?
+check "exit 0 after a second try" "(( rc == 0 )) && [[ \"\$out\" == *'finding people sharing HorizonXI.zip (try 1 of 3)'*'(try 2 of 3)'* ]]"
+
+print "16c. nobody answers three times: one line, nothing downloaded"
+make_wrapper; : > "$LOG"; rm -f "$F/meta-count"
+out=$(STUB_META_FAILS=3 run /bin/zsh "$UPDATE" install "$GAME" 2>&1); rc=$?
+check "exit 1, says try again later, no download started" "(( rc == 1 )) && [[ \"\$out\" == *'Nobody sharing HorizonXI.zip answered (3 tries)'* ]] && (( \$(grep -c -- '--bt-metadata-only=true' '$LOG') == 3 )) && ! grep -q -- '--summary-interval=2' '$LOG'"
+
+print "16d. saved details are reused; damaged ones are fetched again"
+make_wrapper; : > "$LOG"; rm -f "$F/meta-count"; mkdir -p "$GAME/updates"
+hx=$(printf 'a%.0s' {1..40}); print -r -- HorizonXI.zip > "$GAME/updates/$hx.torrent"
+out=$(run /bin/zsh "$UPDATE" install "$GAME" 2>&1); rc=$?
+check "a good saved .torrent: no metadata run for the base" "(( rc == 0 )) && ! grep -q -- '--bt-metadata-only=true.*dn=HorizonXI.zip' '$LOG' && grep -q -- \"--show-files .*$hx.torrent\" '$LOG'"
+make_wrapper; : > "$LOG"; rm -f "$F/meta-count"; mkdir -p "$GAME/updates"; print -r -- damaged > "$GAME/updates/$hx.torrent"
+out=$(run /bin/zsh "$UPDATE" install "$GAME" 2>&1); rc=$?
+check "a damaged one: said, fetched again, then the download" "(( rc == 0 )) && [[ \"\$out\" == *'saved download details for HorizonXI.zip were damaged'* ]] && grep -q -- '--bt-metadata-only=true.*dn=HorizonXI.zip' '$LOG'"
 
 print "17. game files behind a drive that is not there: refused before anything is written"
 make_wrapper; : > "$LOG"; make_client "$GAME" 2.0.4; rm -rf "$GAME/SquareEnix"
