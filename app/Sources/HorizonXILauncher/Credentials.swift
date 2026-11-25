@@ -326,7 +326,25 @@ enum Credentials {
         }
         said += BootProfile.complete(server.bootProfile, in: install, template: server.bootTemplate,
                                      host: server.host)
+        if let line = dropMissingLoginFile(server.bootProfile, in: install) { said.append(line) }
         return said
+    }
+
+    /// A boot command still naming a login file Play wrote that is gone (it is deleted once the
+    /// loader is up) loses that option: the loader would stop at "file does not exist". This only
+    /// matters when Play has no saved password to write a new one; then the loader asks for the
+    /// account itself, as it does for any profile without one.
+    static func dropMissingLoginFile(_ profile: String, in install: Install,
+                                     loginFolder: URL = LoginFile.folder) -> String? {
+        profileLock.lock(); defer { profileLock.unlock() }
+        let command = bootCommand(in: install, profile: profile)
+        guard let value = LoginFile.value(in: command),
+              let url = LoginFile.localURL(windowsPath: value, in: loginFolder),
+              !FileManager.default.fileExists(atPath: url.path),
+              setBootCommand(LoginFile.strip(from: command).trimmingCharacters(in: .whitespaces),
+                             in: install, profile: profile)
+        else { return nil }
+        return "boot profile: \(install.bootProfileName(profile)) dropped a used login file"
     }
 
 
@@ -389,7 +407,29 @@ enum Credentials {
     /// itself. Without them it goes straight to its account menu, which nothing here can answer.
     static func bootHasAccount(in install: Install, profile: String) -> Bool {
         let command = bootCommand(in: install, profile: profile)
-        return option("--user", in: command) != nil && option("--pass", in: command) != nil
+        return option("--user", in: command) != nil
+            && (option("--pass", in: command) != nil || LoginFile.value(in: command) != nil)
+    }
+
+    /// The login file (`LoginFile`) the profile's boot command hands the loader, when it is one
+    /// Play wrote: what `Runner` deletes once the loader is up.
+    static func loginFileInUse(in install: Install, profile: String) -> URL? {
+        LoginFile.value(in: bootCommand(in: install, profile: profile)).flatMap { LoginFile.localURL(windowsPath: $0) }
+    }
+
+    /// The loader the profile boots, as a file in the client (`[ashita.boot] file`, v3
+    /// `boot_file`), when it is given relative to the Ashita folder. Nil for an absolute Windows
+    /// path or when the profile names none.
+    static func bootLoaderURL(in install: Install, profile: String) -> URL? {
+        let name = install.bootProfileName(profile)
+        guard let text = readFile(at: install.gameDir.appendingPathComponent("config/boot/\(name)")) else { return nil }
+        let raw = name.hasSuffix(".xml") ? xmlSetting("boot_file", in: text)
+                                         : BootProfile.value("file", section: "ashita.boot", in: text)
+        guard let raw, !raw.isEmpty, !raw.contains(":") else { return nil }
+        let parts = raw.replacingOccurrences(of: "/", with: "\\").split(separator: "\\")
+            .map(String.init).filter { !$0.isEmpty && $0 != "." }
+        guard !parts.isEmpty, !parts.contains("..") else { return nil }
+        return parts.reduce(install.gameDir) { $0.appendingPathComponent($1) }
     }
 
     /// The boot profile's live command line (v4 `command`, v3 `boot_command`), or "".
@@ -421,25 +461,52 @@ enum Credentials {
     ///
     /// `options` (`Server.loaderOptions`) go after the account: arguments the world's own profile
     /// passes its loader, which this line would otherwise drop (AscensionXI's `--hairpin`).
+    ///
+    /// The password goes in a one-time login file (`LoginFile`, PR #35) when the profile's loader
+    /// takes `--json-file`; only loaders without it are given `--pass`.
     @discardableResult
     static func apply(user: String, password: String, to install: Install,
                       profile: String = "horizonxi.ini",
-                      server: String = "play.horizonxi.com", options: [String] = []) -> Bool {
+                      server: String = "play.horizonxi.com", options: [String] = [],
+                      loginFolder: URL = LoginFile.folder) -> Bool {
+        let name = install.bootProfileName(profile)
+        profileLock.lock(); defer { profileLock.unlock() }
+        guard readFile(at: install.gameDir.appendingPathComponent("config/boot/\(name)")) != nil else { return false }
+        let tail = options.isEmpty ? "" : " " + options.joined(separator: " ")
+        // The file a previous Play left the profile pointing at, if it is still there.
+        let previous = LoginFile.value(in: bootCommand(in: install, profile: profile))
+            .flatMap { LoginFile.localURL(windowsPath: $0, in: loginFolder) }
+        LoginFile.removeStale(in: loginFolder)
+
+        var secret = "--pass \(password)"
+        var written: URL?
+        if let loader = bootLoaderURL(in: install, profile: profile), LoginFile.supported(loader: loader),
+           let win = LoginFile.write(user: user, password: password, in: loginFolder) {
+            secret = "\(LoginFile.option) \(win)"
+            written = LoginFile.localURL(windowsPath: win, in: loginFolder)
+        }
+        guard setBootCommand("--server \(server) --user \(user) \(secret)" + tail, in: install, profile: profile) else {
+            LoginFile.remove(written)
+            return false
+        }
+        if previous != written { LoginFile.remove(previous) }
+        return true
+    }
+
+    /// The boot profile's live command line (v4 `command`, v3 `boot_command`) set to `command`.
+    /// False when the profile is missing, has no live command line, or cannot be written.
+    /// Callers hold `profileLock`.
+    private static func setBootCommand(_ command: String, in install: Install, profile: String) -> Bool {
         let name = install.bootProfileName(profile)
         let url = install.gameDir.appendingPathComponent("config/boot/\(name)")
-        profileLock.lock(); defer { profileLock.unlock() }
         guard var text = readFile(at: url) else { return false }
-        let tail = options.isEmpty ? "" : " " + options.joined(separator: " ")
 
         if name.hasSuffix(".xml") {
-            guard let out = xmlSetting("boot_command",
-                                       to: "--server \(server) --user \(user) --pass \(password)" + tail,
-                                       in: text)
-            else { return false }
+            guard let out = xmlSetting("boot_command", to: command, in: text) else { return false }
             return writeFile(out, to: url)
         }
 
-        let line = "command     = --server \(server) --user \(user) --pass \(password)" + tail
+        let line = "command     = " + command
         var replaced = false
         let eol = TextFile.terminator(of: text)
         let lines = TextFile.lines(of: text).map { l -> String in

@@ -362,6 +362,9 @@ struct Install: Identifiable, Hashable {
         guard let s = defaults.string(forKey: key), let h = s.range(of: "#", options: .backwards) else { return nil }
         let wrapper = String(s[..<h.lowerBound]), prefix = String(s[h.upperBound...])
         guard !wrapper.isEmpty, !prefix.isEmpty, !prefix.contains("/") else { return nil }
+        // Builds before 3.11.2 listed the installers' prefix as an install, so one may have been
+        // remembered. It never holds a game: treat it as nothing remembered (a scan picks one).
+        guard prefix != installerPrefixName else { return nil }
         return (wrapper, prefix)
     }
 

@@ -13,6 +13,7 @@ final class Runner: ObservableObject {
             if !running {
                 Runner.playing[ObjectIdentifier(self)] = nil; starting = false
                 clearStopState()   // b70
+                dropLoginFile()
             }
             else if !oldValue {
                 // Wine boots its prefix before the game window appears; after a Repair that takes
@@ -1546,6 +1547,9 @@ final class Runner: ObservableObject {
         // What the loader will really be given, for the fallback in `sessionPIDs`.
         hostKey = LiveClients.normalize(Credentials.bootServer(in: install, profile: profile) ?? host)
         launchHasAccount = Credentials.bootHasAccount(in: install, profile: profile)
+        dropLoginFile()
+        loginFile = Credentials.loginFileInUse(in: install, profile: profile)
+        dropLoginFile(after: 600)
         Runner.playing[ObjectIdentifier(self)] = Playing(world: worldName, host: hostKey,
                                                          prefix: OwnWine.resolve(install.prefix.path),
                                                          gameDir: OwnWine.resolve(install.gameDir.path), renderer: perf.renderer)
@@ -1895,6 +1899,24 @@ final class Runner: ObservableObject {
     private var serverHolder: Leftovers.LockHolder?
     /// When the watch loop first saw this session's loader.
     private var loaderUpSince: Date?
+    /// The one-time login file this session's loader was given (`LoginFile`, PR #35). The loader
+    /// reads it as it starts; it is deleted 10 s after the loader is first seen, when the session
+    /// ends, or 10 minutes after launch (a first Wine boot after a Repair can take minutes),
+    /// whichever comes first.
+    private var loginFile: URL?
+
+    private func dropLoginFile(_ which: URL? = nil) {
+        LoginFile.remove(which ?? loginFile)
+        if which == nil || loginFile == which { loginFile = nil }
+    }
+
+    private func dropLoginFile(after seconds: UInt64) {
+        guard let f = loginFile else { return }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+            if let self { self.dropLoginFile(f) } else { LoginFile.remove(f) }
+        }
+    }
     /// Every server folder a session of this run started in: where `Leftovers.endStale` looks,
     /// besides the selected prefix's own. A drive that comes back under another device number
     /// gives its prefix a new folder; what ran in the old one is still looked for here.
@@ -1938,7 +1960,7 @@ final class Runner: ObservableObject {
                              state: Leftovers.ServerState?) {
         let mine = Set(pids)
         let loaderAlive = snap.clients.contains { $0.knownLoader && mine.contains($0.pid) }
-        if loaderAlive, loaderUpSince == nil { loaderUpSince = Date() }
+        if loaderAlive, loaderUpSince == nil { loaderUpSince = Date(); dropLoginFile(after: 10) }
         guard !serverLost else { return }
         guard let first = serverHolder else { serverHolder = found; return }
         if MultiWorld.serverLost(first: first, now: state, loaderAlive: loaderAlive) { markServerLost() }

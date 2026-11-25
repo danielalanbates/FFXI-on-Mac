@@ -45,6 +45,7 @@ enum Headless {
             || a.contains("--selftest-setup-progress")
             || a.contains("--selftest-installer")
             || a.contains("--selftest-boot-profile")
+            || a.contains("--selftest-login-file")
             || a.contains("--selftest-news")
             || a.contains("--selftest-leftovers")
             || a.contains("--selftest-dxvk-cache")
@@ -148,6 +149,7 @@ enum Headless {
         if args.contains("--selftest-boot-profile") {
             runBootProfileSelfTest()
         }
+        if args.contains("--selftest-login-file") { runLoginFileSelfTest() }
         if args.contains("--selftest-news") {
             runNewsSelfTest()
         }

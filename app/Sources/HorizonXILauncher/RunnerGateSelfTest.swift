@@ -95,6 +95,7 @@ extension Headless {
         for (name, ok) in checks { print("  \(ok ? "ok  " : "FAIL") \(name)") }
         let failures = checks.filter { !$0.1 }.count
         print("\(checks.count) checks, \(failures) failures")
+        try? fm.removeItem(at: tmp)   // `exit` does not run the `defer` above
         exit(failures == 0 ? 0 : 1)
     }
 }
