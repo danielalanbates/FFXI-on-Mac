@@ -41,13 +41,14 @@ in `archive/docs-2026-08/`.
 2. **x87 A/B on macOS 27.0.1**, local LSB, max settings: default (on) vs `FFXI_ON_MAC_X87=0`.
    Make the winner the default and write the numbers into `PERFORMANCE.md`.
 3. **Merge #36 into master** once b58/b59 is confirmed playable; then open `beta-b59` as a PR.
-4. **Fresh-user wine** (public blocker): rebase #20 as in HANDOFF, or state the limitation in the
-   3.10 notes. Test in a scratch macOS user on local LSB.
-5. **Outside PRs:** ask rdbell to accept the contributor licence (Daniel's OK to post). Then #23,
-   #28; #17 after checking the canonical download page; close #24 (landed), #30, #31, #32; rebase
-   #18, #19; #20/#21/#22 per HANDOFF (#21's sidecar must not replace ours).
-6. **#35** (password off the command line): fix the flag and path, call `scrubLoginFiles`, test a
-   login on local LSB before HorizonXI.
+4. **Fresh-user wine** (public blocker): Setup has fetched the pinned wine-cx itself since v3.10
+   (`scripts/game-wine.sh`; #20 closed as superseded). Test in a scratch macOS user on local LSB.
+5. **Outside PRs** (done 2026-11-25, see HANDOFF › Pull requests): #17 merged; #19–#22 closed
+   with credit; #18 and #23 closed until rdbell agrees to the contributor licence, with the work on
+   branches `port/rdbell-18-aria2-metadata` and `port/rdbell-23-docs` (reopen and merge when he
+   does); issue #25 closed, pathway in `BETA-59.md` › Deferred.
+6. **Password off the command line** (#35 closed; rework on branch `fix-login-file-35`, WIP):
+   move the login file out of `Z:\var\folders`, then test a login on local LSB before HorizonXI.
 7. **Remaining A/Bs** from HANDOFF › Performance (`WINE_DISABLE_NX_COMPAT` is settled and on by
    default since b66; enforce-nx dll on top of it,
    `maxFrameLatency`, MVK concurrent compilation, Play-to-window time).
