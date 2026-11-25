@@ -269,6 +269,11 @@ extension Headless {
         checks.append(("the loader's own refusal before the menu is what is shown",
                        LoaderOutput.refusal(in: "[x] Failed to login. Invalid username or password.\n" + menu, world: "HorizonXI")
                            == LoaderOutput.Refusal(message: "Failed to login. Invalid username or password.", atMenu: false)))
+        let eden = "[11/25/26 09:40:13] Autologin activated!\n[11/25/26 09:40:13] Invalid username or password.\nPress the ENTER key to close and retry..."
+        checks.append(("Eden's loader refusal (issue #92) is read, not left at Starting…",
+                       LoaderOutput.refusal(in: eden, world: "Eden")
+                           == LoaderOutput.Refusal(message: "Invalid username or password.", atMenu: false)
+                           && LoaderOutput.refusal(in: "Press the ENTER key to close and retry...", world: "Eden")?.atMenu == true))
         checks.append(("ordinary output is not a refusal; a job's output never counts the menu",
                        LoaderOutput.refusal(in: "[*] Ashita injected and installed! Enjoy!\n", world: "HorizonXI") == nil
                            && LoaderOutput.refusal(in: menu, world: "HorizonXI", menu: false) == nil))

@@ -797,12 +797,32 @@ final class ServerStore: ObservableObject {
     }
 
     func add(name: String, host: String, profile: String) {
+        let name = name.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty, !servers.contains(where: { $0.name == name }) else { return }
+        // Issue #92: "eden" typed by hand made a second, half-configured Eden (no Eden loader,
+        // no installer) beside the built-in one. A name that is a world already listed selects it.
+        let n = InstallerClient.squash(name)
+        if let listed = servers.first(where: { !$0.addedByUser && !n.isEmpty
+                && (InstallerClient.squash($0.name) == n || InstallerClient.squash($0.name) + "xi" == n) }) {
+            select(listed); return
+        }
         var added = Server(name: name, host: host,
                            bootProfile: profile.isEmpty ? "horizonxi.ini" : profile,
                            verified: false, note: Server.addedNote, era: "", population: 0)
         added.fillFromCatalogue()
         servers.append(added)
+        save()
+    }
+
+    /// A world the user added: its name, login host and boot profile, changed in place.
+    func edit(_ s: Server, name: String, host: String, profile: String) {
+        guard s.addedByUser, let i = servers.firstIndex(where: { $0.name == s.name }) else { return }
+        let name = name.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty, name == s.name || !servers.contains(where: { $0.name == name }) else { return }
+        servers[i].name = name
+        servers[i].host = host.trimmingCharacters(in: .whitespaces)
+        servers[i].bootProfile = profile.isEmpty ? "horizonxi.ini" : profile
+        if selectedID == s.name { selectedID = name }
         save()
     }
 
